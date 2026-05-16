@@ -265,6 +265,40 @@
       background: var(--border);
     }
 
+    /* editable transcript title (above transcript blocks) */
+    .transcript-title {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 18px;
+    }
+    .transcript-title.hidden { display: none; }
+
+    .transcript-name {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-variation-settings: 'wdth' 100, 'wght' 600;
+      font-size: 22px; line-height: 1.2;
+      color: var(--text);
+      cursor: pointer;
+      border-bottom: 1px dashed transparent;
+      transition: border-color .15s, color .15s;
+      letter-spacing: -.01em;
+    }
+    .transcript-name:hover { border-bottom-color: var(--dim); }
+    .transcript-name.placeholder { color: var(--muted); font-style: italic; font-weight: 500; }
+
+    .transcript-name-input {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-variation-settings: 'wdth' 100, 'wght' 600;
+      font-size: 22px; line-height: 1.2;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      padding: 4px 8px;
+      outline: none;
+      min-width: 240px;
+      letter-spacing: -.01em;
+    }
+
     /* live (non-diarized) transcript during recording */
     .live-text {
       font-size: 15px; line-height: 1.7;
@@ -470,6 +504,9 @@
     <span class="meta" id="chunkStatus"></span>
     <span class="line"></span>
   </div>
+  <div class="transcript-title hidden" id="transcriptTitle">
+    <span class="transcript-name" id="transcriptName" title="Click to rename"></span>
+  </div>
   <div id="transcript" class="transcript">
     <div class="transcript-empty">No recording yet.</div>
   </div>
@@ -564,6 +601,8 @@ let pendingChunks   = 0;    // сколько чанков сейчас тран
 let currentSegments     = null;
 let currentSpeakerNames = {};
 let currentHistoryId    = null;
+let currentTitle        = null;   // user-entered transcript name (or null = use default)
+let currentDate         = null;   // ISO date of the transcript (for default title)
 
 const LANG_LABELS = { en: 'English', ru: 'Russian', uk: 'Ukrainian' };
 
@@ -641,8 +680,65 @@ function speakerColor(rawLabel) {
   return `var(--sp-${idx})`;
 }
 
+function renderTranscriptTitle() {
+  const titleEl = document.getElementById('transcriptTitle');
+  const nameEl  = document.getElementById('transcriptName');
+
+  if (!currentSegments || currentSegments.length === 0) {
+    titleEl.classList.add('hidden');
+    return;
+  }
+
+  titleEl.classList.remove('hidden');
+
+  if (currentTitle) {
+    nameEl.textContent = currentTitle;
+    nameEl.classList.remove('placeholder');
+  } else {
+    const d = currentDate ? new Date(currentDate) : new Date();
+    const datePart = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+    const timePart = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    nameEl.textContent = `Untitled · ${datePart} · ${timePart}`;
+    nameEl.classList.add('placeholder');
+  }
+}
+
+function startTitleRename() {
+  const nameEl = document.getElementById('transcriptName');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'transcript-name-input';
+  input.value = currentTitle || '';
+  input.placeholder = 'Name this transcript…';
+  input.setAttribute('maxlength', '80');
+
+  const commit = () => {
+    const v = input.value.trim();
+    currentTitle = v || null;
+    renderTranscriptTitle();
+    document.getElementById('transcriptName').addEventListener('click', startTitleRename);
+    if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+  };
+  const cancel = () => {
+    renderTranscriptTitle();
+    document.getElementById('transcriptName').addEventListener('click', startTitleRename);
+  };
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', commit);
+
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
 function renderTranscript(segments) {
   currentSegments = segments;
+  renderTranscriptTitle();
+  document.getElementById('transcriptName').addEventListener('click', startTitleRename);
   transcriptEl.innerHTML = '';
 
   if (!segments || segments.length === 0) {
@@ -698,12 +794,13 @@ function segmentsToPlainText(segments) {
 }
 
 function segmentsToMarkdown(segments) {
-  const now = new Date();
-  const date = now.toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
-  const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  const refDate = currentDate ? new Date(currentDate) : new Date();
+  const date = refDate.toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+  const time = refDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   const langLabel = LANG_LABELS[langSel.value] || 'Auto-detect';
+  const title = currentTitle || 'Call transcript';
 
-  let md = `# Call transcript\n\n**Date:** ${date}, ${time}  \n**Language:** ${langLabel}\n\n---\n\n`;
+  let md = `# ${title}\n\n**Date:** ${date}, ${time}  \n**Language:** ${langLabel}\n\n---\n\n`;
   segments.forEach(seg => {
     md += `**${speakerName(seg.speaker)}** _(${formatTime(seg.start)} — ${formatTime(seg.end)})_\n\n${seg.text}\n\n`;
   });
@@ -935,6 +1032,8 @@ async function handleFullStop() {
 
     currentSpeakerNames = {};
     currentHistoryId = null;
+    currentTitle = null;
+    currentDate = new Date().toISOString();
     renderTranscript(data.segments);
     if (data.segments && data.segments.length) saveToHistory(data.segments, langSel.value);
     setStatus('ready');
@@ -967,7 +1066,8 @@ downloadBtn.addEventListener('click', () => {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href = url;
-  a.download = `transcript-${new Date().toISOString().slice(0,10)}.md`;
+  const safe = (currentTitle || 'transcript').toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'transcript';
+  a.download = `${safe}-${new Date().toISOString().slice(0,10)}.md`;
   a.click();
   URL.revokeObjectURL(url);
 });
@@ -990,6 +1090,7 @@ function saveToHistory(segments, lang) {
     lang: lang || 'auto',
     segments,
     speakerNames: { ...currentSpeakerNames },
+    title: currentTitle,
   });
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
   currentHistoryId = id;
@@ -1002,6 +1103,7 @@ function updateHistoryEntry(id) {
   if (idx === -1) return;
   history[idx].segments = currentSegments;
   history[idx].speakerNames = { ...currentSpeakerNames };
+  history[idx].title = currentTitle;
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   renderHistory();
 }
@@ -1050,8 +1152,13 @@ function renderHistory() {
 
     const preview = document.createElement('div');
     preview.className = 'history-item-preview';
-    const firstText = entry.segments && entry.segments[0] ? entry.segments[0].text : '';
-    preview.textContent = firstText.slice(0, 140);
+    if (entry.title) {
+      preview.textContent = entry.title;
+      preview.style.fontWeight = '600';
+    } else {
+      const firstText = entry.segments && entry.segments[0] ? entry.segments[0].text : '';
+      preview.textContent = firstText.slice(0, 140);
+    }
 
     body.appendChild(meta);
     body.appendChild(preview);
@@ -1067,6 +1174,8 @@ function renderHistory() {
     item.addEventListener('click', () => {
       currentSpeakerNames = { ...(entry.speakerNames || {}) };
       currentHistoryId = entry.id;
+      currentTitle = entry.title || null;
+      currentDate = entry.date;
       renderTranscript(entry.segments);
     });
     historyList.appendChild(item);
