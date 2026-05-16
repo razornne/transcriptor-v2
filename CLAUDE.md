@@ -69,7 +69,8 @@ cloudflared tunnel --url http://localhost:5000
   - `chunkRecorder` стопается/перезапускается каждые `CHUNK_INTERVAL_MS = 3 мин` → каждый чанк уходит на `/api/transcribe-chunk` → текст накапливается в `liveTextParts`
   - `fullRecorder` пишет всё непрерывно → на Стопе отправляется на `/api/transcribe` для финальной диаризации
 - **Speaker rename**: клик по `.speaker-name` → inline-input → Enter сохраняет в `currentSpeakerNames[rawLabel]` → ре-рендер. Имена сохраняются в записи истории.
-- **localStorage**: `transcriptor_settings` (lang + numSpeakers), `transcriptor_history` (segments + speakerNames per entry, MAX 20), `theme`.
+- **Transcript rename**: над текстом отдельный заголовок (`#transcriptTitle`). По умолчанию placeholder вида `Untitled · {date} · {time}`. Клик → inline-input → Enter (или blur) сохраняет в `currentTitle` и в запись истории; Escape отменяет. `renderTranscriptTitle()` идемпотентен: всегда пересобирает блок с нуля через `innerHTML = ''` + новый span, поэтому повторные вызовы после замены на input не падают. `finish()` защищён флагом `done` против двойного срабатывания keydown+blur.
+- **localStorage**: `transcriptor_settings` (lang + numSpeakers), `transcriptor_history` (segments + speakerNames + title per entry, MAX 20), `theme`.
 - `prefers-reduced-motion` уважается, есть `prefers-color-scheme` fallback для первого визита.
 
 ## Non-obvious things future-Claude will trip on
@@ -102,7 +103,9 @@ cloudflared tunnel --url http://localhost:5000
 
 - **`recordings/` ephemeral.** Файлы удаляются сразу после обработки (и для chunk, и для full). На сервере ничего не хранится — это часть приватности.
 
-- **История в localStorage хранит `segments` целиком + `speakerNames`** (не flat-текст). Это позволяет восстановить раскраску и переименования при клике на запись истории. Не ломать формат без миграции.
+- **История в localStorage хранит `segments` целиком + `speakerNames` + `title`** (не flat-текст). Это позволяет восстановить раскраску, переименования спикеров и заголовок при клике на запись истории. Не ломать формат без миграции. История показывает `title` если задан (жирным), иначе fallback на превью первого сегмента.
+
+- **Markdown экспорт** (`segmentsToMarkdown`) использует `currentTitle` как H1 заголовок (fallback "Call transcript") и как имя файла (через slug — оставляем буквы/цифры через unicode regex `\p{L}\p{N}`, остальное в дефисы, обрезаем до 60 символов).
 
 ## Deployment
 
