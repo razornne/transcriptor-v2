@@ -682,18 +682,22 @@ function speakerColor(rawLabel) {
 
 function renderTranscriptTitle() {
   const titleEl = document.getElementById('transcriptTitle');
-  const nameEl  = document.getElementById('transcriptName');
 
   if (!currentSegments || currentSegments.length === 0) {
     titleEl.classList.add('hidden');
+    titleEl.innerHTML = '';
     return;
   }
 
   titleEl.classList.remove('hidden');
+  titleEl.innerHTML = '';  // пересобираем с нуля — устраняет stale ссылки на span/input
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'transcript-name';
+  nameEl.title = 'Click to rename';
 
   if (currentTitle) {
     nameEl.textContent = currentTitle;
-    nameEl.classList.remove('placeholder');
   } else {
     const d = currentDate ? new Date(currentDate) : new Date();
     const datePart = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
@@ -701,10 +705,12 @@ function renderTranscriptTitle() {
     nameEl.textContent = `Untitled · ${datePart} · ${timePart}`;
     nameEl.classList.add('placeholder');
   }
+
+  nameEl.addEventListener('click', () => startTitleRename(nameEl));
+  titleEl.appendChild(nameEl);
 }
 
-function startTitleRename() {
-  const nameEl = document.getElementById('transcriptName');
+function startTitleRename(nameEl) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'transcript-name-input';
@@ -712,23 +718,23 @@ function startTitleRename() {
   input.placeholder = 'Name this transcript…';
   input.setAttribute('maxlength', '80');
 
-  const commit = () => {
-    const v = input.value.trim();
-    currentTitle = v || null;
+  let done = false;
+  const finish = (newValue) => {
+    if (done) return;
+    done = true;
+    if (newValue !== null) {
+      const v = newValue.trim();
+      currentTitle = v || null;
+      if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+    }
     renderTranscriptTitle();
-    document.getElementById('transcriptName').addEventListener('click', startTitleRename);
-    if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
-  };
-  const cancel = () => {
-    renderTranscriptTitle();
-    document.getElementById('transcriptName').addEventListener('click', startTitleRename);
   };
 
   input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    if (e.key === 'Enter')      { e.preventDefault(); finish(input.value); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
   });
-  input.addEventListener('blur', commit);
+  input.addEventListener('blur', () => finish(input.value));
 
   nameEl.replaceWith(input);
   input.focus();
@@ -738,7 +744,6 @@ function startTitleRename() {
 function renderTranscript(segments) {
   currentSegments = segments;
   renderTranscriptTitle();
-  document.getElementById('transcriptName').addEventListener('click', startTitleRename);
   transcriptEl.innerHTML = '';
 
   if (!segments || segments.length === 0) {
