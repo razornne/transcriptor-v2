@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transcriptor v2</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #f1f5f9;
+      --card:      #ffffff;
+      --border:    #e2e8f0;
+      --text:      #0f172a;
+      --muted:     #64748b;
+      --primary:   #4f46e5;
+      --primary-h: #4338ca;
+      --danger:    #ef4444;
+      --danger-h:  #dc2626;
+      --accent:    #06b6d4;
+      --shadow:    0 1px 3px rgba(0,0,0,.07), 0 8px 28px rgba(0,0,0,.07);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:     #0f172a;
+        --card:   #1e293b;
+        --border: #334155;
+        --text:   #f1f5f9;
+        --muted:  #94a3b8;
+        --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.3);
+      }
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100vh;
+      display: flex; align-items: flex-start; justify-content: center;
+      padding: 48px 16px 64px;
+    }
+
+    .card {
+      width: 100%; max-width: 720px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 32px;
+    }
+
+    .header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+    .logo {
+      width: 40px; height: 40px; background: var(--primary);
+      border-radius: 10px; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .logo svg { width: 22px; height: 22px; fill: white; }
+    .header-text h1 { font-size: 19px; font-weight: 700; letter-spacing: -.3px; }
+    .header-text p  { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+    .version-badge {
+      margin-left: auto; font-size: 11px; font-weight: 700;
+      color: var(--accent); border: 1px solid var(--accent);
+      border-radius: 4px; padding: 2px 6px;
+    }
+
+    .field-row { display: flex; gap: 12px; margin-bottom: 20px; }
+    .field { flex: 1; }
+    label {
+      display: block; font-size: 12.5px; font-weight: 600;
+      color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+      margin-bottom: 7px;
+    }
+    select, input[type="number"] {
+      width: 100%; padding: 9px 12px;
+      font: inherit; font-size: 14px;
+      color: var(--text); background: var(--bg);
+      border: 1px solid var(--border); border-radius: 8px;
+      outline: none; transition: border-color .15s;
+    }
+    select { cursor: pointer; }
+    select:focus, input:focus { border-color: var(--primary); }
+
+    .controls { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+    button {
+      font: inherit; font-size: 14px; font-weight: 600;
+      padding: 9px 20px; border: none; border-radius: 8px;
+      cursor: pointer; transition: background .15s, opacity .15s, transform .1s;
+      white-space: nowrap;
+    }
+    button:active:not(:disabled) { transform: scale(.96); }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-h); }
+    .btn-danger  { background: var(--danger);  color: #fff; }
+    .btn-danger:hover:not(:disabled)  { background: var(--danger-h); }
+    .btn-ghost {
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); padding: 7px 16px; font-size: 13px;
+    }
+    .btn-ghost:hover:not(:disabled) { background: var(--border); color: var(--text); }
+
+    .status-pill {
+      margin-left: auto; display: flex; align-items: center;
+      gap: 7px; font-size: 13px; color: var(--muted);
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted); flex-shrink: 0; transition: background .3s;
+    }
+    .dot.recording { background: var(--danger);  animation: blink 1.1s ease-in-out infinite; }
+    .dot.working   { background: var(--primary); animation: blink 0.7s ease-in-out infinite; }
+    @keyframes blink {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:.35; transform:scale(.7); }
+    }
+    .timer { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--danger); }
+
+    .hint {
+      font-size: 13px; color: var(--muted); line-height: 1.65;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 14px; margin-bottom: 20px;
+    }
+    .hint b { color: var(--text); font-weight: 600; }
+
+    /* Транскрипт со спикерами */
+    .transcript {
+      min-height: 240px; padding: 14px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px;
+      max-height: 500px; overflow-y: auto;
+    }
+    .transcript-empty { color: var(--muted); font-size: 14px; }
+
+    .speaker-block { margin-bottom: 16px; }
+    .speaker-block:last-child { margin-bottom: 0; }
+    .speaker-label {
+      font-size: 12px; font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 4px; letter-spacing: .02em;
+    }
+    .speaker-time {
+      color: var(--muted); font-weight: 500;
+      font-variant-numeric: tabular-nums; margin-left: 6px;
+    }
+    .speaker-text { font-size: 14px; line-height: 1.65; color: var(--text); }
+
+    .transcript-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+    .error { font-size: 13px; color: var(--danger); margin-top: 12px; line-height: 1.5; }
+    .error:empty { display: none; }
+  </style>
+</head>
+<body>
+<div class="card">
+
+  <div class="header">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-7 10.25a.75.75 0 0 1 .75.75 6.25 6.25 0 0 0 12.5 0 .75.75 0 0 1 1.5 0 7.75 7.75 0 0 1-7 7.717V22h3a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 8 22h3v-2.283A7.75 7.75 0 0 1 4.25 12a.75.75 0 0 1 .75-.75z"/>
+      </svg>
+    </div>
+    <div class="header-text">
+      <h1>Transcriptor</h1>
+      <p>Локальная модель · Разделение по спикерам</p>
+    </div>
+    <span class="version-badge">v2</span>
+  </div>
+
+  <div class="field-row">
+    <div class="field">
+      <label for="language">Язык</label>
+      <select id="language">
+        <option value="">Auto-detect</option>
+        <option value="ru">Русский</option>
+        <option value="uk">Українська</option>
+        <option value="en">English</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="numSpeakers">Спикеров (опционально)</label>
+      <input id="numSpeakers" type="number" min="1" max="20" placeholder="авто">
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="startBtn" class="btn-primary">Начать запись</button>
+    <button id="stopBtn"  class="btn-danger" disabled>Стоп</button>
+    <div class="status-pill">
+      <div class="dot" id="dot"></div>
+      <span class="timer" id="timer" style="display:none"></span>
+      <span id="statusText">готов</span>
+    </div>
+  </div>
+
+  <div class="hint" id="hint">
+    Нажми <b>«Начать запись»</b> → разреши микрофон → выбери вкладку (Meet / Teams) или <b>«Весь экран»</b> и включи <b>«Поделиться звуком»</b> → нажми <b>«Стоп»</b> в конце.<br>
+    <span style="color: var(--accent)">⚡ В v2 текст появится после обработки (whisper + диаризация займут 30 сек – 3 мин в зависимости от длины созвона).</span>
+  </div>
+
+  <label for="transcript">Транскрипт</label>
+  <div id="transcript" class="transcript">
+    <div class="transcript-empty">Запиши созвон — текст появится здесь с метками спикеров.</div>
+  </div>
+  <div class="transcript-footer">
+    <button id="copyBtn" class="btn-ghost">Скопировать</button>
+    <button id="downloadBtn" class="btn-ghost">Скачать .md</button>
+  </div>
+  <div id="error" class="error"></div>
+
+</div>
+<script>
+// ── Конфиг ─────────────────────────────────────────────────────
+// API_BASE пустая строка = тот же сервер что отдал страницу (для локалки).
+// Когда фронт переедет на Vercel — сюда подставится Cloudflare Tunnel URL.
+const API_BASE = '';
+
+// ── DOM ────────────────────────────────────────────────────────
+const langSel       = document.getElementById('language');
+const numSpeakersEl = document.getElementById('numSpeakers');
+const startBtn      = document.getElementById('startBtn');
+const stopBtn       = document.getElementById('stopBtn');
+const statusText    = document.getElementById('statusText');
+const dotEl         = document.getElementById('dot');
+const timerEl       = document.getElementById('timer');
+const transcriptEl  = document.getElementById('transcript');
+const errorEl       = document.getElementById('error');
+const copyBtn       = document.getElementById('copyBtn');
+const downloadBtn   = document.getElementById('downloadBtn');
+const hintEl        = document.getElementById('hint');
+
+// ── Состояние ──────────────────────────────────────────────────
+let mediaRecorder = null;
+let chunks        = [];
+let micStream     = null;
+let displayStream = null;
+let audioCtx      = null;
+let timerInterval = null;
+let currentSegments = null; // последний результат для copy/download
+
+const LANG_LABELS = { ru: 'Русский', uk: 'Українська', en: 'English' };
+
+// ── Утилиты ────────────────────────────────────────────────────
+function setStatus(text, dotClass = '') {
+  statusText.textContent = text;
+  dotEl.className = 'dot' + (dotClass ? ' ' + dotClass : '');
+}
+function setError(msg) { errorEl.textContent = msg || ''; }
+
+function startTimer() {
+  const t0 = Date.now();
+  timerEl.style.display = '';
+  timerInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    timerEl.textContent =
+      String(Math.floor(s / 60)).padStart(2,'0') + ':' +
+      String(s % 60).padStart(2,'0');
+  }, 500);
+}
+function stopTimer() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  timerEl.style.display = 'none';
+}
+
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+function speakerName(rawLabel) {
+  // pyannote выдаёт "SPEAKER_00", "SPEAKER_01" → "Спикер 1", "Спикер 2"
+  const m = rawLabel.match(/(\d+)/);
+  return m ? `Спикер ${parseInt(m[1], 10) + 1}` : rawLabel;
+}
+
+// ── Отрисовка транскрипта со спикерами ────────────────────────
+function renderTranscript(segments) {
+  currentSegments = segments;
+  transcriptEl.innerHTML = '';
+
+  if (!segments || segments.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'transcript-empty';
+    empty.textContent = 'Речь не обнаружена.';
+    transcriptEl.appendChild(empty);
+    return;
+  }
+
+  segments.forEach(seg => {
+    const block = document.createElement('div');
+    block.className = 'speaker-block';
+
+    const label = document.createElement('div');
+    label.className = 'speaker-label';
+    label.innerHTML = speakerName(seg.speaker) +
+      `<span class="speaker-time">${formatTime(seg.start)} — ${formatTime(seg.end)}</span>`;
+
+    const text = document.createElement('div');
+    text.className = 'speaker-text';
+    text.textContent = seg.text;
+
+    block.appendChild(label);
+    block.appendChild(text);
+    transcriptEl.appendChild(block);
+  });
+}
+
+function segmentsToPlainText(segments) {
+  return segments
+    .map(seg => `[${speakerName(seg.speaker)}] (${formatTime(seg.start)} — ${formatTime(seg.end)})\n${seg.text}`)
+    .join('\n\n');
+}
+
+function segmentsToMarkdown(segments) {
+  const now = new Date();
+  const date = now.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  const time = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const langLabel = LANG_LABELS[langSel.value] || 'Auto-detect';
+
+  let md = `# Транскрипт созвона\n\n**Дата:** ${date}, ${time}  \n**Язык:** ${langLabel}\n\n---\n\n`;
+  segments.forEach(seg => {
+    md += `**${speakerName(seg.speaker)}** _(${formatTime(seg.start)} — ${formatTime(seg.end)})_\n\n${seg.text}\n\n`;
+  });
+  return md;
+}
+
+// ── Очистка ресурсов ───────────────────────────────────────────
+function cleanup() {
+  if (micStream)     { micStream.getTracks().forEach(t => t.stop());     micStream = null; }
+  if (displayStream) { displayStream.getTracks().forEach(t => t.stop()); displayStream = null; }
+  if (audioCtx)      { audioCtx.close(); audioCtx = null; }
+  mediaRecorder = null;
+  chunks = [];
+}
+
+window.addEventListener('beforeunload', cleanup);
+
+// ── Запись ─────────────────────────────────────────────────────
+startBtn.addEventListener('click', async () => {
+  setError('');
+  startBtn.disabled = true;
+  setStatus('запрос разрешений…', 'working');
+
+  const micAlive = micStream && micStream.getAudioTracks().some(t => t.readyState === 'live');
+  if (!micAlive) {
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (e) {
+      setError(e.name === 'NotAllowedError'
+        ? 'Доступ к микрофону запрещён.'
+        : e.message);
+      setStatus('готов');
+      startBtn.disabled = false;
+      return;
+    }
+  }
+
+  try {
+    displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: 1, height: 1, frameRate: 1 },
+      audio: true
+    });
+    displayStream.getVideoTracks().forEach(t => t.stop());
+  } catch (e) {
+    setError(e.name === 'NotAllowedError'
+      ? 'Поделиться экраном отклонено.'
+      : 'Захват экрана отменён.');
+    setStatus('готов');
+    startBtn.disabled = false;
+    return;
+  }
+
+  if (displayStream.getAudioTracks().length === 0) {
+    displayStream.getTracks().forEach(t => t.stop());
+    displayStream = null;
+    setError('Звук не захвачен — включи «Поделиться звуком».');
+    setStatus('готов');
+    startBtn.disabled = false;
+    return;
+  }
+
+  audioCtx = new AudioContext();
+  const dest = audioCtx.createMediaStreamDestination();
+  audioCtx.createMediaStreamSource(micStream).connect(dest);
+  audioCtx.createMediaStreamSource(displayStream).connect(dest);
+
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus' : 'audio/webm';
+
+  mediaRecorder = new MediaRecorder(dest.stream, { mimeType, audioBitsPerSecond: 32000 });
+  chunks = [];
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  mediaRecorder.onstop = handleStop;
+
+  displayStream.getAudioTracks()[0].addEventListener('ended', () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      stopBtn.disabled = true;
+      stopTimer();
+      mediaRecorder.stop();
+    }
+  });
+
+  mediaRecorder.start();
+  startTimer();
+  setStatus('запись', 'recording');
+  hintEl.style.display = 'none';
+  stopBtn.disabled = false;
+  langSel.disabled = true;
+  numSpeakersEl.disabled = true;
+});
+
+stopBtn.addEventListener('click', () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    stopBtn.disabled = true;
+    stopTimer();
+    mediaRecorder.stop();
+  }
+});
+
+async function handleStop() {
+  const blob = new Blob(chunks, { type: 'audio/webm' });
+  cleanup();
+  setStatus('обработка (whisper + диаризация)…', 'working');
+  startBtn.disabled = true;
+
+  try {
+    const fd = new FormData();
+    fd.append('audio', blob, 'recording.webm');
+    if (langSel.value)       fd.append('language', langSel.value);
+    if (numSpeakersEl.value) fd.append('num_speakers', numSpeakersEl.value);
+
+    const res  = await fetch(`${API_BASE}/api/transcribe`, { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'transcription failed');
+
+    renderTranscript(data.segments);
+    setStatus('готов');
+    hintEl.style.display = '';
+  } catch (e) {
+    setError(e.message);
+    setStatus('готов');
+    hintEl.style.display = '';
+  } finally {
+    startBtn.disabled = false;
+    langSel.disabled  = false;
+    numSpeakersEl.disabled = false;
+  }
+}
+
+// ── Копирование / скачивание ──────────────────────────────────
+copyBtn.addEventListener('click', async () => {
+  if (!currentSegments || currentSegments.length === 0) return;
+  await navigator.clipboard.writeText(segmentsToPlainText(currentSegments));
+  copyBtn.textContent = 'Скопировано!';
+  setTimeout(() => copyBtn.textContent = 'Скопировать', 1500);
+});
+
+downloadBtn.addEventListener('click', () => {
+  if (!currentSegments || currentSegments.length === 0) return;
+  const md = segmentsToMarkdown(currentSegments);
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `transcript-${new Date().toISOString().slice(0, 10)}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>

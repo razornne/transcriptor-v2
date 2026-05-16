@@ -1,0 +1,11 @@
+.env
+recordings/
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+.claude/
+
+# HuggingFace кеш моделей (если попадёт в проект)
+.cache/

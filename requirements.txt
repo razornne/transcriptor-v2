@@ -1,0 +1,6 @@
+flask
+flask-cors
+python-dotenv
+faster-whisper
+pyannote.audio
+soundfile
