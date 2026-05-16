@@ -57,6 +57,41 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/transcribe-chunk", methods=["POST"])
+def transcribe_chunk_endpoint():
+    """Быстрая транскрипция чанка во время записи — только whisper, без диаризации.
+    Используется фронтом для live-текста по ходу созвона.
+    Returns: {"text": "..."}
+    """
+    audio_file = request.files.get("audio")
+    if not audio_file:
+        return jsonify({"error": "audio file required"}), 400
+
+    language = request.form.get("language") or None
+    if language and language not in ALLOWED_LANGUAGES:
+        return jsonify({"error": f"language must be one of {sorted(ALLOWED_LANGUAGES)}"}), 400
+
+    prompt = request.form.get("prompt") or None
+
+    filename = datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".webm"
+    webm_path = os.path.join(RECORDINGS_DIR, filename)
+    audio_file.save(webm_path)
+
+    wav_path = None
+    try:
+        wav_path = _webm_to_wav(webm_path)
+        segments = transcribe(wav_path, language=language, prompt=prompt)
+        text = " ".join(s["text"] for s in segments).strip()
+        return jsonify({"text": text})
+    except Exception as e:
+        return jsonify({"error": f"chunk transcription failed: {e}"}), 500
+    finally:
+        for p in (webm_path, wav_path):
+            if p:
+                try: os.remove(p)
+                except OSError: pass
+
+
 @app.route("/api/transcribe", methods=["POST"])
 def transcribe_endpoint():
     """Принимает аудиофайл, возвращает транскрипт с разделением по спикерам.

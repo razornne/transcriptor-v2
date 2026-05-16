@@ -253,9 +253,28 @@
       margin-bottom: 14px;
       display: flex; align-items: center; gap: 10px;
     }
-    .section-title::after {
-      content: ""; height: 1px; flex: 1;
+    .section-title .meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; font-weight: 500;
+      color: var(--accent);
+      text-transform: none; letter-spacing: .04em;
+    }
+    .section-title .meta:empty { display: none; }
+    .section-title .line {
+      flex: 1; height: 1px;
       background: var(--border);
+    }
+
+    /* live (non-diarized) transcript during recording */
+    .live-text {
+      font-size: 15px; line-height: 1.7;
+      color: var(--text);
+      padding: 8px 0;
+      white-space: pre-wrap;
+    }
+    .live-text-empty {
+      color: var(--dim); font-size: 14px;
+      font-style: italic; padding: 8px 0;
     }
 
     .transcript {
@@ -289,6 +308,24 @@
       font-size: 11.5px; font-weight: 700;
       color: var(--speaker-color, var(--accent));
       letter-spacing: .12em; text-transform: uppercase;
+      cursor: pointer;
+      border-bottom: 1px dashed transparent;
+      transition: border-color .15s;
+    }
+    .speaker-name:hover { border-bottom-color: currentColor; }
+
+    .speaker-name-input {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-variation-settings: 'wdth' 95;
+      font-size: 11.5px; font-weight: 700;
+      letter-spacing: .12em; text-transform: uppercase;
+      color: var(--speaker-color, var(--accent));
+      background: var(--surface);
+      border: 1px solid var(--speaker-color, var(--accent));
+      border-radius: 4px;
+      padding: 2px 6px;
+      outline: none;
+      max-width: 200px; min-width: 80px;
     }
     .speaker-time {
       margin-left: auto;
@@ -428,7 +465,11 @@
     <br><span class="accent">⚡</span> Processing takes 5–30s per minute of audio — GPU is faster.
   </div>
 
-  <div class="section-title">Transcript</div>
+  <div class="section-title">
+    <span>Transcript</span>
+    <span class="meta" id="chunkStatus"></span>
+    <span class="line"></span>
+  </div>
   <div id="transcript" class="transcript">
     <div class="transcript-empty">No recording yet.</div>
   </div>
@@ -499,13 +540,30 @@ numSpeakersEl.addEventListener('input', saveSettings);
 loadSettings();
 
 // ── Recording state ────────────────────────────────────────────
-let mediaRecorder = null;
-let chunks        = [];
 let micStream     = null;
 let displayStream = null;
 let audioCtx      = null;
+let destStream    = null;
 let timerInterval = null;
-let currentSegments = null;
+let isRecording   = false;
+
+// Два рекордера параллельно:
+//  - chunkRecorder ротируется каждые CHUNK_INTERVAL_MS → live-текст без диаризации
+//  - fullRecorder пишет всё непрерывно → финальный пайплайн с диаризацией
+const CHUNK_INTERVAL_MS = 3 * 60 * 1000;
+let chunkRecorder       = null;
+let chunkRecorderChunks = [];
+let chunkRotationTimer  = null;
+let fullRecorder        = null;
+let fullChunks          = [];
+
+// Live-текст (без спикеров) накапливается во время записи
+let liveTextParts   = [];   // [{idx, text}], idx чтобы сохранять порядок
+let pendingChunks   = 0;    // сколько чанков сейчас транскрибируется
+
+let currentSegments     = null;
+let currentSpeakerNames = {};
+let currentHistoryId    = null;
 
 const LANG_LABELS = { en: 'English', ru: 'Russian', uk: 'Ukrainian' };
 
@@ -536,9 +594,45 @@ function formatTime(seconds) {
   return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
 }
 
-function speakerName(rawLabel) {
+function defaultSpeakerName(rawLabel) {
   const m = rawLabel.match(/(\d+)/);
   return m ? `Speaker ${parseInt(m[1], 10) + 1}` : rawLabel;
+}
+
+function speakerName(rawLabel) {
+  return currentSpeakerNames[rawLabel] || defaultSpeakerName(rawLabel);
+}
+
+function renameSpeaker(rawLabel, newName) {
+  const trimmed = (newName || '').trim();
+  if (!trimmed || trimmed === defaultSpeakerName(rawLabel)) {
+    delete currentSpeakerNames[rawLabel];
+  } else {
+    currentSpeakerNames[rawLabel] = trimmed;
+  }
+  renderTranscript(currentSegments);
+  if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+}
+
+function startRenameInline(labelEl, rawLabel) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'speaker-name-input';
+  input.value = speakerName(rawLabel);
+  input.setAttribute('maxlength', '40');
+
+  const commit = () => renameSpeaker(rawLabel, input.value);
+  const cancel = () => renderTranscript(currentSegments);
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', commit);
+
+  labelEl.replaceWith(input);
+  input.focus();
+  input.select();
 }
 
 function speakerColor(rawLabel) {
@@ -573,6 +667,11 @@ function renderTranscript(segments) {
     const name = document.createElement('span');
     name.className = 'speaker-name';
     name.textContent = speakerName(seg.speaker);
+    name.title = 'Click to rename';
+    name.addEventListener('click', e => {
+      e.stopPropagation();
+      startRenameInline(name, seg.speaker);
+    });
 
     const time = document.createElement('span');
     time.className = 'speaker-time';
@@ -612,15 +711,112 @@ function segmentsToMarkdown(segments) {
 }
 
 function cleanup() {
+  if (chunkRotationTimer) { clearInterval(chunkRotationTimer); chunkRotationTimer = null; }
+  if (chunkRecorder && chunkRecorder.state !== 'inactive') {
+    chunkRecorder.onstop = null;
+    try { chunkRecorder.stop(); } catch {}
+  }
+  if (fullRecorder && fullRecorder.state !== 'inactive') {
+    try { fullRecorder.stop(); } catch {}
+  }
+  chunkRecorder = null; fullRecorder = null;
+  chunkRecorderChunks = []; fullChunks = [];
   if (micStream)     { micStream.getTracks().forEach(t => t.stop());     micStream = null; }
   if (displayStream) { displayStream.getTracks().forEach(t => t.stop()); displayStream = null; }
   if (audioCtx)      { audioCtx.close(); audioCtx = null; }
-  mediaRecorder = null;
-  chunks = [];
+  destStream = null;
 }
 window.addEventListener('beforeunload', cleanup);
 
+const chunkStatusEl = document.getElementById('chunkStatus');
+function setChunkStatus(text) {
+  chunkStatusEl.textContent = text || '';
+}
+
 // ── Recording flow ─────────────────────────────────────────────
+function getMimeType() {
+  return MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus' : 'audio/webm';
+}
+
+function startChunkRecorder() {
+  chunkRecorder = new MediaRecorder(destStream, { mimeType: getMimeType(), audioBitsPerSecond: 32000 });
+  chunkRecorderChunks = [];
+  chunkRecorder.ondataavailable = e => { if (e.data.size > 0) chunkRecorderChunks.push(e.data); };
+  chunkRecorder.onstop = handleChunkStop;
+  chunkRecorder.start();
+}
+
+function rotateChunk() {
+  if (chunkRecorder && chunkRecorder.state === 'recording') {
+    chunkRecorder.stop(); // → onstop → отправит + (если isRecording) запустит новый
+  }
+}
+
+async function handleChunkStop() {
+  const chunksToSend = chunkRecorderChunks;
+  chunkRecorderChunks = [];
+
+  // Сразу стартуем новый рекордер если запись продолжается — без gap
+  if (isRecording) startChunkRecorder();
+
+  if (chunksToSend.length === 0) return;
+  const blob = new Blob(chunksToSend, { type: 'audio/webm' });
+
+  const idx = liveTextParts.length;
+  liveTextParts.push({ idx, text: '' });
+
+  pendingChunks++;
+  updateLiveStatus();
+
+  try {
+    const fd = new FormData();
+    fd.append('audio', blob, 'chunk.webm');
+    if (langSel.value) fd.append('language', langSel.value);
+
+    const res  = await fetch(`${API_BASE}/api/transcribe-chunk`, { method: 'POST', body: fd });
+    const data = await res.json();
+    if (res.ok && data.text) {
+      liveTextParts[idx].text = data.text;
+      renderLiveText();
+    }
+  } catch (e) {
+    console.warn(`chunk ${idx} failed:`, e);
+  } finally {
+    pendingChunks--;
+    updateLiveStatus();
+  }
+}
+
+function updateLiveStatus() {
+  if (!isRecording && pendingChunks === 0 && !waitingForFull) {
+    setChunkStatus('');
+    return;
+  }
+  const bits = [];
+  if (isRecording) bits.push('live');
+  if (pendingChunks > 0) bits.push(`${pendingChunks} processing`);
+  setChunkStatus(bits.join(' · '));
+}
+
+function renderLiveText() {
+  transcriptEl.innerHTML = '';
+  const text = liveTextParts.map(p => p.text).filter(Boolean).join(' ').trim();
+  if (!text) {
+    const empty = document.createElement('div');
+    empty.className = 'live-text-empty';
+    empty.textContent = 'listening… text will appear as chunks are processed';
+    transcriptEl.appendChild(empty);
+    return;
+  }
+  const live = document.createElement('div');
+  live.className = 'live-text';
+  live.textContent = text;
+  transcriptEl.appendChild(live);
+}
+
+let waitingForFull = false;
+
 startBtn.addEventListener('click', async () => {
   setError('');
   startBtn.disabled = true;
@@ -632,12 +828,8 @@ startBtn.addEventListener('click', async () => {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (e) {
-      setError(e.name === 'NotAllowedError'
-        ? 'Microphone access denied.'
-        : e.message);
-      setStatus('ready');
-      startBtn.disabled = false;
-      return;
+      setError(e.name === 'NotAllowedError' ? 'Microphone access denied.' : e.message);
+      setStatus('ready'); startBtn.disabled = false; return;
     }
   }
 
@@ -648,66 +840,88 @@ startBtn.addEventListener('click', async () => {
     });
     displayStream.getVideoTracks().forEach(t => t.stop());
   } catch (e) {
-    setError(e.name === 'NotAllowedError'
-      ? 'Screen share denied.'
-      : 'Screen share canceled.');
-    setStatus('ready');
-    startBtn.disabled = false;
-    return;
+    setError(e.name === 'NotAllowedError' ? 'Screen share denied.' : 'Screen share canceled.');
+    setStatus('ready'); startBtn.disabled = false; return;
   }
 
   if (displayStream.getAudioTracks().length === 0) {
-    displayStream.getTracks().forEach(t => t.stop());
-    displayStream = null;
+    displayStream.getTracks().forEach(t => t.stop()); displayStream = null;
     setError('No audio captured — enable “Share audio” when selecting screen or tab.');
-    setStatus('ready');
-    startBtn.disabled = false;
-    return;
+    setStatus('ready'); startBtn.disabled = false; return;
   }
 
   audioCtx = new AudioContext();
   const dest = audioCtx.createMediaStreamDestination();
   audioCtx.createMediaStreamSource(micStream).connect(dest);
   audioCtx.createMediaStreamSource(displayStream).connect(dest);
+  destStream = dest.stream;
 
-  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-    ? 'audio/webm;codecs=opus' : 'audio/webm';
+  // Сброс состояния транскрипции
+  isRecording = true;
+  liveTextParts = [];
+  pendingChunks = 0;
+  currentSegments = null;
+  currentSpeakerNames = {};
+  currentHistoryId = null;
+  renderLiveText();
 
-  mediaRecorder = new MediaRecorder(dest.stream, { mimeType, audioBitsPerSecond: 32000 });
-  chunks = [];
-  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-  mediaRecorder.onstop = handleStop;
+  // Full recorder — непрерывная запись для финальной диаризации
+  fullRecorder = new MediaRecorder(destStream, { mimeType: getMimeType(), audioBitsPerSecond: 32000 });
+  fullChunks = [];
+  fullRecorder.ondataavailable = e => { if (e.data.size > 0) fullChunks.push(e.data); };
+  fullRecorder.onstop = handleFullStop;
+  fullRecorder.start();
 
+  // Chunk recorder — ротируется каждые 3 мин для live-текста
+  startChunkRecorder();
+  chunkRotationTimer = setInterval(rotateChunk, CHUNK_INTERVAL_MS);
+
+  // Auto-stop если пользователь отозвал шеринг
   displayStream.getAudioTracks()[0].addEventListener('ended', () => {
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      stopBtn.disabled = true;
-      stopTimer();
-      mediaRecorder.stop();
-    }
+    if (isRecording) stopRecording();
   });
 
-  mediaRecorder.start();
   startTimer();
   setStatus('recording', 'recording');
+  updateLiveStatus();
   hintEl.style.display = 'none';
   stopBtn.disabled = false;
   langSel.disabled = true;
   numSpeakersEl.disabled = true;
 });
 
-stopBtn.addEventListener('click', () => {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    stopBtn.disabled = true;
-    stopTimer();
-    mediaRecorder.stop();
-  }
-});
+stopBtn.addEventListener('click', stopRecording);
 
-async function handleStop() {
-  const blob = new Blob(chunks, { type: 'audio/webm' });
-  cleanup();
-  setStatus('processing…', 'working');
-  startBtn.disabled = true;
+function stopRecording() {
+  if (!isRecording) return;
+  isRecording = false;
+  stopBtn.disabled = true;
+  stopTimer();
+  clearInterval(chunkRotationTimer); chunkRotationTimer = null;
+  setStatus('finalizing…', 'working');
+
+  // Финальный chunkRecorder.stop — пошлёт последний кусок live-текста
+  if (chunkRecorder && chunkRecorder.state === 'recording') {
+    chunkRecorder.stop();
+  }
+  // Full recorder тоже стопаем → triggers handleFullStop
+  if (fullRecorder && fullRecorder.state === 'recording') {
+    fullRecorder.stop();
+  }
+}
+
+async function handleFullStop() {
+  const blob = new Blob(fullChunks, { type: 'audio/webm' });
+  fullChunks = [];
+
+  // Закрываем стримы и AudioContext
+  if (displayStream) { displayStream.getTracks().forEach(t => t.stop()); displayStream = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  destStream = null;
+
+  waitingForFull = true;
+  setStatus('diarization…', 'working');
+  updateLiveStatus();
 
   try {
     const fd = new FormData();
@@ -719,6 +933,8 @@ async function handleStop() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'transcription failed');
 
+    currentSpeakerNames = {};
+    currentHistoryId = null;
     renderTranscript(data.segments);
     if (data.segments && data.segments.length) saveToHistory(data.segments, langSel.value);
     setStatus('ready');
@@ -728,6 +944,8 @@ async function handleStop() {
     setStatus('ready');
     hintEl.style.display = '';
   } finally {
+    waitingForFull = false;
+    setChunkStatus('');
     startBtn.disabled = false;
     langSel.disabled  = false;
     numSpeakersEl.disabled = false;
@@ -765,13 +983,26 @@ function getHistory() {
 
 function saveToHistory(segments, lang) {
   const history = getHistory();
+  const id = Date.now();
   history.unshift({
-    id: Date.now(),
+    id,
     date: new Date().toISOString(),
     lang: lang || 'auto',
     segments,
+    speakerNames: { ...currentSpeakerNames },
   });
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
+  currentHistoryId = id;
+  renderHistory();
+}
+
+function updateHistoryEntry(id) {
+  const history = getHistory();
+  const idx = history.findIndex(h => h.id === id);
+  if (idx === -1) return;
+  history[idx].segments = currentSegments;
+  history[idx].speakerNames = { ...currentSpeakerNames };
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   renderHistory();
 }
 
@@ -833,7 +1064,11 @@ function renderHistory() {
 
     item.appendChild(body);
     item.appendChild(del);
-    item.addEventListener('click', () => renderTranscript(entry.segments));
+    item.addEventListener('click', () => {
+      currentSpeakerNames = { ...(entry.speakerNames || {}) };
+      currentHistoryId = entry.id;
+      renderTranscript(entry.segments);
+    });
     historyList.appendChild(item);
   });
 
