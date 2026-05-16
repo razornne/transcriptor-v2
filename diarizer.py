@@ -29,10 +29,8 @@ def _get_pipeline() -> Pipeline:
             "pyannote/speaker-diarization-3.1",
             token=token,
         )
-        # GPU отключено из-за конфликта cuDNN между PyTorch и CTranslate2 на Windows.
-        # Когда конфликт разрешится — раскомментировать.
-        # if torch.cuda.is_available():
-        #     _pipeline.to(torch.device("cuda"))
+        if torch.cuda.is_available():
+            _pipeline.to(torch.device("cuda"))
     return _pipeline
 
 

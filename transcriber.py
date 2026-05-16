@@ -21,12 +21,12 @@ if sys.platform == "win32":
 
 from faster_whisper import WhisperModel
 
-# На Windows есть конфликт между cuDNN от PyTorch и от CTranslate2 (см. README).
-# Поэтому по умолчанию запускаем whisper на CPU, диаризацию pyannote — на GPU.
-# Когда конфликт разрешится — поставить WHISPER_DEVICE=cuda WHISPER_COMPUTE=float16.
+# medium — оптимум для 8GB VRAM с pyannote вместе (~3.5 GB).
+# Конфликт cuDNN между PyTorch и CTranslate2 на Windows решён заменой
+# торчового cuDNN 9.1 на 9.22 в venv/Lib/site-packages/torch/lib/ (см. README).
 MODEL_SIZE   = os.environ.get("WHISPER_MODEL", "medium")
-DEVICE       = os.environ.get("WHISPER_DEVICE", "cpu")
-COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE", "int8")
+DEVICE       = os.environ.get("WHISPER_DEVICE", "cuda")
+COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE", "float16")
 
 _model = None
 

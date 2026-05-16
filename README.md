@@ -68,7 +68,25 @@ python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:'
 
 Должно вывести `CUDA: True` и название твоей GPU.
 
-### 5. Первый запуск
+### 5. ⚠️ Фикс cuDNN-конфликта (обязательно для GPU)
+
+PyTorch несёт свой cuDNN 9.1, а CTranslate2 (внутри faster-whisper) собран против cuDNN 9.2+ и требует функцию `cudnnGetLibConfig` которой в 9.1 нет. Без этого фикса будет крэш `Could not load symbol cudnnGetLibConfig. Error code 127`.
+
+Ставим cuDNN 9.22 и заменяем им торчовый:
+
+```powershell
+pip install nvidia-cudnn-cu12 nvidia-cublas-cu12
+
+# Бэкап старого cuDNN от PyTorch
+cd venv\Lib\site-packages\torch\lib
+Get-ChildItem cudnn*.dll | ForEach-Object { Rename-Item $_.FullName -NewName ($_.Name + ".bak") }
+
+# Копируем новый
+Copy-Item ..\..\nvidia\cudnn\bin\cudnn*.dll .
+cd ..\..\..\..\..
+```
+
+### 6. Первый запуск
 ```powershell
 python app.py
 ```

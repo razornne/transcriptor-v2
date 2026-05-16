@@ -52,7 +52,9 @@ cloudflared tunnel --url http://localhost:5000
 
 - **Whisper и pyannote НЕЛЬЗЯ заменить на API-варианты в этом проекте.** Вся идея v2 — приватность через локальные модели. Если нужен API — это v1.
 
-- **CUDA install — отдельно от requirements.txt.** PyTorch с CUDA ставится `pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121`. Если просто `pip install torch` — поставится CPU-версия и всё будет работать в 10 раз медленнее без ошибок. Незаметно но больно.
+- **CUDA install — отдельно от requirements.txt.** PyTorch с CUDA ставится `pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124` (или cu121). Если просто `pip install torch` — поставится CPU-версия и всё будет работать в 10 раз медленнее без ошибок. Незаметно но больно.
+
+- **cuDNN-конфликт PyTorch vs CTranslate2 на Windows.** PyTorch 2.6+cu124 несёт cuDNN 9.1.0 в `torch/lib/`. CTranslate2 4.7+ (внутри faster-whisper) собран против cuDNN 9.2+ и требует символ `cudnnGetLibConfig` (добавлен в 9.2). Без фикса крэш `Could not load symbol cudnnGetLibConfig. Error code 127` при первой GPU-операции — Python падает целиком без traceback. **Фикс:** ставим `nvidia-cudnn-cu12` (9.22), переименовываем `torch/lib/cudnn*.dll` в `.bak`, копируем туда же DLL из `nvidia/cudnn/bin/`. Минорные версии cuDNN backward-compatible, торч этого не замечает. Подробности — в README.
 
 - **pyannote требует ffmpeg в PATH** для конвертации WebM из браузера. Без ffmpeg — `pipeline(path)` упадёт на чтении файла. faster-whisper тоже использует ffmpeg внутри. Это системная зависимость, не Python.
 
