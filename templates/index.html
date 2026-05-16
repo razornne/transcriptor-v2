@@ -1,221 +1,456 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Transcriptor v2</title>
+  <title>Transcriptor</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=JetBrains+Mono:wght@400;500&display=swap">
+
+  <script>
+    // Apply theme before paint to avoid flash
+    (function() {
+      const saved = localStorage.getItem('theme');
+      const sys = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.dataset.theme = saved || sys;
+    })();
+  </script>
+
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    :root {
-      --bg:        #f1f5f9;
-      --card:      #ffffff;
-      --border:    #e2e8f0;
-      --text:      #0f172a;
-      --muted:     #64748b;
-      --primary:   #4f46e5;
-      --primary-h: #4338ca;
-      --danger:    #ef4444;
-      --danger-h:  #dc2626;
-      --accent:    #06b6d4;
-      --shadow:    0 1px 3px rgba(0,0,0,.07), 0 8px 28px rgba(0,0,0,.07);
+    /* ── DARK (default) ── */
+    :root, :root[data-theme="dark"] {
+      --bg:       #0a0f1f;
+      --surface:  #0e1428;
+      --border:   #1a2240;
+      --text:     #e8ecf7;
+      --muted:    #6a7595;
+      --dim:      #4a5475;
+
+      --accent:   #a8c5ff;
+      --accent-h: #c6daff;
+
+      --danger:   #ff8a8a;
+      --danger-h: #ffaaaa;
+
+      --sp-1: #a8c5ff;
+      --sp-2: #f5b8d3;
+      --sp-3: #c5b3ff;
+      --sp-4: #b8e8c8;
+      --sp-5: #f5d6a8;
+      --sp-6: #b8e0f0;
+
+      --grain-opacity: .035;
+      --grain-blend: overlay;
     }
 
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg:     #0f172a;
-        --card:   #1e293b;
-        --border: #334155;
-        --text:   #f1f5f9;
-        --muted:  #94a3b8;
-        --shadow: 0 1px 3px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.3);
-      }
+    /* ── LIGHT — warm pastel ── */
+    :root[data-theme="light"] {
+      --bg:       #f5f1ea;
+      --surface:  #fdfaf3;
+      --border:   #e6dfcf;
+      --text:     #1f2230;
+      --muted:    #767a87;
+      --dim:      #a8aab5;
+
+      --accent:   #4a6cf7;
+      --accent-h: #3556e6;
+
+      --danger:   #c83333;
+      --danger-h: #a52525;
+
+      --sp-1: #3556e6;
+      --sp-2: #c43577;
+      --sp-3: #7a3fc5;
+      --sp-4: #1f7a4e;
+      --sp-5: #b06010;
+      --sp-6: #1f6a8c;
+
+      --grain-opacity: .04;
+      --grain-blend: multiply;
+    }
+
+    body::before {
+      content: "";
+      position: fixed; inset: 0;
+      pointer-events: none;
+      opacity: var(--grain-opacity);
+      mix-blend-mode: var(--grain-blend);
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/></svg>");
+      z-index: 1;
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg); color: var(--text);
+      font-family: 'Bricolage Grotesque', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-variation-settings: 'wdth' 95, 'opsz' 14;
+      background: var(--bg);
+      color: var(--text);
       min-height: 100vh;
-      display: flex; align-items: flex-start; justify-content: center;
-      padding: 48px 16px 64px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 64px 24px 96px;
+      position: relative;
+      transition: background .25s, color .25s;
     }
 
-    .card {
-      width: 100%; max-width: 720px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      box-shadow: var(--shadow);
-      padding: 32px;
+    .shell { width: 100%; max-width: 720px; position: relative; z-index: 2; }
+
+    /* ── HERO ── */
+    .hero { margin-bottom: 56px; }
+
+    .hero-meta {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 11px; font-weight: 500;
+      color: var(--muted);
+      letter-spacing: .18em; text-transform: uppercase;
+      margin-bottom: 18px;
+    }
+    .meta-line { flex: 1; height: 1px; background: var(--border); }
+    .meta-toggle {
+      background: none; border: none; padding: 0;
+      font: inherit; font-size: 11px; font-weight: 500;
+      color: var(--muted);
+      letter-spacing: .18em; text-transform: uppercase;
+      cursor: pointer;
+      transition: color .15s;
+    }
+    .meta-toggle:hover { color: var(--text); }
+
+    .hero-title {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-variation-settings: 'wdth' 100, 'wght' 700, 'opsz' 96;
+      font-size: clamp(56px, 9.5vw, 92px);
+      line-height: .92;
+      letter-spacing: -.03em;
+      color: var(--text);
+      margin-bottom: 14px;
     }
 
-    .header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
-    .logo {
-      width: 40px; height: 40px; background: var(--primary);
-      border-radius: 10px; display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-    }
-    .logo svg { width: 22px; height: 22px; fill: white; }
-    .header-text h1 { font-size: 19px; font-weight: 700; letter-spacing: -.3px; }
-    .header-text p  { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
-    .version-badge {
-      margin-left: auto; font-size: 11px; font-weight: 700;
-      color: var(--accent); border: 1px solid var(--accent);
-      border-radius: 4px; padding: 2px 6px;
+    .hero-sub {
+      font-size: 14px;
+      color: var(--muted);
+      max-width: 460px;
+      line-height: 1.55;
     }
 
-    .field-row { display: flex; gap: 12px; margin-bottom: 20px; }
-    .field { flex: 1; }
+    /* ── FIELDS ── */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 160px;
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    @media (max-width: 480px) { .grid-2 { grid-template-columns: 1fr; } }
+
     label {
-      display: block; font-size: 12.5px; font-weight: 600;
-      color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
-      margin-bottom: 7px;
+      display: block;
+      font-size: 10.5px; font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase; letter-spacing: .14em;
+      margin-bottom: 8px;
     }
+
     select, input[type="number"] {
-      width: 100%; padding: 9px 12px;
+      width: 100%;
+      padding: 11px 14px;
       font: inherit; font-size: 14px;
-      color: var(--text); background: var(--bg);
-      border: 1px solid var(--border); border-radius: 8px;
-      outline: none; transition: border-color .15s;
+      font-variation-settings: 'wdth' 92;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      outline: none;
+      transition: border-color .15s, background .15s;
     }
     select { cursor: pointer; }
-    select:focus, input:focus { border-color: var(--primary); }
+    select:hover, input:hover { border-color: var(--dim); }
+    select:focus, input:focus { border-color: var(--accent); }
 
-    .controls { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
-    button {
-      font: inherit; font-size: 14px; font-weight: 600;
-      padding: 9px 20px; border: none; border-radius: 8px;
-      cursor: pointer; transition: background .15s, opacity .15s, transform .1s;
-      white-space: nowrap;
+    /* ── CONTROLS ── */
+    .controls {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 24px;
     }
-    button:active:not(:disabled) { transform: scale(.96); }
-    button:disabled { opacity: .4; cursor: not-allowed; }
-    .btn-primary { background: var(--primary); color: #fff; }
-    .btn-primary:hover:not(:disabled) { background: var(--primary-h); }
-    .btn-danger  { background: var(--danger);  color: #fff; }
-    .btn-danger:hover:not(:disabled)  { background: var(--danger-h); }
+
+    button {
+      font: inherit; font-size: 13px; font-weight: 600;
+      font-variation-settings: 'wdth' 95;
+      padding: 11px 22px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s, opacity .15s, transform .08s;
+      letter-spacing: .02em;
+    }
+    button:active:not(:disabled) { transform: scale(.97); }
+    button:disabled { opacity: .35; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--accent); color: var(--bg);
+      border-color: var(--accent);
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-h); border-color: var(--accent-h); }
+
+    .btn-danger {
+      background: transparent; color: var(--danger);
+      border-color: var(--danger);
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: var(--danger); color: var(--bg);
+    }
+
     .btn-ghost {
       background: transparent; color: var(--muted);
-      border: 1px solid var(--border); padding: 7px 16px; font-size: 13px;
+      border-color: var(--border);
+      font-size: 12px; padding: 8px 16px;
     }
-    .btn-ghost:hover:not(:disabled) { background: var(--border); color: var(--text); }
+    .btn-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--dim); }
 
-    .status-pill {
-      margin-left: auto; display: flex; align-items: center;
-      gap: 7px; font-size: 13px; color: var(--muted);
+    /* ── STATUS ── */
+    .status {
+      margin-left: auto;
+      display: flex; align-items: center; gap: 10px;
+      font-size: 12px; color: var(--muted);
+      letter-spacing: .04em;
     }
     .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--muted); flex-shrink: 0; transition: background .3s;
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--dim);
+      transition: background .3s;
     }
-    .dot.recording { background: var(--danger);  animation: blink 1.1s ease-in-out infinite; }
-    .dot.working   { background: var(--primary); animation: blink 0.7s ease-in-out infinite; }
-    @keyframes blink {
-      0%,100% { opacity:1; transform:scale(1); }
-      50%      { opacity:.35; transform:scale(.7); }
+    .dot.recording { background: var(--danger); animation: pulse 1.2s ease-in-out infinite; }
+    .dot.working   { background: var(--accent); animation: pulse .8s ease-in-out infinite; }
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: .4; }
     }
-    .timer { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--danger); }
+    .timer {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; color: var(--danger); font-weight: 500;
+    }
 
+    /* ── HINT ── */
     .hint {
-      font-size: 13px; color: var(--muted); line-height: 1.65;
-      background: var(--bg); border: 1px solid var(--border);
-      border-radius: 8px; padding: 12px 14px; margin-bottom: 20px;
+      font-size: 12.5px; color: var(--muted);
+      line-height: 1.7;
+      padding: 14px 16px;
+      border-left: 2px solid var(--border);
+      margin-bottom: 32px;
     }
     .hint b { color: var(--text); font-weight: 600; }
+    .hint .accent { color: var(--accent); }
 
-    /* Транскрипт со спикерами */
-    .transcript {
-      min-height: 240px; padding: 14px;
-      background: var(--bg); border: 1px solid var(--border);
-      border-radius: 8px;
-      max-height: 500px; overflow-y: auto;
+    /* ── TRANSCRIPT ── */
+    .section-title {
+      font-size: 10.5px; font-weight: 600;
+      color: var(--muted);
+      letter-spacing: .18em; text-transform: uppercase;
+      margin-bottom: 14px;
+      display: flex; align-items: center; gap: 10px;
     }
-    .transcript-empty { color: var(--muted); font-size: 14px; }
+    .section-title::after {
+      content: ""; height: 1px; flex: 1;
+      background: var(--border);
+    }
 
-    .speaker-block { margin-bottom: 16px; }
-    .speaker-block:last-child { margin-bottom: 0; }
-    .speaker-label {
-      font-size: 12px; font-weight: 700;
-      color: var(--primary);
-      margin-bottom: 4px; letter-spacing: .02em;
+    .transcript {
+      min-height: 220px; max-height: 560px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .transcript-empty {
+      color: var(--dim); font-size: 14px;
+      padding: 20px 0; font-style: italic;
+    }
+
+    .speaker-block {
+      padding: 18px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .speaker-block:last-child { border-bottom: none; }
+    .speaker-block:first-child { padding-top: 8px; }
+
+    .speaker-head {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 8px;
+    }
+    .speaker-marker {
+      width: 8px; height: 8px; border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--speaker-color, var(--accent));
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--speaker-color, var(--accent)) 18%, transparent);
+    }
+    .speaker-name {
+      font-size: 11.5px; font-weight: 700;
+      color: var(--speaker-color, var(--accent));
+      letter-spacing: .12em; text-transform: uppercase;
     }
     .speaker-time {
-      color: var(--muted); font-weight: 500;
-      font-variant-numeric: tabular-nums; margin-left: 6px;
+      margin-left: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; color: var(--dim); font-weight: 400;
     }
-    .speaker-text { font-size: 14px; line-height: 1.65; color: var(--text); }
+    .speaker-text {
+      font-size: 15px; line-height: 1.65;
+      color: var(--text);
+      padding-left: 18px;
+    }
 
-    .transcript-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+    .transcript-footer {
+      display: flex; justify-content: flex-end; gap: 8px;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
 
-    .error { font-size: 13px; color: var(--danger); margin-top: 12px; line-height: 1.5; }
+    .error {
+      font-size: 13px; color: var(--danger);
+      margin-top: 14px; line-height: 1.5;
+      padding-left: 12px;
+      border-left: 2px solid var(--danger);
+    }
     .error:empty { display: none; }
+
+    /* ── HISTORY ── */
+    .history { margin-top: 48px; }
+    .history-toggle {
+      width: 100%;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 0;
+      background: none; border: none;
+      border-top: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 10.5px; font-weight: 600;
+      color: var(--muted);
+      letter-spacing: .18em; text-transform: uppercase;
+      transition: color .15s;
+    }
+    .history-toggle:hover { color: var(--text); }
+    .history-toggle:active { transform: none; }
+    .chev { font-size: 9px; transition: transform .2s; }
+    .history-toggle.open .chev { transform: rotate(180deg); }
+
+    .history-list { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; }
+    .history-list.hidden { display: none; }
+
+    .history-item {
+      display: flex; align-items: flex-start; gap: 12px;
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color .15s;
+    }
+    .history-item:hover { border-color: var(--dim); }
+    .history-item-body { flex: 1; min-width: 0; }
+    .history-item-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px; color: var(--dim);
+      margin-bottom: 4px; letter-spacing: .02em;
+    }
+    .history-item-preview {
+      font-size: 13px; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .history-item-del {
+      flex-shrink: 0;
+      background: none; border: none; padding: 0 4px;
+      font-size: 16px; color: var(--dim); cursor: pointer;
+      opacity: 0; transition: opacity .15s, color .15s;
+      line-height: 1;
+    }
+    .history-item:hover .history-item-del { opacity: 1; }
+    .history-item-del:hover { color: var(--danger); }
+
+    .history-empty { font-size: 12.5px; color: var(--dim); padding: 4px 0 12px; font-style: italic; }
+    .history-footer { display: flex; justify-content: flex-end; padding-top: 8px; }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        transition-duration: .01ms !important;
+      }
+    }
   </style>
 </head>
 <body>
-<div class="card">
+<div class="shell">
 
-  <div class="header">
-    <div class="logo">
-      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-        <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-7 10.25a.75.75 0 0 1 .75.75 6.25 6.25 0 0 0 12.5 0 .75.75 0 0 1 1.5 0 7.75 7.75 0 0 1-7 7.717V22h3a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 8 22h3v-2.283A7.75 7.75 0 0 1 4.25 12a.75.75 0 0 1 .75-.75z"/>
-      </svg>
+  <div class="hero">
+    <div class="hero-meta">
+      <span>local · whisper + pyannote</span>
+      <span class="meta-line"></span>
+      <button id="themeToggle" class="meta-toggle" title="Toggle theme">light</button>
     </div>
-    <div class="header-text">
-      <h1>Transcriptor</h1>
-      <p>Локальная модель · Разделение по спикерам</p>
-    </div>
-    <span class="version-badge">v2</span>
+    <h1 class="hero-title">Transcriptor</h1>
+    <p class="hero-sub">Call transcription with speaker separation. Everything runs locally — your audio never leaves this device.</p>
   </div>
 
-  <div class="field-row">
-    <div class="field">
-      <label for="language">Язык</label>
+  <div class="grid-2">
+    <div>
+      <label for="language">Language</label>
       <select id="language">
         <option value="">Auto-detect</option>
-        <option value="ru">Русский</option>
-        <option value="uk">Українська</option>
         <option value="en">English</option>
+        <option value="ru">Russian</option>
+        <option value="uk">Ukrainian</option>
       </select>
     </div>
-    <div class="field">
-      <label for="numSpeakers">Спикеров (опционально)</label>
-      <input id="numSpeakers" type="number" min="1" max="20" placeholder="авто">
+    <div>
+      <label for="numSpeakers">Speakers</label>
+      <input id="numSpeakers" type="number" min="1" max="20" placeholder="auto">
     </div>
   </div>
 
   <div class="controls">
-    <button id="startBtn" class="btn-primary">Начать запись</button>
-    <button id="stopBtn"  class="btn-danger" disabled>Стоп</button>
-    <div class="status-pill">
-      <div class="dot" id="dot"></div>
+    <button id="startBtn" class="btn-primary">Start recording</button>
+    <button id="stopBtn"  class="btn-danger" disabled>Stop</button>
+    <div class="status">
+      <span class="dot" id="dot"></span>
       <span class="timer" id="timer" style="display:none"></span>
-      <span id="statusText">готов</span>
+      <span id="statusText">ready</span>
     </div>
   </div>
 
   <div class="hint" id="hint">
-    Нажми <b>«Начать запись»</b> → разреши микрофон → выбери вкладку (Meet / Teams) или <b>«Весь экран»</b> и включи <b>«Поделиться звуком»</b> → нажми <b>«Стоп»</b> в конце.<br>
-    <span style="color: var(--accent)">⚡ В v2 текст появится после обработки (whisper + диаризация займут 30 сек – 3 мин в зависимости от длины созвона).</span>
+    Click <b>Start recording</b> → allow microphone → pick a tab (Meet&nbsp;/&nbsp;Teams) or <b>Entire screen</b>, enable <b>Share audio</b> → click <b>Stop</b> when done.
+    <br><span class="accent">⚡</span> Processing takes 5–30s per minute of audio — GPU is faster.
   </div>
 
-  <label for="transcript">Транскрипт</label>
+  <div class="section-title">Transcript</div>
   <div id="transcript" class="transcript">
-    <div class="transcript-empty">Запиши созвон — текст появится здесь с метками спикеров.</div>
+    <div class="transcript-empty">No recording yet.</div>
   </div>
   <div class="transcript-footer">
-    <button id="copyBtn" class="btn-ghost">Скопировать</button>
-    <button id="downloadBtn" class="btn-ghost">Скачать .md</button>
+    <button id="copyBtn" class="btn-ghost">Copy</button>
+    <button id="downloadBtn" class="btn-ghost">Download .md</button>
   </div>
   <div id="error" class="error"></div>
 
+  <div class="history">
+    <button class="history-toggle" id="historyToggle">
+      <span id="historyLabel">History</span>
+      <span class="chev">▼</span>
+    </button>
+    <div class="history-list hidden" id="historyList"></div>
+  </div>
+
 </div>
+
 <script>
-// ── Конфиг ─────────────────────────────────────────────────────
-// API_BASE пустая строка = тот же сервер что отдал страницу (для локалки).
-// Когда фронт переедет на Vercel — сюда подставится Cloudflare Tunnel URL.
 const API_BASE = '';
 
-// ── DOM ────────────────────────────────────────────────────────
 const langSel       = document.getElementById('language');
 const numSpeakersEl = document.getElementById('numSpeakers');
 const startBtn      = document.getElementById('startBtn');
@@ -228,19 +463,52 @@ const errorEl       = document.getElementById('error');
 const copyBtn       = document.getElementById('copyBtn');
 const downloadBtn   = document.getElementById('downloadBtn');
 const hintEl        = document.getElementById('hint');
+const historyToggle = document.getElementById('historyToggle');
+const historyList   = document.getElementById('historyList');
+const historyLabel  = document.getElementById('historyLabel');
+const themeToggle   = document.getElementById('themeToggle');
 
-// ── Состояние ──────────────────────────────────────────────────
+// ── Theme toggle ───────────────────────────────────────────────
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  themeToggle.textContent = theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', theme);
+}
+applyTheme(document.documentElement.dataset.theme || 'dark');
+themeToggle.addEventListener('click', () => {
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+});
+
+// ── Settings persistence ──────────────────────────────────────
+const SETTINGS_KEY = 'transcriptor_settings';
+function loadSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    if (s.lang !== undefined)         langSel.value       = s.lang;
+    if (s.numSpeakers !== undefined)  numSpeakersEl.value = s.numSpeakers;
+  } catch {}
+}
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+    lang: langSel.value,
+    numSpeakers: numSpeakersEl.value,
+  }));
+}
+langSel.addEventListener('change', saveSettings);
+numSpeakersEl.addEventListener('input', saveSettings);
+loadSettings();
+
+// ── Recording state ────────────────────────────────────────────
 let mediaRecorder = null;
 let chunks        = [];
 let micStream     = null;
 let displayStream = null;
 let audioCtx      = null;
 let timerInterval = null;
-let currentSegments = null; // последний результат для copy/download
+let currentSegments = null;
 
-const LANG_LABELS = { ru: 'Русский', uk: 'Українська', en: 'English' };
+const LANG_LABELS = { en: 'English', ru: 'Russian', uk: 'Ukrainian' };
 
-// ── Утилиты ────────────────────────────────────────────────────
 function setStatus(text, dotClass = '') {
   statusText.textContent = text;
   dotEl.className = 'dot' + (dotClass ? ' ' + dotClass : '');
@@ -253,8 +521,7 @@ function startTimer() {
   timerInterval = setInterval(() => {
     const s = Math.floor((Date.now() - t0) / 1000);
     timerEl.textContent =
-      String(Math.floor(s / 60)).padStart(2,'0') + ':' +
-      String(s % 60).padStart(2,'0');
+      String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
   }, 500);
 }
 function stopTimer() {
@@ -266,16 +533,20 @@ function stopTimer() {
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
-  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
 }
 
 function speakerName(rawLabel) {
-  // pyannote выдаёт "SPEAKER_00", "SPEAKER_01" → "Спикер 1", "Спикер 2"
   const m = rawLabel.match(/(\d+)/);
-  return m ? `Спикер ${parseInt(m[1], 10) + 1}` : rawLabel;
+  return m ? `Speaker ${parseInt(m[1], 10) + 1}` : rawLabel;
 }
 
-// ── Отрисовка транскрипта со спикерами ────────────────────────
+function speakerColor(rawLabel) {
+  const m = rawLabel.match(/(\d+)/);
+  const idx = m ? (parseInt(m[1], 10) % 6) + 1 : 1;
+  return `var(--sp-${idx})`;
+}
+
 function renderTranscript(segments) {
   currentSegments = segments;
   transcriptEl.innerHTML = '';
@@ -283,7 +554,7 @@ function renderTranscript(segments) {
   if (!segments || segments.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'transcript-empty';
-    empty.textContent = 'Речь не обнаружена.';
+    empty.textContent = 'No speech detected.';
     transcriptEl.appendChild(empty);
     return;
   }
@@ -291,17 +562,31 @@ function renderTranscript(segments) {
   segments.forEach(seg => {
     const block = document.createElement('div');
     block.className = 'speaker-block';
+    block.style.setProperty('--speaker-color', speakerColor(seg.speaker));
 
-    const label = document.createElement('div');
-    label.className = 'speaker-label';
-    label.innerHTML = speakerName(seg.speaker) +
-      `<span class="speaker-time">${formatTime(seg.start)} — ${formatTime(seg.end)}</span>`;
+    const head = document.createElement('div');
+    head.className = 'speaker-head';
+
+    const marker = document.createElement('span');
+    marker.className = 'speaker-marker';
+
+    const name = document.createElement('span');
+    name.className = 'speaker-name';
+    name.textContent = speakerName(seg.speaker);
+
+    const time = document.createElement('span');
+    time.className = 'speaker-time';
+    time.textContent = formatTime(seg.start) + ' — ' + formatTime(seg.end);
+
+    head.appendChild(marker);
+    head.appendChild(name);
+    head.appendChild(time);
 
     const text = document.createElement('div');
     text.className = 'speaker-text';
     text.textContent = seg.text;
 
-    block.appendChild(label);
+    block.appendChild(head);
     block.appendChild(text);
     transcriptEl.appendChild(block);
   });
@@ -309,24 +594,23 @@ function renderTranscript(segments) {
 
 function segmentsToPlainText(segments) {
   return segments
-    .map(seg => `[${speakerName(seg.speaker)}] (${formatTime(seg.start)} — ${formatTime(seg.end)})\n${seg.text}`)
+    .map(s => `[${speakerName(s.speaker)}] (${formatTime(s.start)} — ${formatTime(s.end)})\n${s.text}`)
     .join('\n\n');
 }
 
 function segmentsToMarkdown(segments) {
   const now = new Date();
-  const date = now.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-  const time = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const date = now.toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+  const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   const langLabel = LANG_LABELS[langSel.value] || 'Auto-detect';
 
-  let md = `# Транскрипт созвона\n\n**Дата:** ${date}, ${time}  \n**Язык:** ${langLabel}\n\n---\n\n`;
+  let md = `# Call transcript\n\n**Date:** ${date}, ${time}  \n**Language:** ${langLabel}\n\n---\n\n`;
   segments.forEach(seg => {
     md += `**${speakerName(seg.speaker)}** _(${formatTime(seg.start)} — ${formatTime(seg.end)})_\n\n${seg.text}\n\n`;
   });
   return md;
 }
 
-// ── Очистка ресурсов ───────────────────────────────────────────
 function cleanup() {
   if (micStream)     { micStream.getTracks().forEach(t => t.stop());     micStream = null; }
   if (displayStream) { displayStream.getTracks().forEach(t => t.stop()); displayStream = null; }
@@ -334,14 +618,13 @@ function cleanup() {
   mediaRecorder = null;
   chunks = [];
 }
-
 window.addEventListener('beforeunload', cleanup);
 
-// ── Запись ─────────────────────────────────────────────────────
+// ── Recording flow ─────────────────────────────────────────────
 startBtn.addEventListener('click', async () => {
   setError('');
   startBtn.disabled = true;
-  setStatus('запрос разрешений…', 'working');
+  setStatus('requesting permissions…', 'working');
 
   const micAlive = micStream && micStream.getAudioTracks().some(t => t.readyState === 'live');
   if (!micAlive) {
@@ -350,9 +633,9 @@ startBtn.addEventListener('click', async () => {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (e) {
       setError(e.name === 'NotAllowedError'
-        ? 'Доступ к микрофону запрещён.'
+        ? 'Microphone access denied.'
         : e.message);
-      setStatus('готов');
+      setStatus('ready');
       startBtn.disabled = false;
       return;
     }
@@ -366,9 +649,9 @@ startBtn.addEventListener('click', async () => {
     displayStream.getVideoTracks().forEach(t => t.stop());
   } catch (e) {
     setError(e.name === 'NotAllowedError'
-      ? 'Поделиться экраном отклонено.'
-      : 'Захват экрана отменён.');
-    setStatus('готов');
+      ? 'Screen share denied.'
+      : 'Screen share canceled.');
+    setStatus('ready');
     startBtn.disabled = false;
     return;
   }
@@ -376,8 +659,8 @@ startBtn.addEventListener('click', async () => {
   if (displayStream.getAudioTracks().length === 0) {
     displayStream.getTracks().forEach(t => t.stop());
     displayStream = null;
-    setError('Звук не захвачен — включи «Поделиться звуком».');
-    setStatus('готов');
+    setError('No audio captured — enable “Share audio” when selecting screen or tab.');
+    setStatus('ready');
     startBtn.disabled = false;
     return;
   }
@@ -405,7 +688,7 @@ startBtn.addEventListener('click', async () => {
 
   mediaRecorder.start();
   startTimer();
-  setStatus('запись', 'recording');
+  setStatus('recording', 'recording');
   hintEl.style.display = 'none';
   stopBtn.disabled = false;
   langSel.disabled = true;
@@ -423,7 +706,7 @@ stopBtn.addEventListener('click', () => {
 async function handleStop() {
   const blob = new Blob(chunks, { type: 'audio/webm' });
   cleanup();
-  setStatus('обработка (whisper + диаризация)…', 'working');
+  setStatus('processing…', 'working');
   startBtn.disabled = true;
 
   try {
@@ -437,11 +720,12 @@ async function handleStop() {
     if (!res.ok) throw new Error(data.error || 'transcription failed');
 
     renderTranscript(data.segments);
-    setStatus('готов');
+    if (data.segments && data.segments.length) saveToHistory(data.segments, langSel.value);
+    setStatus('ready');
     hintEl.style.display = '';
   } catch (e) {
     setError(e.message);
-    setStatus('готов');
+    setStatus('ready');
     hintEl.style.display = '';
   } finally {
     startBtn.disabled = false;
@@ -450,12 +734,12 @@ async function handleStop() {
   }
 }
 
-// ── Копирование / скачивание ──────────────────────────────────
+// ── Copy / download ────────────────────────────────────────────
 copyBtn.addEventListener('click', async () => {
   if (!currentSegments || currentSegments.length === 0) return;
   await navigator.clipboard.writeText(segmentsToPlainText(currentSegments));
-  copyBtn.textContent = 'Скопировано!';
-  setTimeout(() => copyBtn.textContent = 'Скопировать', 1500);
+  copyBtn.textContent = 'Copied';
+  setTimeout(() => copyBtn.textContent = 'Copy', 1500);
 });
 
 downloadBtn.addEventListener('click', () => {
@@ -464,11 +748,112 @@ downloadBtn.addEventListener('click', () => {
   const blob = new Blob([md], { type: 'text/markdown' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `transcript-${new Date().toISOString().slice(0, 10)}.md`;
+  a.href = url;
+  a.download = `transcript-${new Date().toISOString().slice(0,10)}.md`;
   a.click();
   URL.revokeObjectURL(url);
 });
+
+// ── History ────────────────────────────────────────────────────
+const HISTORY_KEY = 'transcriptor_history';
+const MAX_HISTORY = 20;
+
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+  catch { return []; }
+}
+
+function saveToHistory(segments, lang) {
+  const history = getHistory();
+  history.unshift({
+    id: Date.now(),
+    date: new Date().toISOString(),
+    lang: lang || 'auto',
+    segments,
+  });
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
+  renderHistory();
+}
+
+function deleteFromHistory(id) {
+  const h = getHistory().filter(h => h.id !== id);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+  renderHistory();
+}
+
+function clearHistory() {
+  localStorage.removeItem(HISTORY_KEY);
+  renderHistory();
+}
+
+function formatHistDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }) +
+    ' · ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+}
+
+function renderHistory() {
+  const history = getHistory();
+  historyLabel.textContent = history.length ? `History · ${history.length}` : 'History';
+  historyList.innerHTML = '';
+
+  if (!history.length) {
+    const el = document.createElement('p');
+    el.className = 'history-empty';
+    el.textContent = 'No transcripts yet.';
+    historyList.appendChild(el);
+    return;
+  }
+
+  history.forEach(entry => {
+    const item = document.createElement('div');
+    item.className = 'history-item';
+
+    const body = document.createElement('div');
+    body.className = 'history-item-body';
+
+    const meta = document.createElement('div');
+    meta.className = 'history-item-meta';
+    const langTag = LANG_LABELS[entry.lang] || 'auto';
+    meta.textContent = formatHistDate(entry.date) + ' · ' + langTag;
+
+    const preview = document.createElement('div');
+    preview.className = 'history-item-preview';
+    const firstText = entry.segments && entry.segments[0] ? entry.segments[0].text : '';
+    preview.textContent = firstText.slice(0, 140);
+
+    body.appendChild(meta);
+    body.appendChild(preview);
+
+    const del = document.createElement('button');
+    del.className = 'history-item-del';
+    del.title = 'Delete';
+    del.textContent = '×';
+    del.addEventListener('click', e => { e.stopPropagation(); deleteFromHistory(entry.id); });
+
+    item.appendChild(body);
+    item.appendChild(del);
+    item.addEventListener('click', () => renderTranscript(entry.segments));
+    historyList.appendChild(item);
+  });
+
+  const footer = document.createElement('div');
+  footer.className = 'history-footer';
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'btn-ghost';
+  clearBtn.textContent = 'Clear all';
+  clearBtn.addEventListener('click', clearHistory);
+  footer.appendChild(clearBtn);
+  historyList.appendChild(footer);
+}
+
+historyToggle.addEventListener('click', () => {
+  const isOpen = !historyList.classList.contains('hidden');
+  historyList.classList.toggle('hidden', isOpen);
+  historyToggle.classList.toggle('open', !isOpen);
+});
+
+renderHistory();
 </script>
 </body>
 </html>
