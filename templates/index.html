@@ -536,6 +536,36 @@
     }
     .error:empty { display: none; }
 
+    .recovery-box {
+      margin-top: 14px;
+      padding: 16px 18px;
+      background: color-mix(in srgb, var(--danger) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+      border-radius: 8px;
+    }
+    .recovery-box-title {
+      font-size: 11px; font-weight: 700;
+      color: var(--danger);
+      letter-spacing: .12em; text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .recovery-box-msg {
+      font-size: 13px; line-height: 1.55;
+      color: var(--text); margin-bottom: 12px;
+    }
+    .recovery-box-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .recovery-box-actions button {
+      padding: 8px 14px; font-size: 12px; font-weight: 600;
+      background: var(--surface); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; transition: border-color .15s;
+    }
+    .recovery-box-actions button:hover { border-color: var(--accent); }
+    .recovery-box-actions button.primary {
+      background: var(--accent); color: var(--bg); border-color: var(--accent);
+    }
+    .recovery-box-actions button.primary:hover { background: var(--accent-h); border-color: var(--accent-h); }
+
     /* ── HISTORY ── */
     .history { margin-top: 48px; }
     .history-toggle {
@@ -678,6 +708,18 @@
     <button id="downloadBtn" class="btn-ghost">Download .md</button>
   </div>
   <div id="error" class="error"></div>
+  <div id="recoveryBox" class="recovery-box" style="display:none">
+    <div class="recovery-box-title">Audio preserved</div>
+    <div class="recovery-box-msg" id="recoveryMsg">
+      The server response failed to parse, but your recording is safe in browser memory.
+      Try again, or download the raw audio file as a backup.
+    </div>
+    <div class="recovery-box-actions">
+      <button id="retryBtn" class="primary">Retry transcription</button>
+      <button id="downloadAudioBtn">Download .webm</button>
+      <button id="dismissRecoveryBtn">Discard</button>
+    </div>
+  </div>
 
   <div class="notes-section" id="notesSection" style="display:none">
     <div class="section-title">
@@ -802,6 +844,11 @@ let fullChunks          = [];
 // Live-текст (без спикеров) накапливается во время записи
 let liveTextParts   = [];   // [{idx, text}], idx чтобы сохранять порядок
 let pendingChunks   = 0;    // сколько чанков сейчас транскрибируется
+
+// Safety net: блоб записи живёт в памяти до успешной транскрипции
+// или явного "Discard" пользователем. Если сервер вернёт битый ответ,
+// юзер сможет Retry или скачать .webm — а не потерять часовую запись.
+let lastRecordingBlob = null;
 
 let currentSegments     = null;
 let currentSpeakerNames = {};
@@ -1245,6 +1292,18 @@ startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
   setStatus('requesting permissions…', 'working');
 
+  // Если есть несохранённое аудио от предыдущей неудачи — спросим
+  if (lastRecordingBlob) {
+    const sizeMb = (lastRecordingBlob.size / (1024 * 1024)).toFixed(1);
+    if (!confirm(`There's a ${sizeMb} MB recording from a failed previous attempt. Start a new recording will discard it. Continue?`)) {
+      startBtn.disabled = false;
+      setStatus('ready');
+      return;
+    }
+    lastRecordingBlob = null;
+    hideRecoveryBox();
+  }
+
   const micAlive = micStream && micStream.getAudioTracks().some(t => t.readyState === 'live');
   if (!micAlive) {
     if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
@@ -1337,14 +1396,23 @@ async function handleFullStop() {
   const blob = new Blob(fullChunks, { type: 'audio/webm' });
   fullChunks = [];
 
+  // Сохраняем в safety net — освободим только после успешной транскрипции
+  lastRecordingBlob = blob;
+
   // Закрываем стримы и AudioContext
   if (displayStream) { displayStream.getTracks().forEach(t => t.stop()); displayStream = null; }
   if (audioCtx) { audioCtx.close(); audioCtx = null; }
   destStream = null;
 
+  await transcribeBlob(blob);
+}
+
+async function transcribeBlob(blob) {
   waitingForFull = true;
   setStatus('diarization…', 'working');
   updateLiveStatus();
+  hideRecoveryBox();
+  setError('');
 
   try {
     const fd = new FormData();
@@ -1352,9 +1420,21 @@ async function handleFullStop() {
     if (langSel.value)       fd.append('language', langSel.value);
     if (numSpeakersEl.value) fd.append('num_speakers', numSpeakersEl.value);
 
-    const res  = await fetch(`${API_BASE}/api/transcribe`, { method: 'POST', body: fd });
-    const data = await res.json();
+    const res = await fetch(`${API_BASE}/api/transcribe`, { method: 'POST', body: fd });
+
+    // Защита от случая когда сервер вернул HTML вместо JSON (Cloudflare error, прокси и т.п.)
+    const raw = await res.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      const sniff = raw.slice(0, 200).replace(/\s+/g, ' ');
+      throw new Error(`Server returned non-JSON (${res.status}): ${sniff}`);
+    }
     if (!res.ok) throw new Error(data.error || 'transcription failed');
+
+    // Успех — можем отпустить blob
+    lastRecordingBlob = null;
 
     currentSpeakerNames = {};
     currentHistoryId = null;
@@ -1366,7 +1446,6 @@ async function handleFullStop() {
     renderTranscript(data.segments);
     if (data.segments && data.segments.length) {
       saveToHistory(data.segments, langSel.value);
-      // Асинхронно просим LLM сгенерить лучший заголовок и заменяем placeholder
       requestLLMTitle(data.segments, langSel.value, currentHistoryId);
     }
     setStatus('ready');
@@ -1375,6 +1454,7 @@ async function handleFullStop() {
     setError(e.message);
     setStatus('ready');
     hintEl.style.display = '';
+    if (lastRecordingBlob) showRecoveryBox();
   } finally {
     waitingForFull = false;
     setChunkStatus('');
@@ -1383,6 +1463,52 @@ async function handleFullStop() {
     numSpeakersEl.disabled = false;
   }
 }
+
+// ── Recovery UI ──────────────────────────────────────────────
+const recoveryBox       = document.getElementById('recoveryBox');
+const recoveryMsg       = document.getElementById('recoveryMsg');
+const retryBtn          = document.getElementById('retryBtn');
+const downloadAudioBtn  = document.getElementById('downloadAudioBtn');
+const dismissRecoveryBtn = document.getElementById('dismissRecoveryBtn');
+
+function showRecoveryBox() {
+  if (!lastRecordingBlob) return;
+  const sizeMb = (lastRecordingBlob.size / (1024 * 1024)).toFixed(1);
+  recoveryMsg.textContent = `Transcription failed but the ${sizeMb} MB recording is preserved in browser memory. Try again, or download the raw audio as a backup before closing the tab.`;
+  recoveryBox.style.display = '';
+}
+function hideRecoveryBox() { recoveryBox.style.display = 'none'; }
+
+retryBtn.addEventListener('click', () => {
+  if (lastRecordingBlob) transcribeBlob(lastRecordingBlob);
+});
+
+downloadAudioBtn.addEventListener('click', () => {
+  if (!lastRecordingBlob) return;
+  const url = URL.createObjectURL(lastRecordingBlob);
+  const a   = document.createElement('a');
+  a.href = url;
+  a.download = `recording-${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.webm`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+dismissRecoveryBtn.addEventListener('click', () => {
+  if (!lastRecordingBlob) { hideRecoveryBox(); return; }
+  if (confirm('Discard the recording? This cannot be undone.')) {
+    lastRecordingBlob = null;
+    hideRecoveryBox();
+    setError('');
+  }
+});
+
+// Предупреждаем при закрытии вкладки если есть несохранённое аудио
+window.addEventListener('beforeunload', (e) => {
+  if (lastRecordingBlob) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 // ── Copy / download ────────────────────────────────────────────
 copyBtn.addEventListener('click', async () => {
