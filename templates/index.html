@@ -626,8 +626,9 @@ let pendingChunks   = 0;    // сколько чанков сейчас тран
 let currentSegments     = null;
 let currentSpeakerNames = {};
 let currentHistoryId    = null;
-let currentTitle        = null;   // user-entered transcript name (or null = use default)
-let currentDate         = null;   // ISO date of the transcript (for default title)
+let currentTitle        = null;   // transcript name (или null = placeholder)
+let currentTitleIsAuto  = false;  // true = заголовок выставлен авто (heuristic/LLM), его можно перезаписать
+let currentDate         = null;   // ISO date of the transcript
 
 const LANG_LABELS = { en: 'English', ru: 'Russian', uk: 'Ukrainian' };
 
@@ -705,8 +706,47 @@ function speakerColor(rawLabel) {
   return `var(--sp-${idx})`;
 }
 
-// Авто-имя транскрипта из первых слов первого сегмента.
-// Берём ~6 слов, обрезаем хвост по знаку препинания если есть.
+// Запрос к локальной LLM (Ollama) за умным заголовком.
+// Выполняется параллельно с рендером — placeholder из heuristic виден сразу,
+// LLM-результат заменит его через несколько секунд.
+async function requestLLMTitle(segments, lang, forHistoryId) {
+  if (!segments || !segments.length) return;
+  // Берём первые ~3000 символов транскрипта — этого хватает для топика
+  const fullText = segments.map(s => s.text).join(' ').slice(0, 3000);
+  try {
+    const res = await fetch(`${API_BASE}/api/title`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: fullText, language: lang || null }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.title) return;
+
+    // Заменяем только если юзер ещё не переименовал руками
+    // И только если мы всё ещё на этом транскрипте
+    if (currentTitleIsAuto && currentHistoryId === forHistoryId) {
+      currentTitle = data.title;
+      renderTranscriptTitle();
+      if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+    } else if (forHistoryId !== null) {
+      // Если юзер успел уйти в другой транскрипт, всё равно обновим этот в истории
+      // — но только если у него был авто-заголовок
+      const history = getHistory();
+      const idx = history.findIndex(h => h.id === forHistoryId);
+      if (idx !== -1 && history[idx].titleIsAuto) {
+        history[idx].title = data.title;
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+        renderHistory();
+      }
+    }
+  } catch (e) {
+    console.warn('LLM title generation failed:', e);
+  }
+}
+
+// Авто-имя транскрипта из первых слов первого сегмента (мгновенный placeholder
+// пока LLM думает). LLM-вариант заменит этот, если юзер не переименует.
 function autoSuggestTitle(segments) {
   if (!segments || segments.length === 0) return null;
   const firstText = (segments[0].text || '').trim();
@@ -767,6 +807,7 @@ function startTitleRename(nameEl) {
     if (newValue !== null) {
       const v = newValue.trim();
       currentTitle = v || null;
+      currentTitleIsAuto = false;  // юзер вручную задал — больше не перезаписывать
       if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
     }
     renderTranscriptTitle();
@@ -1085,9 +1126,14 @@ async function handleFullStop() {
     currentSpeakerNames = {};
     currentHistoryId = null;
     currentTitle = autoSuggestTitle(data.segments);
+    currentTitleIsAuto = true;
     currentDate = new Date().toISOString();
     renderTranscript(data.segments);
-    if (data.segments && data.segments.length) saveToHistory(data.segments, langSel.value);
+    if (data.segments && data.segments.length) {
+      saveToHistory(data.segments, langSel.value);
+      // Асинхронно просим LLM сгенерить лучший заголовок и заменяем placeholder
+      requestLLMTitle(data.segments, langSel.value, currentHistoryId);
+    }
     setStatus('ready');
     hintEl.style.display = '';
   } catch (e) {
@@ -1143,6 +1189,7 @@ function saveToHistory(segments, lang) {
     segments,
     speakerNames: { ...currentSpeakerNames },
     title: currentTitle,
+    titleIsAuto: currentTitleIsAuto,
   });
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
   currentHistoryId = id;
@@ -1156,6 +1203,7 @@ function updateHistoryEntry(id) {
   history[idx].segments = currentSegments;
   history[idx].speakerNames = { ...currentSpeakerNames };
   history[idx].title = currentTitle;
+  history[idx].titleIsAuto = currentTitleIsAuto;
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   renderHistory();
 }
@@ -1261,6 +1309,7 @@ function renderHistory() {
       currentSpeakerNames = { ...(entry.speakerNames || {}) };
       currentHistoryId = entry.id;
       currentTitle = entry.title || null;
+      currentTitleIsAuto = !!entry.titleIsAuto;
       currentDate = entry.date;
       renderTranscript(entry.segments);
     });

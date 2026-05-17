@@ -4,3 +4,4 @@ python-dotenv
 faster-whisper
 pyannote.audio
 soundfile
+requests
