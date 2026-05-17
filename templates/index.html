@@ -311,6 +311,24 @@
       font-style: italic; padding: 8px 0;
     }
 
+    /* search highlight */
+    mark {
+      background: color-mix(in srgb, var(--accent) 22%, transparent);
+      color: var(--text);
+      padding: 1px 2px;
+      border-radius: 3px;
+    }
+    mark.preview-match {
+      background: color-mix(in srgb, var(--accent) 30%, transparent);
+      font-weight: 600;
+    }
+    .speaker-block.has-match {
+      background: color-mix(in srgb, var(--accent) 4%, transparent);
+      border-radius: 6px;
+      padding-left: 12px; padding-right: 12px;
+      margin-left: -12px; margin-right: -12px;
+    }
+
     .transcript {
       min-height: 220px; max-height: 560px;
       overflow-y: auto;
@@ -824,7 +842,20 @@ function startTitleRename(nameEl) {
   input.select();
 }
 
-function renderTranscript(segments) {
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[c]));
+}
+
+function highlightHTML(text, query) {
+  if (!query) return escapeHtml(text);
+  const safe = escapeHtml(text);
+  const safeQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return safe.replace(new RegExp(safeQuery, 'gi'), m => `<mark>${m}</mark>`);
+}
+
+function renderTranscript(segments, highlightQuery) {
   currentSegments = segments;
   renderTranscriptTitle();
   transcriptEl.innerHTML = '';
@@ -836,6 +867,8 @@ function renderTranscript(segments) {
     transcriptEl.appendChild(empty);
     return;
   }
+
+  const q = (highlightQuery || '').trim().toLowerCase();
 
   segments.forEach(seg => {
     const block = document.createElement('div');
@@ -872,12 +905,25 @@ function renderTranscript(segments) {
 
     const text = document.createElement('div');
     text.className = 'speaker-text';
-    text.textContent = seg.text;
+    if (q && seg.text.toLowerCase().includes(q)) {
+      text.innerHTML = highlightHTML(seg.text, q);
+      block.classList.add('has-match');
+    } else {
+      text.textContent = seg.text;
+    }
 
     block.appendChild(head);
     block.appendChild(text);
     transcriptEl.appendChild(block);
   });
+
+  // Скролл к первому совпадению
+  if (q) {
+    const firstMatch = transcriptEl.querySelector('.has-match');
+    if (firstMatch) {
+      setTimeout(() => firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+    }
+  }
 }
 
 function segmentsToPlainText(segments) {
@@ -1286,7 +1332,26 @@ function renderHistory() {
 
     const preview = document.createElement('div');
     preview.className = 'history-item-preview';
-    if (entry.title) {
+
+    const q = (searchEl.value || '').trim().toLowerCase();
+    let previewText, matchedSegment = null;
+
+    // Если есть поиск и совпадение — превью из найденного фрагмента
+    if (q && entry.segments) {
+      matchedSegment = entry.segments.find(s => s.text.toLowerCase().includes(q));
+    }
+
+    if (matchedSegment) {
+      // Вырезаем окно ~80 символов вокруг найденной фразы
+      const lower = matchedSegment.text.toLowerCase();
+      const idx = lower.indexOf(q);
+      const start = Math.max(0, idx - 30);
+      const end   = Math.min(matchedSegment.text.length, idx + q.length + 50);
+      let snippet = matchedSegment.text.slice(start, end);
+      if (start > 0) snippet = '…' + snippet;
+      if (end < matchedSegment.text.length) snippet += '…';
+      preview.innerHTML = highlightHTML(snippet, q).replace(/<mark>/g, '<mark class="preview-match">');
+    } else if (entry.title) {
       preview.textContent = entry.title;
       preview.style.fontWeight = '600';
     } else {
@@ -1311,7 +1376,8 @@ function renderHistory() {
       currentTitle = entry.title || null;
       currentTitleIsAuto = !!entry.titleIsAuto;
       currentDate = entry.date;
-      renderTranscript(entry.segments);
+      const queryAtClick = (searchEl.value || '').trim();
+      renderTranscript(entry.segments, queryAtClick);
     });
     itemsEl.appendChild(item);
   });
