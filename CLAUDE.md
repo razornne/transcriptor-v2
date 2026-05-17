@@ -66,6 +66,9 @@ cloudflared tunnel --url http://localhost:5000
   - **Sync** (быстрые операции):
     - `POST /api/transcribe-chunk` — быстрый, только whisper. Возвращает `{"text": "..."}`. Используется фронтом для live-текста во время записи.
     - `POST /api/title` — LLM-генерация заголовка (~5-10 с). JSON-вход `{text, language?}`, возвращает `{"title": "..."}`. Sync т.к. короткий.
+    - `POST /api/tags` — LLM-генерация 2-4 тегов категории (всегда на английском для надёжной фильтрации). Sync, ~5-10 с. JSON-вход `{segments, speakerNames?}`, возвращает `{"tags": [...]}`.
+  - **Async** (продолжение):
+    - `POST /api/chat` — вопрос-ответ по транскрипту через LLM. JSON-вход `{segments, speakerNames?, messages, question}`. Промпт: системный + транскрипт + последние 10 сообщений из истории чата + новый вопрос. **Возвращает `{job_id}`**, ответ через polling: `{"answer": "..."}`. LLM просим отвечать на языке вопроса пользователя, цитировать спикеров.
   - **Internals**:
     - `JOBS` dict + `JOBS_LOCK` — реестр async-задач. TTL 30 минут, чистится при каждом GET /api/jobs.
     - `_create_job(kind)` → `_update_job(id, **fields)` → `_get_job(id)` — thread-safe helpers.
@@ -85,8 +88,12 @@ cloudflared tunnel --url http://localhost:5000
 
 - **Notes section** (`#notesSection`) — textarea между транскриптом и AI-блоком. `currentNotes` персистится в записи истории. При вводе — дебаунс 600ms перед сохранением.
 - **AI tools section** (`#aiSection`) — рендерится только когда есть транскрипт. Кнопки `Summary` / `Action items` + dropdown с другими шаблонами (`sales_call`, `one_on_one`, `standup`). Результаты кешируются в `currentAIResults[template]` (и в записи истории через `entry.aiResults`), `__loading__` плейсхолдер пока идёт запрос. Каждая карточка результата имеет actions: `copy`, `regenerate`, `×` (remove).
+- **Chat with transcript section** (`#chatSection`) — поле "Ask anything about this call…" + Send. Отправляет вопрос + транскрипт + последние 10 сообщений истории в `/api/chat`. Ответ рендерится через `renderMarkdown()`. Сообщения с `role: user|assistant`, `loading: true` для плейсхолдера. История чата `currentChatHistory` сохраняется per-transcript в записи истории. Enter — отправка. Кнопка `clear` с confirm.
+- **Inline edit транскрипта** — двойной клик на `.speaker-text` ИЛИ hover-кнопка `✎ edit`. Заменяется на textarea (auto-sized 2-8 строк по длине). Enter без Shift — save, Shift+Enter — перенос, Esc — отмена, blur — save. `seg.text` обновляется, добавляется флаг `seg.edited` → рендерится мелкая пометка `edited` рядом с таймингом. Space внутри textarea не триггерит shortcut (через stopPropagation + isTypingTarget в глобальном handler).
+- **Auto-tags** — `requestLLMTags()` вызывается параллельно с `requestLLMTitle` после транскрипции. Endpoint `/api/tags` возвращает 2-4 тега на английском (для надёжной фильтрации). Чипы под заголовком: цветной pill с `×` для удаления, `+ add tag` для ручного добавления (inline input, как при rename). Клик по чипу → активирует фильтр в Истории. В Истории — отдельный ряд `historyTagFilters` со всеми уникальными тегами через `getHistory()`, активный тег подсвечен.
+- **Keyboard shortcuts** — глобальный `keydown` handler с `isTypingTarget()` проверкой. `Space` → Start/Stop (только не в полях ввода), `Ctrl/Cmd+K` → open History + focus search, `Ctrl/Cmd+S` → download .md, `Ctrl/Cmd+D` → toggle theme, `/` → focus search, `Esc` → close modal или blur поля, `?` → modal со списком шорткатов. На macOS "Ctrl" в kbd-метках автоматически меняется на `⌘` (detected via `navigator.platform`).
 - **Markdown renderer** — собственный мини-парсер `renderMarkdown()` (~70 строк). Поддерживает: `#`/`##`/`###` headings, `**bold**`/`*italic*`/`_italic_`/` `code` `, `-`/`*` списки, `1.` нумерованные, `- [ ]`/`- [x]` task checkboxes (рендерятся как стилизованные чекбоксы с псевдоэлементами). Не нужно тащить marked.js или подобное.
-- **localStorage**: `transcriptor_settings` (lang + numSpeakers), `transcriptor_history` (segments + speakerNames + title + titleIsAuto + notes + aiResults per entry, MAX 20), `theme`.
+- **localStorage**: `transcriptor_settings` (lang + numSpeakers), `transcriptor_history` (segments + speakerNames + title + titleIsAuto + notes + aiResults + chatHistory + tags per entry, MAX 20), `theme`. Старые записи без новых полей не ломаются — все обращения через `entry.X || default`.
 - `prefers-reduced-motion` уважается, есть `prefers-color-scheme` fallback для первого визита.
 
 ## Non-obvious things future-Claude will trip on

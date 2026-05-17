@@ -265,6 +265,61 @@
       background: var(--border);
     }
 
+    /* Tags chips under the transcript title */
+    .tags-row {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      margin-bottom: 20px;
+    }
+    .tag-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px;
+      font-size: 11.5px; font-weight: 600;
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .tag-chip:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+    .tag-chip.active {
+      background: var(--accent); color: var(--bg);
+    }
+    .tag-chip .x {
+      opacity: 0; margin-left: 2px;
+      font-size: 12px; color: inherit;
+      transition: opacity .15s;
+    }
+    .tag-chip:hover .x { opacity: .8; }
+    .tag-chip .x:hover { opacity: 1; color: var(--danger); }
+
+    .tag-add {
+      background: none; border: 1px dashed var(--border);
+      color: var(--muted);
+      padding: 3px 10px;
+      font-size: 11.5px; font-weight: 500;
+      border-radius: 999px; cursor: pointer;
+      transition: border-color .15s, color .15s;
+    }
+    .tag-add:hover { border-color: var(--accent); color: var(--accent); }
+
+    .tag-input {
+      padding: 3px 10px;
+      font: inherit; font-size: 11.5px; font-weight: 600;
+      color: var(--accent); background: var(--surface);
+      border: 1px solid var(--accent); border-radius: 999px;
+      outline: none;
+      width: 120px;
+    }
+
+    /* History tag filter */
+    .history-tag-filters {
+      display: flex; flex-wrap: wrap; gap: 5px;
+      margin-bottom: 10px;
+    }
+    .history-tag-filters:empty { display: none; }
+    .history-tag-filters .tag-chip { font-size: 10.5px; padding: 2px 8px; }
+
     /* editable transcript title (above transcript blocks) */
     .transcript-title {
       display: flex; align-items: center; gap: 10px;
@@ -434,6 +489,71 @@
       background: color-mix(in srgb, var(--accent) 12%, transparent);
     }
 
+    /* Chat with transcript */
+    .chat-section { margin-top: 36px; }
+    .chat-messages {
+      display: flex; flex-direction: column; gap: 12px;
+      margin-bottom: 14px;
+      max-height: 400px; overflow-y: auto;
+      padding-right: 4px;
+    }
+    .chat-msg {
+      max-width: 88%;
+      padding: 10px 14px;
+      font-size: 14px; line-height: 1.55;
+      border-radius: 12px;
+      word-wrap: break-word;
+    }
+    .chat-msg.user {
+      align-self: flex-end;
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+      color: var(--text);
+      border-bottom-right-radius: 4px;
+    }
+    .chat-msg.assistant {
+      align-self: flex-start;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-bottom-left-radius: 4px;
+    }
+    .chat-msg.assistant.loading {
+      color: var(--muted); font-style: italic;
+    }
+    .chat-empty {
+      font-size: 13px; color: var(--dim); font-style: italic;
+      padding: 8px 0;
+    }
+    .chat-input-row {
+      display: flex; gap: 8px;
+    }
+    .chat-input {
+      flex: 1;
+      padding: 10px 14px;
+      font: inherit; font-size: 14px;
+      font-variation-settings: 'wdth' 95;
+      color: var(--text); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 8px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .chat-input:focus { border-color: var(--accent); }
+    .chat-send-btn {
+      padding: 10px 18px; font-size: 13px; font-weight: 600;
+      background: var(--accent); color: var(--bg);
+      border: 1px solid var(--accent); border-radius: 8px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .chat-send-btn:hover:not(:disabled) { background: var(--accent-h); }
+    .chat-send-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .chat-clear-btn {
+      background: none; border: none; padding: 4px 8px;
+      font-size: 11px; color: var(--muted);
+      cursor: pointer;
+    }
+    .chat-clear-btn:hover { color: var(--danger); }
+
     /* search highlight */
     mark {
       background: color-mix(in srgb, var(--accent) 22%, transparent);
@@ -519,6 +639,36 @@
       font-size: 15px; line-height: 1.65;
       color: var(--text);
       padding-left: 18px;
+      position: relative;
+    }
+    .speaker-text:hover .edit-btn { opacity: 1; }
+    .edit-btn {
+      position: absolute; right: -4px; top: 0;
+      background: var(--surface); color: var(--muted);
+      border: 1px solid var(--border); border-radius: 4px;
+      padding: 2px 7px; font-size: 11px;
+      cursor: pointer; opacity: 0;
+      transition: opacity .15s, color .15s, border-color .15s;
+      line-height: 1;
+    }
+    .edit-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+    .speaker-text-input {
+      width: 100%;
+      padding: 8px 12px;
+      font: inherit; font-size: 15px; line-height: 1.65;
+      font-variation-settings: 'wdth' 95;
+      color: var(--text); background: var(--surface);
+      border: 1px solid var(--accent); border-radius: 6px;
+      outline: none; resize: vertical;
+      min-height: 60px;
+    }
+
+    .edited-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9.5px; color: var(--dim);
+      letter-spacing: .05em; text-transform: uppercase;
+      margin-left: 6px;
     }
 
     .transcript-footer {
@@ -565,6 +715,62 @@
       background: var(--accent); color: var(--bg); border-color: var(--accent);
     }
     .recovery-box-actions button.primary:hover { background: var(--accent-h); border-color: var(--accent-h); }
+
+    /* Keyboard shortcuts modal */
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: color-mix(in srgb, var(--bg) 70%, transparent);
+      backdrop-filter: blur(4px);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100;
+      animation: fade-in .12s ease-out;
+    }
+    .modal-backdrop.hidden { display: none; }
+    @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+
+    .modal-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 26px 28px;
+      min-width: 360px; max-width: 480px;
+    }
+    .modal-title {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-variation-settings: 'wdth' 100, 'wght' 700;
+      font-size: 20px;
+      letter-spacing: -.01em;
+      margin-bottom: 18px;
+    }
+    .shortcut-list { display: flex; flex-direction: column; gap: 10px; }
+    .shortcut-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px;
+      font-size: 13px;
+    }
+    .shortcut-row .desc { color: var(--text); }
+    .shortcut-row .keys { display: flex; gap: 4px; align-items: center; }
+    kbd {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; font-weight: 500;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 2px 7px;
+      min-width: 18px; text-align: center;
+      line-height: 1;
+    }
+    .modal-footer {
+      margin-top: 22px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+      font-size: 11px; color: var(--muted);
+      text-align: center;
+    }
+    .modal-footer kbd { font-size: 10px; padding: 1px 5px; }
 
     /* ── HISTORY ── */
     .history { margin-top: 48px; }
@@ -690,6 +896,7 @@
   <div class="hint" id="hint">
     Click <b>Start recording</b> → allow microphone → pick a tab (Meet&nbsp;/&nbsp;Teams) or <b>Entire screen</b>, enable <b>Share audio</b> → click <b>Stop</b> when done.
     <br><span class="accent">⚡</span> Processing takes 5–30s per minute of audio — GPU is faster.
+    <br><span style="opacity:.7">Tip: press <kbd style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--surface);border:1px solid var(--border)">?</kbd> for keyboard shortcuts.</span>
   </div>
 
   <div class="section-title">
@@ -700,6 +907,7 @@
   <div class="transcript-title hidden" id="transcriptTitle">
     <span class="transcript-name" id="transcriptName" title="Click to rename"></span>
   </div>
+  <div class="tags-row" id="tagsRow" style="display:none"></div>
   <div id="transcript" class="transcript">
     <div class="transcript-empty">No recording yet.</div>
   </div>
@@ -747,6 +955,19 @@
     <div id="aiResults"></div>
   </div>
 
+  <div class="chat-section" id="chatSection" style="display:none">
+    <div class="section-title">
+      <span>Chat with transcript</span>
+      <button class="chat-clear-btn" id="chatClearBtn" title="Clear conversation">clear</button>
+      <span class="line"></span>
+    </div>
+    <div id="chatMessages" class="chat-messages"></div>
+    <div class="chat-input-row">
+      <input id="chatInput" class="chat-input" type="text" placeholder="Ask anything about this call…">
+      <button id="chatSendBtn" class="chat-send-btn">Ask</button>
+    </div>
+  </div>
+
   <div class="history">
     <button class="history-toggle" id="historyToggle">
       <span id="historyLabel">History</span>
@@ -754,10 +975,48 @@
     </button>
     <div class="history-list hidden" id="historyList">
       <input id="historySearch" class="history-search" type="text" placeholder="Search by name, text, speaker, date…">
+      <div class="history-tag-filters" id="historyTagFilters"></div>
       <div id="historyItems"></div>
     </div>
   </div>
 
+</div>
+
+<div id="shortcutsModal" class="modal-backdrop hidden">
+  <div class="modal-card">
+    <div class="modal-title">Keyboard shortcuts</div>
+    <div class="shortcut-list">
+      <div class="shortcut-row">
+        <span class="desc">Start / stop recording</span>
+        <span class="keys"><kbd>Space</kbd></span>
+      </div>
+      <div class="shortcut-row">
+        <span class="desc">Open History &amp; focus search</span>
+        <span class="keys"><kbd>Ctrl</kbd><kbd>K</kbd></span>
+      </div>
+      <div class="shortcut-row">
+        <span class="desc">Focus search (when History open)</span>
+        <span class="keys"><kbd>/</kbd></span>
+      </div>
+      <div class="shortcut-row">
+        <span class="desc">Download as .md</span>
+        <span class="keys"><kbd>Ctrl</kbd><kbd>S</kbd></span>
+      </div>
+      <div class="shortcut-row">
+        <span class="desc">Toggle light / dark</span>
+        <span class="keys"><kbd>Ctrl</kbd><kbd>D</kbd></span>
+      </div>
+      <div class="shortcut-row">
+        <span class="desc">Close modal / blur field</span>
+        <span class="keys"><kbd>Esc</kbd></span>
+      </div>
+      <div class="shortcut-row">
+        <span class="desc">Show this list</span>
+        <span class="keys"><kbd>?</kbd></span>
+      </div>
+    </div>
+    <div class="modal-footer">Press <kbd>?</kbd> any time to open this</div>
+  </div>
 </div>
 
 <script>
@@ -784,6 +1043,11 @@ const notesArea     = document.getElementById('notesArea');
 const aiSection     = document.getElementById('aiSection');
 const aiResultsEl   = document.getElementById('aiResults');
 const aiTemplateSelect = document.getElementById('aiTemplateSelect');
+const chatSection   = document.getElementById('chatSection');
+const chatMessagesEl = document.getElementById('chatMessages');
+const chatInput     = document.getElementById('chatInput');
+const chatSendBtn   = document.getElementById('chatSendBtn');
+const chatClearBtn  = document.getElementById('chatClearBtn');
 
 const TEMPLATE_LABELS = {
   summary:    'Summary',
@@ -858,6 +1122,9 @@ let currentTitleIsAuto  = false;  // true = заголовок выставле�
 let currentDate         = null;   // ISO date of the transcript
 let currentNotes        = '';     // user notes (persisted per transcript)
 let currentAIResults    = {};     // { template: "markdown..." } — кеш сгенерированных AI-результатов
+let currentChatHistory  = [];     // [{role: "user"|"assistant", content: "..."}]
+let currentTags         = [];     // ["sales", "pricing", ...]
+let activeTagFilter     = null;   // выбранный тег для фильтрации в Истории
 
 const LANG_LABELS = { en: 'English', ru: 'Russian', uk: 'Ukrainian' };
 
@@ -933,6 +1200,116 @@ function speakerColor(rawLabel) {
   const m = rawLabel.match(/(\d+)/);
   const idx = m ? (parseInt(m[1], 10) % 6) + 1 : 1;
   return `var(--sp-${idx})`;
+}
+
+// ── Tags ───────────────────────────────────────────────────────
+const tagsRow = document.getElementById('tagsRow');
+
+function renderTags() {
+  tagsRow.innerHTML = '';
+  const hasSegments = currentSegments && currentSegments.length > 0;
+  if (!hasSegments) {
+    tagsRow.style.display = 'none';
+    return;
+  }
+  tagsRow.style.display = '';
+
+  currentTags.forEach(tag => {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.title = `Filter History by "${tag}"`;
+    chip.textContent = tag;
+
+    const x = document.createElement('span');
+    x.className = 'x';
+    x.textContent = '×';
+    x.title = 'Remove tag';
+    x.addEventListener('click', e => {
+      e.stopPropagation();
+      currentTags = currentTags.filter(t => t !== tag);
+      renderTags();
+      if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+    });
+    chip.appendChild(x);
+
+    chip.addEventListener('click', () => {
+      activeTagFilter = (activeTagFilter === tag) ? null : tag;
+      if (historyList.classList.contains('hidden')) historyToggle.click();
+      renderHistory();
+    });
+
+    tagsRow.appendChild(chip);
+  });
+
+  // Кнопка «+» для добавления тега вручную
+  const addBtn = document.createElement('button');
+  addBtn.className = 'tag-add';
+  addBtn.textContent = '+ add tag';
+  addBtn.addEventListener('click', () => startAddTag(addBtn));
+  tagsRow.appendChild(addBtn);
+}
+
+function startAddTag(triggerBtn) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tag-input';
+  input.placeholder = 'new tag';
+  input.setAttribute('maxlength', '30');
+
+  let done = false;
+  const finish = (val) => {
+    if (done) return;
+    done = true;
+    if (val) {
+      const clean = val.trim().toLowerCase().replace(/[#'"`]/g, '').slice(0, 30);
+      if (clean && !currentTags.includes(clean)) {
+        currentTags.push(clean);
+        if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+      }
+    }
+    renderTags();
+  };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); finish(input.value); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+    else if (e.key === ' ') { e.stopPropagation(); }
+  });
+  input.addEventListener('blur', () => finish(input.value));
+
+  triggerBtn.replaceWith(input);
+  input.focus();
+}
+
+async function requestLLMTags(segments, forHistoryId) {
+  if (!segments || !segments.length) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/tags`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ segments, speakerNames: currentSpeakerNames }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.tags || !data.tags.length) return;
+
+    // Применяем только если мы всё ещё на этом транскрипте, и теги не были добавлены руками
+    if (currentHistoryId === forHistoryId && currentTags.length === 0) {
+      currentTags = data.tags;
+      renderTags();
+      if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+    } else if (forHistoryId !== null) {
+      // Юзер ушёл в другой транскрипт — обновляем запись истории напрямую если там ещё пусто
+      const history = getHistory();
+      const idx = history.findIndex(h => h.id === forHistoryId);
+      if (idx !== -1 && (!history[idx].tags || !history[idx].tags.length)) {
+        history[idx].tags = data.tags;
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+        renderHistory();
+      }
+    }
+  } catch (e) {
+    console.warn('LLM tags failed:', e);
+  }
 }
 
 // Запрос к локальной LLM (Ollama) за умным заголовком.
@@ -1053,6 +1430,41 @@ function startTitleRename(nameEl) {
   input.select();
 }
 
+// Inline-edit отдельной реплики в транскрипте.
+// Enter без Shift сохраняет, Shift+Enter перенос, Esc отменяет, blur тоже сохраняет.
+function startSegmentEdit(seg, textEl) {
+  if (isRecording) return;  // во время записи не правим
+  const textarea = document.createElement('textarea');
+  textarea.className = 'speaker-text-input';
+  textarea.value = seg.text;
+  textarea.rows = Math.max(2, Math.min(8, Math.ceil(seg.text.length / 80)));
+
+  let done = false;
+  const finish = (newValue) => {
+    if (done) return;
+    done = true;
+    if (newValue !== null && newValue !== seg.text) {
+      seg.text = newValue.trim();
+      seg.edited = true;
+      if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+    }
+    // Перерисуем — это вернёт обычный span на место textarea и обновит badge
+    const q = (document.getElementById('historySearch').value || '').trim();
+    renderTranscript(currentSegments, q);
+  };
+
+  textarea.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(textarea.value); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+    else if (e.key === ' ') { e.stopPropagation(); }  // Space внутри textarea не должен триггерить Start/Stop
+  });
+  textarea.addEventListener('blur', () => finish(textarea.value));
+
+  textEl.replaceWith(textarea);
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
@@ -1071,8 +1483,9 @@ function updateSectionsVisibility() {
   const hasLiveText = liveTextParts && liveTextParts.some(p => p && p.text);
   // Notes — видно во время записи, при live-тексте и при готовом транскрипте
   notesSection.style.display = (isRecording || hasSegments || hasLiveText) ? '' : 'none';
-  // AI tools — только когда уже есть готовый транскрипт
+  // AI tools и Chat — только когда уже есть готовый транскрипт
   aiSection.style.display    = hasSegments ? '' : 'none';
+  chatSection.style.display  = hasSegments ? '' : 'none';
 }
 
 function renderTranscript(segments, highlightQuery) {
@@ -1083,6 +1496,8 @@ function renderTranscript(segments, highlightQuery) {
   updateSectionsVisibility();
   notesArea.value = currentNotes || '';
   renderAIResults();
+  renderChatMessages();
+  renderTags();
 
   if (!segments || segments.length === 0) {
     const empty = document.createElement('div');
@@ -1127,6 +1542,13 @@ function renderTranscript(segments, highlightQuery) {
     head.appendChild(pill);
     head.appendChild(time);
 
+    if (seg.edited) {
+      const badge = document.createElement('span');
+      badge.className = 'edited-badge';
+      badge.textContent = 'edited';
+      head.appendChild(badge);
+    }
+
     const text = document.createElement('div');
     text.className = 'speaker-text';
     if (q && seg.text.toLowerCase().includes(q)) {
@@ -1135,6 +1557,19 @@ function renderTranscript(segments, highlightQuery) {
     } else {
       text.textContent = seg.text;
     }
+    // Двойной клик по тексту = редактировать
+    text.addEventListener('dblclick', () => startSegmentEdit(seg, text));
+
+    // Кнопка edit появляется при hover (для тех кто не знает про dblclick)
+    const editBtn = document.createElement('button');
+    editBtn.className = 'edit-btn';
+    editBtn.textContent = '✎ edit';
+    editBtn.title = 'Edit this line (or double-click on the text)';
+    editBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      startSegmentEdit(seg, text);
+    });
+    text.appendChild(editBtn);
 
     block.appendChild(head);
     block.appendChild(text);
@@ -1496,10 +1931,15 @@ async function transcribeBlob(blob) {
     currentDate = new Date().toISOString();
     currentNotes = '';
     currentAIResults = {};
+    currentChatHistory = [];
+    currentTags = [];
     renderTranscript(segments);
+    renderChatMessages();
+    renderTags();
     if (segments.length) {
       saveToHistory(segments, langSel.value);
       requestLLMTitle(segments, langSel.value, currentHistoryId);
+      requestLLMTags(segments, currentHistoryId);
     }
     setStatus('ready');
     hintEl.style.display = '';
@@ -1606,6 +2046,8 @@ function saveToHistory(segments, lang) {
     titleIsAuto: currentTitleIsAuto,
     notes: currentNotes,
     aiResults: { ...currentAIResults },
+    chatHistory: [...currentChatHistory],
+    tags: [...currentTags],
   });
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
   currentHistoryId = id;
@@ -1622,6 +2064,8 @@ function updateHistoryEntry(id) {
   history[idx].titleIsAuto = currentTitleIsAuto;
   history[idx].notes = currentNotes;
   history[idx].aiResults = { ...currentAIResults };
+  history[idx].chatHistory = [...currentChatHistory];
+  history[idx].tags = [...currentTags];
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   renderHistory();
 }
@@ -1644,9 +2088,16 @@ function formatHistDate(iso) {
 }
 
 function filterHistory(history, query) {
+  // Сначала фильтр по активному тегу
+  let result = history;
+  if (activeTagFilter) {
+    result = result.filter(entry => (entry.tags || []).includes(activeTagFilter));
+  }
+
+  // Затем — текстовый поиск
   const q = (query || '').trim().toLowerCase();
-  if (!q) return history;
-  return history.filter(entry => {
+  if (!q) return result;
+  return result.filter(entry => {
     if (entry.title && entry.title.toLowerCase().includes(q)) return true;
     if (entry.date) {
       const d = new Date(entry.date);
@@ -1657,14 +2108,38 @@ function filterHistory(history, query) {
     const names = entry.speakerNames || {};
     if (Object.values(names).some(n => n.toLowerCase().includes(q))) return true;
     if (entry.segments && entry.segments.some(s => s.text.toLowerCase().includes(q))) return true;
+    if ((entry.tags || []).some(t => t.toLowerCase().includes(q))) return true;
     if ((entry.lang || '').toLowerCase().includes(q)) return true;
     return false;
+  });
+}
+
+function renderTagFilters() {
+  const allTagsSet = new Set();
+  getHistory().forEach(e => (e.tags || []).forEach(t => allTagsSet.add(t)));
+  const allTags = [...allTagsSet].sort();
+
+  const filtersEl = document.getElementById('historyTagFilters');
+  if (!filtersEl) return;
+  filtersEl.innerHTML = '';
+
+  allTags.forEach(tag => {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip' + (activeTagFilter === tag ? ' active' : '');
+    chip.textContent = tag;
+    chip.addEventListener('click', () => {
+      activeTagFilter = (activeTagFilter === tag) ? null : tag;
+      renderHistory();
+    });
+    filtersEl.appendChild(chip);
   });
 }
 
 function renderHistory() {
   const allHistory = getHistory();
   historyLabel.textContent = allHistory.length ? `History · ${allHistory.length}` : 'History';
+
+  renderTagFilters();
 
   const itemsEl = document.getElementById('historyItems');
   const searchEl = document.getElementById('historySearch');
@@ -1700,7 +2175,11 @@ function renderHistory() {
     const meta = document.createElement('div');
     meta.className = 'history-item-meta';
     const langTag = LANG_LABELS[entry.lang] || 'auto';
-    meta.textContent = formatHistDate(entry.date) + ' · ' + langTag;
+    let metaText = formatHistDate(entry.date) + ' · ' + langTag;
+    if (entry.tags && entry.tags.length) {
+      metaText += ' · ' + entry.tags.map(t => '#' + t).join(' ');
+    }
+    meta.textContent = metaText;
 
     const preview = document.createElement('div');
     preview.className = 'history-item-preview';
@@ -1750,8 +2229,12 @@ function renderHistory() {
       currentDate = entry.date;
       currentNotes = entry.notes || '';
       currentAIResults = { ...(entry.aiResults || {}) };
+      currentChatHistory = [...(entry.chatHistory || [])];
+      currentTags = [...(entry.tags || [])];
       const queryAtClick = (searchEl.value || '').trim();
       renderTranscript(entry.segments, queryAtClick);
+      renderChatMessages();
+      renderTags();
     });
     itemsEl.appendChild(item);
   });
@@ -1966,7 +2449,187 @@ aiTemplateSelect.addEventListener('change', () => {
   if (t) runAI(t);
 });
 
+// ── Chat with transcript ─────────────────────────────────────
+function renderChatMessages() {
+  chatMessagesEl.innerHTML = '';
+  if (!currentChatHistory.length) {
+    const empty = document.createElement('div');
+    empty.className = 'chat-empty';
+    empty.textContent = 'Ask anything about this call — "what did Lisa say about pricing?", "summarize the key disagreement", etc.';
+    chatMessagesEl.appendChild(empty);
+    return;
+  }
+  currentChatHistory.forEach(m => {
+    const el = document.createElement('div');
+    el.className = 'chat-msg ' + (m.role === 'user' ? 'user' : 'assistant');
+    if (m.loading) el.classList.add('loading');
+    // user — plain text, assistant — рендерим markdown (LLM любит markdown)
+    if (m.role === 'assistant' && !m.loading) {
+      el.innerHTML = renderMarkdown(m.content);
+    } else {
+      el.textContent = m.content;
+    }
+    chatMessagesEl.appendChild(el);
+  });
+  // Скролл вниз
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+async function sendChatMessage() {
+  const question = chatInput.value.trim();
+  if (!question) return;
+  if (!currentSegments || !currentSegments.length) return;
+
+  chatInput.value = '';
+  chatInput.disabled = true;
+  chatSendBtn.disabled = true;
+
+  currentChatHistory.push({ role: 'user', content: question });
+  currentChatHistory.push({ role: 'assistant', content: '…thinking', loading: true });
+  renderChatMessages();
+
+  try {
+    // Передаём historу БЕЗ текущего вопроса (он в `question`) и без loading-плейсхолдера
+    const historyForServer = currentChatHistory
+      .filter(m => !m.loading)
+      .slice(0, -1);  // убираем последний user (это и есть question)
+
+    const jobId = await submitJob(`${API_BASE}/api/chat`, {
+      segments:     currentSegments,
+      speakerNames: currentSpeakerNames,
+      messages:     historyForServer,
+      question,
+    });
+    const result = await pollJob(jobId);
+    const answer = (result.answer || '').trim() || '(empty response)';
+
+    // Заменяем loading-плейсхолдер на реальный ответ
+    currentChatHistory[currentChatHistory.length - 1] = { role: 'assistant', content: answer };
+  } catch (e) {
+    currentChatHistory[currentChatHistory.length - 1] = {
+      role: 'assistant',
+      content: `**Error:** ${e.message}`,
+    };
+  }
+
+  renderChatMessages();
+  if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+  chatInput.disabled = false;
+  chatSendBtn.disabled = false;
+  chatInput.focus();
+}
+
+chatSendBtn.addEventListener('click', sendChatMessage);
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); sendChatMessage(); }
+});
+
+chatClearBtn.addEventListener('click', () => {
+  if (!currentChatHistory.length) return;
+  if (confirm('Clear the entire conversation for this transcript?')) {
+    currentChatHistory = [];
+    renderChatMessages();
+    if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+  }
+});
+
 renderHistory();
+
+// ── Keyboard shortcuts ────────────────────────────────────────
+const shortcutsModal = document.getElementById('shortcutsModal');
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+// Заменяем "Ctrl" на "⌘" на маке
+if (isMac) {
+  shortcutsModal.querySelectorAll('kbd').forEach(k => {
+    if (k.textContent === 'Ctrl') k.textContent = '⌘';
+  });
+}
+
+function isTypingTarget(el) {
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+}
+
+function openShortcutsModal() { shortcutsModal.classList.remove('hidden'); }
+function closeShortcutsModal() { shortcutsModal.classList.add('hidden'); }
+
+// Клик по фону — закрыть
+shortcutsModal.addEventListener('click', (e) => {
+  if (e.target === shortcutsModal) closeShortcutsModal();
+});
+
+window.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  const typing = isTypingTarget(e.target);
+
+  // Escape — закрывает модалку или снимает фокус с поля
+  if (e.key === 'Escape') {
+    if (!shortcutsModal.classList.contains('hidden')) {
+      e.preventDefault();
+      closeShortcutsModal();
+      return;
+    }
+    if (typing) {
+      e.target.blur();
+      return;
+    }
+  }
+
+  // Ctrl/Cmd + K — раскрыть Историю и сфокусироваться на поиске
+  if (mod && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    if (historyList.classList.contains('hidden')) historyToggle.click();
+    setTimeout(() => document.getElementById('historySearch').focus(), 30);
+    return;
+  }
+
+  // Ctrl/Cmd + S — скачать .md
+  if (mod && (e.key === 's' || e.key === 'S')) {
+    if (currentSegments && currentSegments.length) {
+      e.preventDefault();
+      downloadBtn.click();
+    }
+    return;
+  }
+
+  // Ctrl/Cmd + D — переключение темы
+  if (mod && (e.key === 'd' || e.key === 'D')) {
+    e.preventDefault();
+    themeToggle.click();
+    return;
+  }
+
+  // Дальше — горячие клавиши работают только когда не в поле ввода
+  if (typing) return;
+
+  // Space — Start / Stop recording
+  if (e.key === ' ' || e.code === 'Space') {
+    e.preventDefault();
+    if (isRecording) {
+      if (!stopBtn.disabled) stopBtn.click();
+    } else {
+      if (!startBtn.disabled) startBtn.click();
+    }
+    return;
+  }
+
+  // / — focus search (History уже должна быть открыта)
+  if (e.key === '/') {
+    e.preventDefault();
+    if (historyList.classList.contains('hidden')) historyToggle.click();
+    setTimeout(() => document.getElementById('historySearch').focus(), 30);
+    return;
+  }
+
+  // ? — показать список шорткатов
+  if (e.key === '?') {
+    e.preventDefault();
+    openShortcutsModal();
+    return;
+  }
+});
 </script>
 </body>
 </html>

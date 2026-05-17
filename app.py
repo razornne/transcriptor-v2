@@ -251,6 +251,123 @@ def title_endpoint():
     return jsonify({"title": title or None})
 
 
+CHAT_SYSTEM_PROMPT = (
+    "You answer questions about a meeting transcript. Be concise and factual. "
+    "Cite specific speakers when relevant (e.g., 'Lisa mentioned that…'). "
+    "If the answer isn't in the transcript, say so honestly — don't make things up. "
+    "Reply in the same language as the user's question."
+)
+
+
+@app.route("/api/tags", methods=["POST"])
+def tags_endpoint():
+    """LLM-генерация 2-4 тегов категории транскрипта.
+
+    Body (JSON):
+      segments:     [{speaker, start, end, text}]
+      speakerNames: optional
+
+    Returns: {"tags": ["sales", "pricing", "client"]}
+    """
+    data = request.get_json(silent=True) or {}
+    segments = data.get("segments") or []
+    if not segments:
+        return jsonify({"error": "segments required"}), 400
+
+    speaker_names = data.get("speakerNames") or {}
+    text = _format_segments_for_llm(segments, speaker_names)[:5000]
+
+    prompt = (
+        "Categorize this meeting transcript with 2-4 short tags. "
+        "Tags MUST be in English (so they're easy to filter across languages). "
+        "Each tag is 1-3 words, lowercase, no quotes, no #. "
+        "Examples: sales, technical, hiring, 1-on-1, client onboarding, product roadmap.\n\n"
+        f"Transcript:\n{text}\n\n"
+        "Reply with ONLY the tags separated by commas. No explanation."
+    )
+
+    try:
+        raw = _ollama_generate(prompt, max_tokens=80, temperature=0.3)
+    except requests.exceptions.ConnectionError:
+        return jsonify({"error": "ollama unreachable"}), 503
+    except Exception as e:
+        return jsonify({"error": f"ollama failed: {e}"}), 500
+
+    # Парсим: первая строка, разделитель — запятая. Чистим мусор.
+    first_line = raw.split("\n")[0]
+    tags_raw = [t.strip().lower() for t in first_line.split(",")]
+    tags = []
+    for t in tags_raw:
+        # убираем кавычки, #, лишние пробелы
+        t = re.sub(r"[#'\"`*]", "", t).strip()
+        # обрезаем если длинный (>30 символов скорее ошибка LLM)
+        if 1 <= len(t) <= 30 and t not in tags:
+            tags.append(t)
+        if len(tags) >= 4:
+            break
+
+    return jsonify({"tags": tags})
+
+
+@app.route("/api/chat", methods=["POST"])
+def chat_endpoint():
+    """Async чат по транскрипту. LLM получает транскрипт + историю чата + новый вопрос.
+
+    Body (JSON):
+      segments:     [{speaker, start, end, text}] — обязательно
+      speakerNames: {raw_label: custom_name} — опционально
+      messages:     [{role: "user"|"assistant", content: "..."}] — предыдущая переписка
+      question:     новый вопрос пользователя — обязательно
+
+    Returns: {"job_id": "...", "status": "queued"}
+    Poll: GET /api/jobs/<job_id> → {"status": "done", "answer": "..."}
+    """
+    data = request.get_json(silent=True) or {}
+    segments = data.get("segments") or []
+    question = (data.get("question") or "").strip()
+    if not segments:
+        return jsonify({"error": "segments required"}), 400
+    if not question:
+        return jsonify({"error": "question required"}), 400
+
+    speaker_names = data.get("speakerNames") or {}
+    messages = data.get("messages") or []
+
+    transcript = _format_segments_for_llm(segments, speaker_names)[:12000]
+
+    # Собираем prompt: system + transcript + chat history + new question
+    history_text = ""
+    for m in messages[-10:]:  # последние 10 сообщений, чтобы не раздувать контекст
+        role = m.get("role", "user")
+        content = (m.get("content") or "").strip()
+        if not content: continue
+        prefix = "User" if role == "user" else "Assistant"
+        history_text += f"{prefix}: {content}\n"
+
+    prompt = (
+        f"{CHAT_SYSTEM_PROMPT}\n\n"
+        f"Transcript:\n{transcript}\n\n"
+    )
+    if history_text:
+        prompt += f"Previous conversation:\n{history_text}\n"
+    prompt += f"User: {question}\nAssistant:"
+
+    job_id = _create_job("chat")
+
+    def worker():
+        try:
+            _update_job(job_id, status="processing", progress="thinking")
+            answer = _ollama_generate(prompt, max_tokens=500, temperature=0.4, timeout=120)
+            _update_job(job_id, status="done", answer=answer.strip())
+        except requests.exceptions.ConnectionError:
+            _update_job(job_id, status="error", error="ollama unreachable")
+        except Exception as e:
+            _update_job(job_id, status="error", error=f"chat failed: {e}")
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "queued"})
+
+
 @app.route("/api/generate", methods=["POST"])
 def generate_endpoint():
     """Async LLM-обработка транскрипта по шаблону. Возвращает job_id для polling.
