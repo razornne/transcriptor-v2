@@ -332,34 +332,42 @@
       display: flex; align-items: center; gap: 10px;
       margin-bottom: 8px;
     }
+    /* Speaker label as a chip-style pill */
+    .speaker-pill {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 3px 10px 3px 8px;
+      background: color-mix(in srgb, var(--speaker-color, var(--accent)) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--speaker-color, var(--accent)) 35%, transparent);
+      border-radius: 999px;
+      transition: background .15s, border-color .15s;
+    }
+    .speaker-pill:hover { background: color-mix(in srgb, var(--speaker-color, var(--accent)) 20%, transparent); }
+
     .speaker-marker {
-      width: 8px; height: 8px; border-radius: 50%;
+      width: 7px; height: 7px; border-radius: 50%;
       flex-shrink: 0;
       background: var(--speaker-color, var(--accent));
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--speaker-color, var(--accent)) 18%, transparent);
     }
     .speaker-name {
-      font-size: 11.5px; font-weight: 700;
+      font-size: 11px; font-weight: 700;
       color: var(--speaker-color, var(--accent));
-      letter-spacing: .12em; text-transform: uppercase;
+      letter-spacing: .1em; text-transform: uppercase;
       cursor: pointer;
-      border-bottom: 1px dashed transparent;
-      transition: border-color .15s;
+      transition: opacity .15s;
     }
-    .speaker-name:hover { border-bottom-color: currentColor; }
+    .speaker-name:hover { opacity: .75; }
 
     .speaker-name-input {
       font-family: 'Bricolage Grotesque', sans-serif;
       font-variation-settings: 'wdth' 95;
-      font-size: 11.5px; font-weight: 700;
-      letter-spacing: .12em; text-transform: uppercase;
+      font-size: 11px; font-weight: 700;
+      letter-spacing: .1em; text-transform: uppercase;
       color: var(--speaker-color, var(--accent));
-      background: var(--surface);
-      border: 1px solid var(--speaker-color, var(--accent));
-      border-radius: 4px;
-      padding: 2px 6px;
+      background: transparent;
+      border: none; padding: 0;
       outline: none;
-      max-width: 200px; min-width: 80px;
+      max-width: 180px; min-width: 60px;
+      width: 100%;
     }
     .speaker-time {
       margin-left: auto;
@@ -408,6 +416,20 @@
 
     .history-list { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; }
     .history-list.hidden { display: none; }
+
+    .history-search {
+      width: 100%;
+      margin-bottom: 10px;
+      padding: 9px 12px;
+      font: inherit; font-size: 13px;
+      font-variation-settings: 'wdth' 92;
+      color: var(--text); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 6px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .history-search:focus { border-color: var(--accent); }
+    .history-search::placeholder { color: var(--dim); }
 
     .history-item {
       display: flex; align-items: flex-start; gap: 12px;
@@ -521,7 +543,10 @@
       <span id="historyLabel">History</span>
       <span class="chev">▼</span>
     </button>
-    <div class="history-list hidden" id="historyList"></div>
+    <div class="history-list hidden" id="historyList">
+      <input id="historySearch" class="history-search" type="text" placeholder="Search by name, text, speaker, date…">
+      <div id="historyItems"></div>
+    </div>
   </div>
 
 </div>
@@ -680,6 +705,23 @@ function speakerColor(rawLabel) {
   return `var(--sp-${idx})`;
 }
 
+// Авто-имя транскрипта из первых слов первого сегмента.
+// Берём ~6 слов, обрезаем хвост по знаку препинания если есть.
+function autoSuggestTitle(segments) {
+  if (!segments || segments.length === 0) return null;
+  const firstText = (segments[0].text || '').trim();
+  if (!firstText) return null;
+  const words = firstText.split(/\s+/).slice(0, 6).join(' ');
+  // Обрезаем до первого терминатора (точка/восклицание/вопрос) если он рано
+  const m = words.match(/^[^.!?]{6,}?[.!?]/);
+  let title = (m ? m[0] : words).trim();
+  // Убираем висячий запятую/тире
+  title = title.replace(/[,;:\-—–]+$/, '').trim();
+  // Капитализация первой буквы
+  if (title.length) title = title[0].toUpperCase() + title.slice(1);
+  return title || null;
+}
+
 function renderTranscriptTitle() {
   const titleEl = document.getElementById('transcriptTitle');
 
@@ -762,6 +804,9 @@ function renderTranscript(segments) {
     const head = document.createElement('div');
     head.className = 'speaker-head';
 
+    const pill = document.createElement('span');
+    pill.className = 'speaker-pill';
+
     const marker = document.createElement('span');
     marker.className = 'speaker-marker';
 
@@ -774,12 +819,14 @@ function renderTranscript(segments) {
       startRenameInline(name, seg.speaker);
     });
 
+    pill.appendChild(marker);
+    pill.appendChild(name);
+
     const time = document.createElement('span');
     time.className = 'speaker-time';
     time.textContent = formatTime(seg.start) + ' — ' + formatTime(seg.end);
 
-    head.appendChild(marker);
-    head.appendChild(name);
+    head.appendChild(pill);
     head.appendChild(time);
 
     const text = document.createElement('div');
@@ -1037,7 +1084,7 @@ async function handleFullStop() {
 
     currentSpeakerNames = {};
     currentHistoryId = null;
-    currentTitle = null;
+    currentTitle = autoSuggestTitle(data.segments);
     currentDate = new Date().toISOString();
     renderTranscript(data.segments);
     if (data.segments && data.segments.length) saveToHistory(data.segments, langSel.value);
@@ -1130,16 +1177,50 @@ function formatHistDate(iso) {
     ' · ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
+function filterHistory(history, query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return history;
+  return history.filter(entry => {
+    if (entry.title && entry.title.toLowerCase().includes(q)) return true;
+    if (entry.date) {
+      const d = new Date(entry.date);
+      const dateStr = (d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }) +
+                       ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })).toLowerCase();
+      if (dateStr.includes(q)) return true;
+    }
+    const names = entry.speakerNames || {};
+    if (Object.values(names).some(n => n.toLowerCase().includes(q))) return true;
+    if (entry.segments && entry.segments.some(s => s.text.toLowerCase().includes(q))) return true;
+    if ((entry.lang || '').toLowerCase().includes(q)) return true;
+    return false;
+  });
+}
+
 function renderHistory() {
-  const history = getHistory();
-  historyLabel.textContent = history.length ? `History · ${history.length}` : 'History';
-  historyList.innerHTML = '';
+  const allHistory = getHistory();
+  historyLabel.textContent = allHistory.length ? `History · ${allHistory.length}` : 'History';
+
+  const itemsEl = document.getElementById('historyItems');
+  const searchEl = document.getElementById('historySearch');
+  itemsEl.innerHTML = '';
+
+  if (!allHistory.length) {
+    searchEl.style.display = 'none';
+    const el = document.createElement('p');
+    el.className = 'history-empty';
+    el.textContent = 'No transcripts yet.';
+    itemsEl.appendChild(el);
+    return;
+  }
+
+  searchEl.style.display = '';
+  const history = filterHistory(allHistory, searchEl.value);
 
   if (!history.length) {
     const el = document.createElement('p');
     el.className = 'history-empty';
-    el.textContent = 'No transcripts yet.';
-    historyList.appendChild(el);
+    el.textContent = 'Nothing matches your search.';
+    itemsEl.appendChild(el);
     return;
   }
 
@@ -1183,7 +1264,7 @@ function renderHistory() {
       currentDate = entry.date;
       renderTranscript(entry.segments);
     });
-    historyList.appendChild(item);
+    itemsEl.appendChild(item);
   });
 
   const footer = document.createElement('div');
@@ -1193,7 +1274,7 @@ function renderHistory() {
   clearBtn.textContent = 'Clear all';
   clearBtn.addEventListener('click', clearHistory);
   footer.appendChild(clearBtn);
-  historyList.appendChild(footer);
+  itemsEl.appendChild(footer);
 }
 
 historyToggle.addEventListener('click', () => {
@@ -1201,6 +1282,9 @@ historyToggle.addEventListener('click', () => {
   historyList.classList.toggle('hidden', isOpen);
   historyToggle.classList.toggle('open', !isOpen);
 });
+
+// Live-фильтр поиска
+document.getElementById('historySearch').addEventListener('input', renderHistory);
 
 renderHistory();
 </script>
