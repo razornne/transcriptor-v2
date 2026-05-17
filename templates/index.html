@@ -96,9 +96,10 @@
       padding: 64px 24px 96px;
       position: relative;
       transition: background .25s, color .25s;
+      overflow-x: hidden;  /* предотвращаем горизонтальный скролл */
     }
 
-    .shell { width: 100%; max-width: 720px; position: relative; z-index: 2; }
+    .shell { width: 100%; max-width: 720px; min-width: 0; position: relative; z-index: 2; }
 
     /* ── HERO ── */
     .hero { margin-bottom: 56px; }
@@ -360,6 +361,8 @@
       color: var(--text);
       padding: 8px 0;
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .live-text-empty {
       color: var(--dim); font-size: 14px;
@@ -590,9 +593,10 @@
     .speaker-block:first-child { padding-top: 8px; }
 
     .speaker-head {
-      display: flex; align-items: center; gap: 10px;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap; row-gap: 4px;
       margin-bottom: 8px;
     }
+    .speaker-pill { max-width: 100%; }
     /* Speaker label as a chip-style pill */
     .speaker-pill {
       display: inline-flex; align-items: center; gap: 7px;
@@ -640,6 +644,8 @@
       color: var(--text);
       padding-left: 18px;
       position: relative;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .speaker-text:hover .edit-btn { opacity: 1; }
     .edit-btn {
@@ -1022,6 +1028,12 @@
 <script>
 const API_BASE = '';
 
+// ── Feature flags ─────────────────────────────────────────────
+// Можно включить когда понадобятся. Код полностью функционален,
+// просто скрыт от UI. Включается одной правкой здесь.
+const FEATURE_CHAT = false;  // Chat with transcript — отложено
+const FEATURE_TAGS = false;  // Auto-tags — отложено до БД и аккаунтов
+
 const langSel       = document.getElementById('language');
 const numSpeakersEl = document.getElementById('numSpeakers');
 const startBtn      = document.getElementById('startBtn');
@@ -1208,7 +1220,7 @@ const tagsRow = document.getElementById('tagsRow');
 function renderTags() {
   tagsRow.innerHTML = '';
   const hasSegments = currentSegments && currentSegments.length > 0;
-  if (!hasSegments) {
+  if (!hasSegments || !FEATURE_TAGS) {
     tagsRow.style.display = 'none';
     return;
   }
@@ -1281,6 +1293,7 @@ function startAddTag(triggerBtn) {
 }
 
 async function requestLLMTags(segments, forHistoryId) {
+  if (!FEATURE_TAGS) return;
   if (!segments || !segments.length) return;
   try {
     const res = await fetch(`${API_BASE}/api/tags`, {
@@ -1485,7 +1498,7 @@ function updateSectionsVisibility() {
   notesSection.style.display = (isRecording || hasSegments || hasLiveText) ? '' : 'none';
   // AI tools и Chat — только когда уже есть готовый транскрипт
   aiSection.style.display    = hasSegments ? '' : 'none';
-  chatSection.style.display  = hasSegments ? '' : 'none';
+  chatSection.style.display  = (hasSegments && FEATURE_CHAT) ? '' : 'none';
 }
 
 function renderTranscript(segments, highlightQuery) {
@@ -2115,13 +2128,14 @@ function filterHistory(history, query) {
 }
 
 function renderTagFilters() {
-  const allTagsSet = new Set();
-  getHistory().forEach(e => (e.tags || []).forEach(t => allTagsSet.add(t)));
-  const allTags = [...allTagsSet].sort();
-
   const filtersEl = document.getElementById('historyTagFilters');
   if (!filtersEl) return;
   filtersEl.innerHTML = '';
+  if (!FEATURE_TAGS) return;
+
+  const allTagsSet = new Set();
+  getHistory().forEach(e => (e.tags || []).forEach(t => allTagsSet.add(t)));
+  const allTags = [...allTagsSet].sort();
 
   allTags.forEach(tag => {
     const chip = document.createElement('span');
@@ -2176,7 +2190,7 @@ function renderHistory() {
     meta.className = 'history-item-meta';
     const langTag = LANG_LABELS[entry.lang] || 'auto';
     let metaText = formatHistDate(entry.date) + ' · ' + langTag;
-    if (entry.tags && entry.tags.length) {
+    if (FEATURE_TAGS && entry.tags && entry.tags.length) {
       metaText += ' · ' + entry.tags.map(t => '#' + t).join(' ');
     }
     meta.textContent = metaText;
