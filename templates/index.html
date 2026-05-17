@@ -1066,15 +1066,21 @@ function highlightHTML(text, query) {
   return safe.replace(new RegExp(safeQuery, 'gi'), m => `<mark>${m}</mark>`);
 }
 
+function updateSectionsVisibility() {
+  const hasSegments = currentSegments && currentSegments.length > 0;
+  const hasLiveText = liveTextParts && liveTextParts.some(p => p && p.text);
+  // Notes — видно во время записи, при live-тексте и при готовом транскрипте
+  notesSection.style.display = (isRecording || hasSegments || hasLiveText) ? '' : 'none';
+  // AI tools — только когда уже есть готовый транскрипт
+  aiSection.style.display    = hasSegments ? '' : 'none';
+}
+
 function renderTranscript(segments, highlightQuery) {
   currentSegments = segments;
   renderTranscriptTitle();
   transcriptEl.innerHTML = '';
 
-  // Notes + AI секции видны только когда есть транскрипт
-  const hasContent = segments && segments.length > 0;
-  notesSection.style.display = hasContent ? '' : 'none';
-  aiSection.style.display    = hasContent ? '' : 'none';
+  updateSectionsVisibility();
   notesArea.value = currentNotes || '';
   renderAIResults();
 
@@ -1271,6 +1277,7 @@ function updateLiveStatus() {
 
 function renderLiveText() {
   transcriptEl.innerHTML = '';
+  updateSectionsVisibility();
   const text = liveTextParts.map(p => p.text).filter(Boolean).join(' ').trim();
   if (!text) {
     const empty = document.createElement('div');
@@ -1345,7 +1352,12 @@ startBtn.addEventListener('click', async () => {
   currentSegments = null;
   currentSpeakerNames = {};
   currentHistoryId = null;
+  // Сбрасываем notes/AI на новую запись и сразу показываем Notes-блок
+  currentNotes = '';
+  currentAIResults = {};
+  notesArea.value = '';
   renderLiveText();
+  updateSectionsVisibility();
 
   // Full recorder — непрерывная запись для финальной диаризации
   fullRecorder = new MediaRecorder(destStream, { mimeType: getMimeType(), audioBitsPerSecond: 32000 });
@@ -1377,6 +1389,7 @@ stopBtn.addEventListener('click', stopRecording);
 function stopRecording() {
   if (!isRecording) return;
   isRecording = false;
+  updateSectionsVisibility();
   stopBtn.disabled = true;
   stopTimer();
   clearInterval(chunkRotationTimer); chunkRotationTimer = null;
