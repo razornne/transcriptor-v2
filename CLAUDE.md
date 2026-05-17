@@ -58,12 +58,13 @@ cloudflared tunnel --url http://localhost:5000
   2. **Smoothing**: короткий сегмент (`< MIN_SEGMENT_DURATION_S = 2.0s`), зажатый между двумя одинаковыми спикерами, переназначается на их спикера. Лечит мелкие огрехи диаризации (например, односекундные реакции прилипают не туда)
   3. Склеивание подряд идущих сегментов одного спикера в блоки
 
-- **`app.py`** — Flask + flask-cors. Три API-маршрута:
+- **`app.py`** — Flask + flask-cors. Четыре API-маршрута:
   - `POST /api/transcribe-chunk` — быстрый, только whisper. Принимает `audio`/`language`/`prompt`, возвращает `{"text": "..."}`. Используется фронтом для live-текста во время записи.
   - `POST /api/transcribe` — полный пайплайн. Принимает `audio`/`language`/`num_speakers`/`prompt`, гоняет whisper → pyannote → merge, возвращает `{"segments": [{speaker, start, end, text}]}`. Используется после Стоп.
   - `POST /api/title` — LLM-генерация заголовка. JSON-вход `{text, language?}`, дёргает Ollama (`OLLAMA_URL=http://localhost:11434`, модель `OLLAMA_MODEL=llama3.2:3b`) с инструкцией дать 3-7 слов на языке транскрипта. Очищает результат от кавычек/префиксов/мусора, возвращает `{"title": "..."}`.
+  - `POST /api/generate` — универсальная LLM-обработка транскрипта по одному из шаблонов из `GENERATE_TEMPLATES` (`summary`, `actions`, `sales_call`, `one_on_one`, `standup`). JSON-вход `{segments, speakerNames?, template}`, возвращает `{"result": "...markdown..."}`. Использует `_format_segments_for_llm()` чтобы превратить сегменты в текст с `[Name]:` метками для лучшей работы LLM с диалогом.
   - `_webm_to_wav(path)` — обязательная конвертация через ffmpeg subprocess (для pyannote, см. ниже).
-  - `_ollama_generate(prompt, *, max_tokens, temperature)` — обёртка над `/api/generate` Ollama HTTP API через `requests`.
+  - `_ollama_generate(prompt, *, max_tokens, temperature, timeout)` — обёртка над `/api/generate` Ollama HTTP API через `requests`. Передаёт `temperature` и `num_predict` в options.
   - Маршрут `GET /` отдаёт `index.html` для локалки; когда фронт переедет на Vercel — можно удалить.
 
 **Фронт `templates/index.html`** — single-file (CSS+JS inline), английский UI. Ключевые куски:
@@ -74,7 +75,10 @@ cloudflared tunnel --url http://localhost:5000
   - `fullRecorder` пишет всё непрерывно → на Стопе отправляется на `/api/transcribe` для финальной диаризации
 - **Speaker rename**: клик по `.speaker-name` → inline-input → Enter сохраняет в `currentSpeakerNames[rawLabel]` → ре-рендер. Имена сохраняются в записи истории.
 - **Transcript rename + auto-title**: над текстом отдельный заголовок (`#transcriptTitle`). После транскрипции `autoSuggestTitle()` мгновенно ставит placeholder из первых ~6 слов первого сегмента, флаг `currentTitleIsAuto = true`. Параллельно `requestLLMTitle()` дёргает `/api/title` за умным названием от LLM (~2-10 сек) и заменяет placeholder если `currentTitleIsAuto` всё ещё true. Если юзер кликнет на заголовок и переименует руками — `currentTitleIsAuto = false`, LLM-результат не перетирает его. `renderTranscriptTitle()` идемпотентен: всегда пересобирает блок с нуля через `innerHTML = ''` + новый span, поэтому повторные вызовы после замены на input не падают. `finish()` защищён флагом `done` против двойного срабатывания keydown+blur.
-- **localStorage**: `transcriptor_settings` (lang + numSpeakers), `transcriptor_history` (segments + speakerNames + title per entry, MAX 20), `theme`.
+- **Notes section** (`#notesSection`) — textarea между транскриптом и AI-блоком. `currentNotes` персистится в записи истории. При вводе — дебаунс 600ms перед сохранением.
+- **AI tools section** (`#aiSection`) — рендерится только когда есть транскрипт. Кнопки `Summary` / `Action items` + dropdown с другими шаблонами (`sales_call`, `one_on_one`, `standup`). Результаты кешируются в `currentAIResults[template]` (и в записи истории через `entry.aiResults`), `__loading__` плейсхолдер пока идёт запрос. Каждая карточка результата имеет actions: `copy`, `regenerate`, `×` (remove).
+- **Markdown renderer** — собственный мини-парсер `renderMarkdown()` (~70 строк). Поддерживает: `#`/`##`/`###` headings, `**bold**`/`*italic*`/`_italic_`/` `code` `, `-`/`*` списки, `1.` нумерованные, `- [ ]`/`- [x]` task checkboxes (рендерятся как стилизованные чекбоксы с псевдоэлементами). Не нужно тащить marked.js или подобное.
+- **localStorage**: `transcriptor_settings` (lang + numSpeakers), `transcriptor_history` (segments + speakerNames + title + titleIsAuto + notes + aiResults per entry, MAX 20), `theme`.
 - `prefers-reduced-motion` уважается, есть `prefers-color-scheme` fallback для первого визита.
 
 ## Non-obvious things future-Claude will trip on

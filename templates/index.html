@@ -311,6 +311,129 @@
       font-style: italic; padding: 8px 0;
     }
 
+    /* Notes textarea */
+    .notes-section { margin-top: 28px; }
+    .notes-textarea {
+      width: 100%; min-height: 70px;
+      padding: 12px 14px;
+      font: inherit; font-size: 14px; line-height: 1.55;
+      font-variation-settings: 'wdth' 95;
+      color: var(--text); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 8px;
+      outline: none; resize: vertical;
+      transition: border-color .15s;
+    }
+    .notes-textarea:focus { border-color: var(--accent); }
+    .notes-textarea::placeholder { color: var(--dim); font-style: italic; }
+
+    /* AI tools */
+    .ai-section { margin-top: 36px; }
+
+    .ai-toolbar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .ai-btn {
+      padding: 8px 14px; font-size: 12px; font-weight: 600;
+      letter-spacing: .04em;
+      background: transparent; color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer;
+      transition: border-color .15s, background .15s, color .15s;
+    }
+    .ai-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .ai-btn.loading { opacity: .6; pointer-events: none; }
+    .ai-btn .spinner {
+      display: inline-block; width: 10px; height: 10px;
+      border: 2px solid currentColor; border-right-color: transparent;
+      border-radius: 50%; vertical-align: -1px; margin-right: 6px;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .ai-template-select {
+      padding: 8px 12px; font-size: 12px; font-weight: 500;
+      font-variation-settings: 'wdth' 92;
+      color: var(--text); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; outline: none;
+    }
+    .ai-template-select:focus { border-color: var(--accent); }
+
+    .ai-result-card {
+      padding: 18px 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 12px;
+    }
+    .ai-result-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .ai-result-label {
+      font-size: 10.5px; font-weight: 700;
+      color: var(--accent);
+      letter-spacing: .14em; text-transform: uppercase;
+    }
+    .ai-result-actions { display: flex; gap: 6px; }
+    .ai-result-action {
+      background: none; border: none; padding: 2px 6px;
+      font: inherit; font-size: 11px;
+      color: var(--muted); cursor: pointer;
+      transition: color .15s;
+    }
+    .ai-result-action:hover { color: var(--text); }
+
+    .ai-result-content {
+      font-size: 14px; line-height: 1.65; color: var(--text);
+    }
+    .ai-result-content h1, .ai-result-content h2, .ai-result-content h3 {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-variation-settings: 'wdth' 100, 'wght' 600;
+      letter-spacing: -.01em;
+      margin: 14px 0 6px;
+    }
+    .ai-result-content h1 { font-size: 18px; }
+    .ai-result-content h2 { font-size: 15px; color: var(--accent); }
+    .ai-result-content h3 { font-size: 14px; }
+    .ai-result-content p { margin: 6px 0; }
+    .ai-result-content ul, .ai-result-content ol {
+      padding-left: 22px; margin: 6px 0;
+    }
+    .ai-result-content li { margin: 3px 0; }
+    .ai-result-content li.task {
+      list-style: none; position: relative;
+      padding-left: 22px;
+    }
+    .ai-result-content li.task::before {
+      content: ""; position: absolute;
+      left: 0; top: 4px;
+      width: 13px; height: 13px;
+      border: 1.5px solid var(--dim);
+      border-radius: 3px;
+      background: transparent;
+    }
+    .ai-result-content li.task.checked::before {
+      background: var(--accent); border-color: var(--accent);
+    }
+    .ai-result-content li.task.checked::after {
+      content: ""; position: absolute;
+      left: 3px; top: 6px;
+      width: 7px; height: 4px;
+      border-left: 2px solid var(--bg);
+      border-bottom: 2px solid var(--bg);
+      transform: rotate(-45deg);
+    }
+    .ai-result-content strong { font-weight: 700; color: var(--text); }
+    .ai-result-content em     { font-style: italic; }
+    .ai-result-content code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      padding: 1px 5px; border-radius: 3px;
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+
     /* search highlight */
     mark {
       background: color-mix(in srgb, var(--accent) 22%, transparent);
@@ -556,6 +679,32 @@
   </div>
   <div id="error" class="error"></div>
 
+  <div class="notes-section" id="notesSection" style="display:none">
+    <div class="section-title">
+      <span>Notes</span>
+      <span class="line"></span>
+    </div>
+    <textarea id="notesArea" class="notes-textarea" placeholder="Personal notes — saved with this transcript, included in .md export."></textarea>
+  </div>
+
+  <div class="ai-section" id="aiSection" style="display:none">
+    <div class="section-title">
+      <span>AI tools</span>
+      <span class="line"></span>
+    </div>
+    <div class="ai-toolbar">
+      <button class="ai-btn" data-template="summary">Summary</button>
+      <button class="ai-btn" data-template="actions">Action items</button>
+      <select id="aiTemplateSelect" class="ai-template-select">
+        <option value="">More templates…</option>
+        <option value="sales_call">Sales call</option>
+        <option value="one_on_one">1-on-1</option>
+        <option value="standup">Stand-up</option>
+      </select>
+    </div>
+    <div id="aiResults"></div>
+  </div>
+
   <div class="history">
     <button class="history-toggle" id="historyToggle">
       <span id="historyLabel">History</span>
@@ -588,6 +737,19 @@ const historyToggle = document.getElementById('historyToggle');
 const historyList   = document.getElementById('historyList');
 const historyLabel  = document.getElementById('historyLabel');
 const themeToggle   = document.getElementById('themeToggle');
+const notesSection  = document.getElementById('notesSection');
+const notesArea     = document.getElementById('notesArea');
+const aiSection     = document.getElementById('aiSection');
+const aiResultsEl   = document.getElementById('aiResults');
+const aiTemplateSelect = document.getElementById('aiTemplateSelect');
+
+const TEMPLATE_LABELS = {
+  summary:    'Summary',
+  actions:    'Action items',
+  sales_call: 'Sales call',
+  one_on_one: '1-on-1',
+  standup:    'Stand-up',
+};
 
 // ── Theme toggle ───────────────────────────────────────────────
 function applyTheme(theme) {
@@ -647,6 +809,8 @@ let currentHistoryId    = null;
 let currentTitle        = null;   // transcript name (или null = placeholder)
 let currentTitleIsAuto  = false;  // true = заголовок выставлен авто (heuristic/LLM), его можно перезаписать
 let currentDate         = null;   // ISO date of the transcript
+let currentNotes        = '';     // user notes (persisted per transcript)
+let currentAIResults    = {};     // { template: "markdown..." } — кеш сгенерированных AI-результатов
 
 const LANG_LABELS = { en: 'English', ru: 'Russian', uk: 'Ukrainian' };
 
@@ -860,6 +1024,13 @@ function renderTranscript(segments, highlightQuery) {
   renderTranscriptTitle();
   transcriptEl.innerHTML = '';
 
+  // Notes + AI секции видны только когда есть транскрипт
+  const hasContent = segments && segments.length > 0;
+  notesSection.style.display = hasContent ? '' : 'none';
+  aiSection.style.display    = hasContent ? '' : 'none';
+  notesArea.value = currentNotes || '';
+  renderAIResults();
+
   if (!segments || segments.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'transcript-empty';
@@ -939,7 +1110,23 @@ function segmentsToMarkdown(segments) {
   const langLabel = LANG_LABELS[langSel.value] || 'Auto-detect';
   const title = currentTitle || 'Call transcript';
 
-  let md = `# ${title}\n\n**Date:** ${date}, ${time}  \n**Language:** ${langLabel}\n\n---\n\n`;
+  let md = `# ${title}\n\n**Date:** ${date}, ${time}  \n**Language:** ${langLabel}\n\n`;
+
+  // Notes
+  if (currentNotes && currentNotes.trim()) {
+    md += `## Notes\n\n${currentNotes.trim()}\n\n`;
+  }
+
+  // AI-результаты — в порядке, добавляем секциями
+  const order = ['summary', 'actions', 'sales_call', 'one_on_one', 'standup'];
+  order.forEach(template => {
+    const result = currentAIResults[template];
+    if (result && result !== '__loading__') {
+      md += `## ${TEMPLATE_LABELS[template] || template}\n\n${result.trim()}\n\n`;
+    }
+  });
+
+  md += `---\n\n## Transcript\n\n`;
   segments.forEach(seg => {
     md += `**${speakerName(seg.speaker)}** _(${formatTime(seg.start)} — ${formatTime(seg.end)})_\n\n${seg.text}\n\n`;
   });
@@ -1174,6 +1361,8 @@ async function handleFullStop() {
     currentTitle = autoSuggestTitle(data.segments);
     currentTitleIsAuto = true;
     currentDate = new Date().toISOString();
+    currentNotes = '';
+    currentAIResults = {};
     renderTranscript(data.segments);
     if (data.segments && data.segments.length) {
       saveToHistory(data.segments, langSel.value);
@@ -1236,6 +1425,8 @@ function saveToHistory(segments, lang) {
     speakerNames: { ...currentSpeakerNames },
     title: currentTitle,
     titleIsAuto: currentTitleIsAuto,
+    notes: currentNotes,
+    aiResults: { ...currentAIResults },
   });
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
   currentHistoryId = id;
@@ -1250,6 +1441,8 @@ function updateHistoryEntry(id) {
   history[idx].speakerNames = { ...currentSpeakerNames };
   history[idx].title = currentTitle;
   history[idx].titleIsAuto = currentTitleIsAuto;
+  history[idx].notes = currentNotes;
+  history[idx].aiResults = { ...currentAIResults };
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   renderHistory();
 }
@@ -1376,6 +1569,8 @@ function renderHistory() {
       currentTitle = entry.title || null;
       currentTitleIsAuto = !!entry.titleIsAuto;
       currentDate = entry.date;
+      currentNotes = entry.notes || '';
+      currentAIResults = { ...(entry.aiResults || {}) };
       const queryAtClick = (searchEl.value || '').trim();
       renderTranscript(entry.segments, queryAtClick);
     });
@@ -1400,6 +1595,209 @@ historyToggle.addEventListener('click', () => {
 
 // Live-фильтр поиска
 document.getElementById('historySearch').addEventListener('input', renderHistory);
+
+// ── Notes ─────────────────────────────────────────────────────
+notesArea.addEventListener('input', () => {
+  currentNotes = notesArea.value;
+  if (currentHistoryId !== null) {
+    // Дебаунс — обновляем не на каждое нажатие, а через паузу
+    clearTimeout(notesArea._saveTimer);
+    notesArea._saveTimer = setTimeout(() => updateHistoryEntry(currentHistoryId), 600);
+  }
+});
+
+function setNotesVisible(visible) {
+  notesSection.style.display = visible ? '' : 'none';
+}
+
+// ── Markdown → HTML (минимальный рендерер) ────────────────────
+function renderMarkdown(md) {
+  if (!md) return '';
+  const lines = md.replace(/\r\n/g, '\n').split('\n');
+  let html = '';
+  let inList = false;
+  let listTag = '';
+  let inPara = false;
+
+  const closeList = () => { if (inList) { html += `</${listTag}>`; inList = false; } };
+  const closePara = () => { if (inPara) { html += '</p>'; inPara = false; } };
+
+  const inline = (s) => {
+    s = escapeHtml(s);
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, '$1<em>$2</em>');
+    s = s.replace(/_([^_\n]+)_/g, '<em>$1</em>');
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return s;
+  };
+
+  for (let raw of lines) {
+    const line = raw.trim();
+
+    if (!line) { closePara(); closeList(); continue; }
+
+    // Headings
+    let m = line.match(/^(#{1,6})\s+(.*)$/);
+    if (m) {
+      closePara(); closeList();
+      const lvl = Math.min(m[1].length, 3);
+      html += `<h${lvl}>${inline(m[2])}</h${lvl}>`;
+      continue;
+    }
+
+    // Checklist task: - [ ] or - [x]
+    m = line.match(/^[-*]\s+\[([ xX])\]\s+(.*)$/);
+    if (m) {
+      closePara();
+      if (!inList || listTag !== 'ul') { closeList(); html += '<ul>'; inList = true; listTag = 'ul'; }
+      const checked = m[1].toLowerCase() === 'x';
+      html += `<li class="task${checked ? ' checked' : ''}">${inline(m[2])}</li>`;
+      continue;
+    }
+
+    // Unordered list
+    m = line.match(/^[-*]\s+(.*)$/);
+    if (m) {
+      closePara();
+      if (!inList || listTag !== 'ul') { closeList(); html += '<ul>'; inList = true; listTag = 'ul'; }
+      html += `<li>${inline(m[1])}</li>`;
+      continue;
+    }
+
+    // Ordered list
+    m = line.match(/^\d+\.\s+(.*)$/);
+    if (m) {
+      closePara();
+      if (!inList || listTag !== 'ol') { closeList(); html += '<ol>'; inList = true; listTag = 'ol'; }
+      html += `<li>${inline(m[1])}</li>`;
+      continue;
+    }
+
+    // Paragraph
+    closeList();
+    if (!inPara) { html += '<p>'; inPara = true; }
+    else html += ' ';
+    html += inline(line);
+  }
+  closePara(); closeList();
+  return html;
+}
+
+// ── AI: вызов /api/generate ──────────────────────────────────
+async function runAI(template) {
+  if (!currentSegments || currentSegments.length === 0) return;
+  if (currentAIResults[template]) {
+    // Уже есть — просто рендерим
+    renderAIResults();
+    return;
+  }
+
+  // Найти и заблочить кнопку
+  const btn = document.querySelector(`.ai-btn[data-template="${template}"]`) ||
+              [...aiSection.querySelectorAll('.ai-btn')].find(b => b._template === template);
+  const label = TEMPLATE_LABELS[template] || template;
+
+  // Ставим лоадер: либо кнопка, либо плейсхолдер-карточка
+  currentAIResults[template] = '__loading__';
+  renderAIResults();
+
+  try {
+    const res = await fetch(`${API_BASE}/api/generate`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        segments: currentSegments,
+        speakerNames: currentSpeakerNames,
+        template,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'generation failed');
+    currentAIResults[template] = data.result || '';
+  } catch (e) {
+    currentAIResults[template] = `**Error:** ${e.message}`;
+  }
+  renderAIResults();
+  if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+}
+
+function renderAIResults() {
+  aiResultsEl.innerHTML = '';
+  const order = ['summary', 'actions', 'sales_call', 'one_on_one', 'standup'];
+  order.forEach(template => {
+    const result = currentAIResults[template];
+    if (result === undefined) return;
+
+    const card = document.createElement('div');
+    card.className = 'ai-result-card';
+
+    const header = document.createElement('div');
+    header.className = 'ai-result-header';
+
+    const lbl = document.createElement('span');
+    lbl.className = 'ai-result-label';
+    lbl.textContent = TEMPLATE_LABELS[template] || template;
+
+    const actions = document.createElement('div');
+    actions.className = 'ai-result-actions';
+
+    const copyAct = document.createElement('button');
+    copyAct.className = 'ai-result-action';
+    copyAct.textContent = 'copy';
+    copyAct.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(result);
+      copyAct.textContent = 'copied';
+      setTimeout(() => copyAct.textContent = 'copy', 1200);
+    });
+
+    const regenAct = document.createElement('button');
+    regenAct.className = 'ai-result-action';
+    regenAct.textContent = 'regenerate';
+    regenAct.addEventListener('click', () => {
+      delete currentAIResults[template];
+      runAI(template);
+    });
+
+    const delAct = document.createElement('button');
+    delAct.className = 'ai-result-action';
+    delAct.textContent = '×';
+    delAct.title = 'Remove';
+    delAct.addEventListener('click', () => {
+      delete currentAIResults[template];
+      renderAIResults();
+      if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+    });
+
+    actions.appendChild(copyAct);
+    actions.appendChild(regenAct);
+    actions.appendChild(delAct);
+
+    header.appendChild(lbl);
+    header.appendChild(actions);
+
+    const content = document.createElement('div');
+    content.className = 'ai-result-content';
+    if (result === '__loading__') {
+      content.innerHTML = '<p style="color:var(--muted)"><span class="spinner" style="display:inline-block;width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;margin-right:6px;animation:spin .8s linear infinite"></span> generating…</p>';
+    } else {
+      content.innerHTML = renderMarkdown(result);
+    }
+
+    card.appendChild(header);
+    card.appendChild(content);
+    aiResultsEl.appendChild(card);
+  });
+}
+
+// Кнопки AI-toolbar
+aiSection.querySelectorAll('.ai-btn').forEach(btn => {
+  btn.addEventListener('click', () => runAI(btn.dataset.template));
+});
+aiTemplateSelect.addEventListener('change', () => {
+  const t = aiTemplateSelect.value;
+  aiTemplateSelect.value = '';
+  if (t) runAI(t);
+});
 
 renderHistory();
 </script>

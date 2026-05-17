@@ -24,6 +24,73 @@ from merger import merge
 OLLAMA_URL   = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 
+# Шаблоны промптов для /api/generate.
+# Каждый получает {text} — отформатированный транскрипт с [Speaker N]: метками.
+# Просим модель писать в том же языке что и транскрипт, в markdown.
+GENERATE_TEMPLATES = {
+    "summary": (
+        "You are summarizing a meeting transcript. Write in markdown, in the same language "
+        "as the transcript. Be factual and concise.\n\n"
+        "Structure:\n"
+        "- A 1-2 sentence topic at the very top (no heading).\n"
+        "- `## Key points` — 3-7 bullet points.\n"
+        "- `## Decisions` — bullet list, or 'No explicit decisions.' if none.\n\n"
+        "Transcript:\n{text}"
+    ),
+    "actions": (
+        "Extract action items from this meeting transcript. Write in the same language as "
+        "the transcript. Use markdown checklist format:\n\n"
+        "- [ ] Task description — @speaker (if mentioned) — by date (if mentioned)\n\n"
+        "Only list items where someone clearly committed to doing something. "
+        "If no clear actions, reply with: 'No action items identified.'\n\n"
+        "Transcript:\n{text}"
+    ),
+    "sales_call": (
+        "This is a sales call transcript. Write a structured report in markdown, "
+        "in the same language as the transcript:\n\n"
+        "## Client\nBrief description of the prospect.\n\n"
+        "## Pain points\nBullet list of stated pain points or challenges.\n\n"
+        "## Solution discussed\nWhat was proposed.\n\n"
+        "## Objections\nAny hesitations or concerns raised.\n\n"
+        "## Next steps\n- [ ] Concrete next action — @owner — by date\n\n"
+        "Transcript:\n{text}"
+    ),
+    "one_on_one": (
+        "This is a 1-on-1 meeting transcript. Write structured notes in markdown, "
+        "in the same language as the transcript:\n\n"
+        "## What's going well\nBullet list.\n\n"
+        "## Concerns / blockers\nBullet list.\n\n"
+        "## Feedback exchanged\nBrief summary.\n\n"
+        "## Action items\n- [ ] item — @owner\n\n"
+        "Transcript:\n{text}"
+    ),
+    "standup": (
+        "This is a daily stand-up transcript. For each speaker who participated, write "
+        "a section in markdown (same language as the transcript):\n\n"
+        "### @SpeakerName\n"
+        "- **Yesterday:** what they did\n"
+        "- **Today:** what they plan\n"
+        "- **Blockers:** what's blocking them (or 'none')\n\n"
+        "Skip speakers who didn't give an update.\n\n"
+        "Transcript:\n{text}"
+    ),
+}
+
+
+def _format_segments_for_llm(segments: list[dict], speaker_names: dict[str, str] | None = None) -> str:
+    """Сегменты + кастомные имена спикеров → текст с [Name]: метками для LLM."""
+    speaker_names = speaker_names or {}
+    lines = []
+    for seg in segments:
+        raw = seg.get("speaker", "SPEAKER_00")
+        # Дефолт: "SPEAKER_00" → "Speaker 1"
+        name = speaker_names.get(raw)
+        if not name:
+            m = re.search(r"(\d+)", raw)
+            name = f"Speaker {int(m.group(1)) + 1}" if m else raw
+        lines.append(f"[{name}]: {seg.get('text', '').strip()}")
+    return "\n".join(lines)
+
 
 def _webm_to_wav(webm_path: str) -> str:
     """Конвертация WebM → WAV (16kHz mono) через ffmpeg CLI.
@@ -128,6 +195,44 @@ def title_endpoint():
     title = title[:80].strip()
 
     return jsonify({"title": title or None})
+
+
+@app.route("/api/generate", methods=["POST"])
+def generate_endpoint():
+    """Универсальный endpoint для AI-обработок транскрипта через локальную LLM.
+
+    Body (JSON):
+      segments:     [{speaker, start, end, text}] — обязательно
+      speakerNames: {raw_label: custom_name} — опционально
+      template:     "summary" | "actions" | "sales_call" | "one_on_one" | "standup"
+
+    Returns: {"result": "...markdown text..."}
+    """
+    data = request.get_json(silent=True) or {}
+    segments = data.get("segments") or []
+    if not segments:
+        return jsonify({"error": "segments required"}), 400
+
+    template_name = (data.get("template") or "summary").lower()
+    if template_name not in GENERATE_TEMPLATES:
+        return jsonify({"error": f"unknown template: {template_name}",
+                        "available": sorted(GENERATE_TEMPLATES.keys())}), 400
+
+    speaker_names = data.get("speakerNames") or {}
+    text = _format_segments_for_llm(segments, speaker_names)
+    # Ограничиваем размер контекста — llama3.2:3b держит до 128k, но мы экономим время
+    text = text[:12000]
+
+    prompt = GENERATE_TEMPLATES[template_name].format(text=text)
+
+    try:
+        result = _ollama_generate(prompt, max_tokens=800, temperature=0.5, timeout=120)
+    except requests.exceptions.ConnectionError:
+        return jsonify({"error": "ollama unreachable (is it running?)"}), 503
+    except Exception as e:
+        return jsonify({"error": f"ollama failed: {e}"}), 500
+
+    return jsonify({"result": result.strip()})
 
 
 @app.route("/api/transcribe-chunk", methods=["POST"])
