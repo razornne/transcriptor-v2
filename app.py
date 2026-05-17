@@ -10,7 +10,9 @@ CORS открыт по умолчанию — рассчитан на фронт
 import os
 import re
 import subprocess
-from datetime import datetime
+import threading
+import uuid
+from datetime import datetime, timedelta
 
 import requests
 from flask import Flask, render_template, jsonify, request
@@ -20,6 +22,47 @@ from dotenv import load_dotenv
 from transcriber import transcribe
 from diarizer import diarize
 from merger import merge
+
+
+# ── Async jobs registry ────────────────────────────────────────
+# Долгие обработки (transcribe ~1-3 мин, generate ~30-90 с) запускаются
+# в фоне, фронт опрашивает /api/jobs/<id> каждые 2 с. Это обходит
+# 100-секундный таймаут Cloudflare Quick Tunnel.
+JOBS: dict[str, dict] = {}
+JOBS_LOCK = threading.Lock()
+JOB_TTL_MINUTES = 30
+
+
+def _create_job(kind: str) -> str:
+    job_id = uuid.uuid4().hex
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "kind": kind,
+            "status": "queued",
+            "created_at": datetime.utcnow(),
+        }
+    return job_id
+
+
+def _update_job(job_id: str, **fields):
+    with JOBS_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id].update(fields)
+
+
+def _get_job(job_id: str) -> dict | None:
+    with JOBS_LOCK:
+        return dict(JOBS[job_id]) if job_id in JOBS else None
+
+
+def _cleanup_jobs():
+    """Удаляем job'ы старше TTL — чтобы dict не разрастался."""
+    cutoff = datetime.utcnow() - timedelta(minutes=JOB_TTL_MINUTES)
+    with JOBS_LOCK:
+        stale = [j for j, v in JOBS.items()
+                 if v.get("created_at", datetime.utcnow()) < cutoff]
+        for j in stale:
+            del JOBS[j]
 
 OLLAMA_URL   = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
@@ -131,6 +174,17 @@ def health():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/jobs/<job_id>", methods=["GET"])
+def job_status_endpoint(job_id):
+    """Опрос статуса фоновой задачи. Клиент опрашивает раз в 2 секунды."""
+    _cleanup_jobs()
+    job = _get_job(job_id)
+    if not job:
+        return jsonify({"error": "job not found or expired"}), 404
+    # datetime не сериализуется в JSON — пропускаем
+    return jsonify({k: v for k, v in job.items() if not isinstance(v, datetime)})
+
+
 def _ollama_generate(prompt: str, *, max_tokens: int = 60, temperature: float = 0.4, timeout: int = 60) -> str:
     """Дёргаем локальную Ollama через её HTTP API."""
     r = requests.post(
@@ -199,14 +253,15 @@ def title_endpoint():
 
 @app.route("/api/generate", methods=["POST"])
 def generate_endpoint():
-    """Универсальный endpoint для AI-обработок транскрипта через локальную LLM.
+    """Async LLM-обработка транскрипта по шаблону. Возвращает job_id для polling.
 
     Body (JSON):
       segments:     [{speaker, start, end, text}] — обязательно
       speakerNames: {raw_label: custom_name} — опционально
       template:     "summary" | "actions" | "sales_call" | "one_on_one" | "standup"
 
-    Returns: {"result": "...markdown text..."}
+    Returns: {"job_id": "...", "status": "queued"}
+    Poll: GET /api/jobs/<job_id> → {"status": "done", "result": "..."}
     """
     data = request.get_json(silent=True) or {}
     segments = data.get("segments") or []
@@ -219,20 +274,23 @@ def generate_endpoint():
                         "available": sorted(GENERATE_TEMPLATES.keys())}), 400
 
     speaker_names = data.get("speakerNames") or {}
-    text = _format_segments_for_llm(segments, speaker_names)
-    # Ограничиваем размер контекста — llama3.2:3b держит до 128k, но мы экономим время
-    text = text[:12000]
-
+    text = _format_segments_for_llm(segments, speaker_names)[:12000]
     prompt = GENERATE_TEMPLATES[template_name].format(text=text)
 
-    try:
-        result = _ollama_generate(prompt, max_tokens=800, temperature=0.5, timeout=120)
-    except requests.exceptions.ConnectionError:
-        return jsonify({"error": "ollama unreachable (is it running?)"}), 503
-    except Exception as e:
-        return jsonify({"error": f"ollama failed: {e}"}), 500
+    job_id = _create_job(f"generate:{template_name}")
 
-    return jsonify({"result": result.strip()})
+    def worker():
+        try:
+            _update_job(job_id, status="processing", progress="generating")
+            result = _ollama_generate(prompt, max_tokens=800, temperature=0.5, timeout=180)
+            _update_job(job_id, status="done", result=result.strip())
+        except requests.exceptions.ConnectionError:
+            _update_job(job_id, status="error", error="ollama unreachable (is it running?)")
+        except Exception as e:
+            _update_job(job_id, status="error", error=f"ollama failed: {e}")
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "queued"})
 
 
 @app.route("/api/transcribe-chunk", methods=["POST"])
@@ -272,7 +330,7 @@ def transcribe_chunk_endpoint():
 
 @app.route("/api/transcribe", methods=["POST"])
 def transcribe_endpoint():
-    """Принимает аудиофайл, возвращает транскрипт с разделением по спикерам.
+    """Async-транскрипция с диаризацией. Возвращает job_id для polling.
 
     Form fields:
       audio:        файл (WebM/Opus, WAV, MP3 — любой что понимает ffmpeg)
@@ -280,7 +338,11 @@ def transcribe_endpoint():
       prompt:       контекст для Whisper (опционально)
       num_speakers: точное число спикеров (опционально, улучшает качество диаризации)
 
-    Returns: {"segments": [{"speaker", "start", "end", "text"}, ...]}
+    Returns: {"job_id": "...", "status": "queued"}
+    Poll: GET /api/jobs/<job_id>
+      → {"status": "processing", "progress": "transcribing"}  (промежуточное)
+      → {"status": "done", "segments": [...]}                 (финал)
+      → {"status": "error", "error": "..."}                   (ошибка)
     """
     audio_file = request.files.get("audio")
     if not audio_file:
@@ -294,38 +356,46 @@ def transcribe_endpoint():
     num_speakers_raw = request.form.get("num_speakers")
     num_speakers = int(num_speakers_raw) if num_speakers_raw and num_speakers_raw.isdigit() else None
 
-    # Сохраняем аудио
-    filename = datetime.now().strftime("%Y%m%d-%H%M%S") + ".webm"
+    # Сохраняем аудио сразу — загрузка должна успеть в течении CF лимита,
+    # а вот обработка уйдёт в фон
+    filename = datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".webm"
     webm_path = os.path.join(RECORDINGS_DIR, filename)
     audio_file.save(webm_path)
 
-    wav_path = None
-    try:
-        # 0. Конвертация в WAV (нужно для pyannote/torchcodec на Windows)
-        wav_path = _webm_to_wav(webm_path)
+    job_id = _create_job("transcribe")
 
-        # 1. Транскрипция с таймингами
-        segments = transcribe(wav_path, language=language, prompt=prompt)
-        if not segments:
-            return jsonify({"segments": []})
+    def worker():
+        wav_path = None
+        try:
+            _update_job(job_id, status="processing", progress="converting")
+            wav_path = _webm_to_wav(webm_path)
 
-        # 2. Диаризация
-        speaker_turns = diarize(wav_path, num_speakers=num_speakers)
+            _update_job(job_id, progress="transcribing")
+            segments = transcribe(wav_path, language=language, prompt=prompt)
 
-        # 3. Совмещение
-        merged = merge(segments, speaker_turns)
+            if not segments:
+                _update_job(job_id, status="done", segments=[])
+                return
 
-        return jsonify({"segments": merged})
+            _update_job(job_id, progress="diarizing")
+            speaker_turns = diarize(wav_path, num_speakers=num_speakers)
 
-    except Exception as e:
-        return jsonify({"error": f"processing failed: {e}"}), 500
-    finally:
-        for p in (webm_path, wav_path):
-            if p:
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
+            _update_job(job_id, progress="merging")
+            merged = merge(segments, speaker_turns)
+
+            _update_job(job_id, status="done", segments=merged)
+        except Exception as e:
+            _update_job(job_id, status="error", error=f"processing failed: {e}")
+        finally:
+            for p in (webm_path, wav_path):
+                if p:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "queued"})
 
 
 if __name__ == "__main__":

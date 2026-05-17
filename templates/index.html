@@ -1209,6 +1209,50 @@ function setChunkStatus(text) {
   chunkStatusEl.textContent = text || '';
 }
 
+// ── Async job helpers ──────────────────────────────────────────
+// Долгие операции (transcribe, generate) на сервере выполняются в фоне.
+// Сервер отдаёт job_id, мы опрашиваем GET /api/jobs/<id> каждые 2 сек,
+// пока status не станет "done" или "error". Это обходит 100-сек лимит
+// Cloudflare Quick Tunnel на длинных запросах.
+
+async function safeJson(res) {
+  const raw = await res.text();
+  try { return JSON.parse(raw); }
+  catch {
+    const sniff = raw.slice(0, 200).replace(/\s+/g, ' ');
+    throw new Error(`Server returned non-JSON (${res.status}): ${sniff}`);
+  }
+}
+
+async function submitJob(url, body, isFormData = false) {
+  const opts = { method: 'POST' };
+  if (isFormData) {
+    opts.body = body;
+  } else {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
+  const data = await safeJson(res);
+  if (!res.ok) throw new Error(data.error || 'submit failed');
+  if (!data.job_id) throw new Error('expected job_id in response');
+  return data.job_id;
+}
+
+async function pollJob(jobId, onProgress) {
+  let waitMs = 0;
+  while (true) {
+    if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+    const res = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+    const data = await safeJson(res);
+    if (!res.ok) throw new Error(data.error || 'poll failed');
+    if (data.status === 'done')  return data;
+    if (data.status === 'error') throw new Error(data.error || 'job failed');
+    if (onProgress && data.progress) onProgress(data.progress);
+    waitMs = 2000;
+  }
+}
+
 // ── Recording flow ─────────────────────────────────────────────
 function getMimeType() {
   return MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -1422,7 +1466,7 @@ async function handleFullStop() {
 
 async function transcribeBlob(blob) {
   waitingForFull = true;
-  setStatus('diarization…', 'working');
+  setStatus('uploading…', 'working');
   updateLiveStatus();
   hideRecoveryBox();
   setError('');
@@ -1433,33 +1477,29 @@ async function transcribeBlob(blob) {
     if (langSel.value)       fd.append('language', langSel.value);
     if (numSpeakersEl.value) fd.append('num_speakers', numSpeakersEl.value);
 
-    const res = await fetch(`${API_BASE}/api/transcribe`, { method: 'POST', body: fd });
+    const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd, true);
+    setStatus('queued…', 'working');
 
-    // Защита от случая когда сервер вернул HTML вместо JSON (Cloudflare error, прокси и т.п.)
-    const raw = await res.text();
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      const sniff = raw.slice(0, 200).replace(/\s+/g, ' ');
-      throw new Error(`Server returned non-JSON (${res.status}): ${sniff}`);
-    }
-    if (!res.ok) throw new Error(data.error || 'transcription failed');
+    const result = await pollJob(jobId, (progress) => {
+      // progress: "converting" | "transcribing" | "diarizing" | "merging"
+      setStatus(progress + '…', 'working');
+    });
+    const segments = result.segments || [];
 
     // Успех — можем отпустить blob
     lastRecordingBlob = null;
 
     currentSpeakerNames = {};
     currentHistoryId = null;
-    currentTitle = autoSuggestTitle(data.segments);
+    currentTitle = autoSuggestTitle(segments);
     currentTitleIsAuto = true;
     currentDate = new Date().toISOString();
     currentNotes = '';
     currentAIResults = {};
-    renderTranscript(data.segments);
-    if (data.segments && data.segments.length) {
-      saveToHistory(data.segments, langSel.value);
-      requestLLMTitle(data.segments, langSel.value, currentHistoryId);
+    renderTranscript(segments);
+    if (segments.length) {
+      saveToHistory(segments, langSel.value);
+      requestLLMTitle(segments, langSel.value, currentHistoryId);
     }
     setStatus('ready');
     hintEl.style.display = '';
@@ -1822,37 +1862,25 @@ function renderMarkdown(md) {
   return html;
 }
 
-// ── AI: вызов /api/generate ──────────────────────────────────
+// ── AI: вызов /api/generate через async job ─────────────────
 async function runAI(template) {
   if (!currentSegments || currentSegments.length === 0) return;
-  if (currentAIResults[template]) {
-    // Уже есть — просто рендерим
+  if (currentAIResults[template] && currentAIResults[template] !== '__loading__') {
     renderAIResults();
     return;
   }
 
-  // Найти и заблочить кнопку
-  const btn = document.querySelector(`.ai-btn[data-template="${template}"]`) ||
-              [...aiSection.querySelectorAll('.ai-btn')].find(b => b._template === template);
-  const label = TEMPLATE_LABELS[template] || template;
-
-  // Ставим лоадер: либо кнопка, либо плейсхолдер-карточка
   currentAIResults[template] = '__loading__';
   renderAIResults();
 
   try {
-    const res = await fetch(`${API_BASE}/api/generate`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        segments: currentSegments,
-        speakerNames: currentSpeakerNames,
-        template,
-      }),
+    const jobId = await submitJob(`${API_BASE}/api/generate`, {
+      segments: currentSegments,
+      speakerNames: currentSpeakerNames,
+      template,
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'generation failed');
-    currentAIResults[template] = data.result || '';
+    const result = await pollJob(jobId);
+    currentAIResults[template] = result.result || '';
   } catch (e) {
     currentAIResults[template] = `**Error:** ${e.message}`;
   }
