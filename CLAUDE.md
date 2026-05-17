@@ -4,14 +4,16 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## What this is
 
-**Transcriptor v2** — локальная версия транскриптора. Whisper и pyannote крутятся прямо на пользовательском ПК с NVIDIA GPU, данные никуда не уходят. В отличие от v1 (которая лежит в `C:\projects\transcriptor\` и крутится на Railway через OpenAI API), здесь:
+**Transcriptor v2** — локальная версия транскриптора. Whisper, pyannote и LLM (через Ollama) крутятся прямо на пользовательском ПК, данные никуда не уходят. В отличие от v1 (которая лежит в `C:\projects\transcriptor\` и крутится на Railway через OpenAI API), здесь:
 
 - **faster-whisper-medium** локально (CUDA, float16) вместо OpenAI API
 - **pyannote-3.1** для разделения по спикерам, тоже на CUDA
-- Сервер запускается на ноуте, фронт — там же; план перевести фронт на Vercel + Cloudflare Tunnel на ноут для бэка
+- **Ollama + llama3.2:3b** (CPU) для генерации заголовков транскриптов — основа для будущих фич (саммари, action items)
+- Сервер запускается на ноуте, доступен публично через Cloudflare Tunnel (быстрый named-less tunnel)
 - **Двухступенчатый поток обработки:**
   - Во время записи: каждые 3 минуты чанк уходит на `/api/transcribe-chunk` (только whisper) → live-текст без спикеров появляется по ходу созвона
   - По нажатию Стоп: полная запись уходит на `/api/transcribe` (whisper + pyannote + merge) → live-текст заменяется на блоки со спикерами
+  - После — фронт асинхронно дёргает `/api/title` за умным названием транскрипта от LLM
 
 v1 продолжает работать параллельно — это **намеренно**. Не пытаться слить версии обратно.
 
@@ -56,10 +58,12 @@ cloudflared tunnel --url http://localhost:5000
   2. **Smoothing**: короткий сегмент (`< MIN_SEGMENT_DURATION_S = 2.0s`), зажатый между двумя одинаковыми спикерами, переназначается на их спикера. Лечит мелкие огрехи диаризации (например, односекундные реакции прилипают не туда)
   3. Склеивание подряд идущих сегментов одного спикера в блоки
 
-- **`app.py`** — Flask + flask-cors. Два маршрута:
+- **`app.py`** — Flask + flask-cors. Три API-маршрута:
   - `POST /api/transcribe-chunk` — быстрый, только whisper. Принимает `audio`/`language`/`prompt`, возвращает `{"text": "..."}`. Используется фронтом для live-текста во время записи.
   - `POST /api/transcribe` — полный пайплайн. Принимает `audio`/`language`/`num_speakers`/`prompt`, гоняет whisper → pyannote → merge, возвращает `{"segments": [{speaker, start, end, text}]}`. Используется после Стоп.
+  - `POST /api/title` — LLM-генерация заголовка. JSON-вход `{text, language?}`, дёргает Ollama (`OLLAMA_URL=http://localhost:11434`, модель `OLLAMA_MODEL=llama3.2:3b`) с инструкцией дать 3-7 слов на языке транскрипта. Очищает результат от кавычек/префиксов/мусора, возвращает `{"title": "..."}`.
   - `_webm_to_wav(path)` — обязательная конвертация через ffmpeg subprocess (для pyannote, см. ниже).
+  - `_ollama_generate(prompt, *, max_tokens, temperature)` — обёртка над `/api/generate` Ollama HTTP API через `requests`.
   - Маршрут `GET /` отдаёт `index.html` для локалки; когда фронт переедет на Vercel — можно удалить.
 
 **Фронт `templates/index.html`** — single-file (CSS+JS inline), английский UI. Ключевые куски:
@@ -69,7 +73,7 @@ cloudflared tunnel --url http://localhost:5000
   - `chunkRecorder` стопается/перезапускается каждые `CHUNK_INTERVAL_MS = 3 мин` → каждый чанк уходит на `/api/transcribe-chunk` → текст накапливается в `liveTextParts`
   - `fullRecorder` пишет всё непрерывно → на Стопе отправляется на `/api/transcribe` для финальной диаризации
 - **Speaker rename**: клик по `.speaker-name` → inline-input → Enter сохраняет в `currentSpeakerNames[rawLabel]` → ре-рендер. Имена сохраняются в записи истории.
-- **Transcript rename**: над текстом отдельный заголовок (`#transcriptTitle`). По умолчанию placeholder вида `Untitled · {date} · {time}`. Клик → inline-input → Enter (или blur) сохраняет в `currentTitle` и в запись истории; Escape отменяет. `renderTranscriptTitle()` идемпотентен: всегда пересобирает блок с нуля через `innerHTML = ''` + новый span, поэтому повторные вызовы после замены на input не падают. `finish()` защищён флагом `done` против двойного срабатывания keydown+blur.
+- **Transcript rename + auto-title**: над текстом отдельный заголовок (`#transcriptTitle`). После транскрипции `autoSuggestTitle()` мгновенно ставит placeholder из первых ~6 слов первого сегмента, флаг `currentTitleIsAuto = true`. Параллельно `requestLLMTitle()` дёргает `/api/title` за умным названием от LLM (~2-10 сек) и заменяет placeholder если `currentTitleIsAuto` всё ещё true. Если юзер кликнет на заголовок и переименует руками — `currentTitleIsAuto = false`, LLM-результат не перетирает его. `renderTranscriptTitle()` идемпотентен: всегда пересобирает блок с нуля через `innerHTML = ''` + новый span, поэтому повторные вызовы после замены на input не падают. `finish()` защищён флагом `done` против двойного срабатывания keydown+blur.
 - **localStorage**: `transcriptor_settings` (lang + numSpeakers), `transcriptor_history` (segments + speakerNames + title per entry, MAX 20), `theme`.
 - `prefers-reduced-motion` уважается, есть `prefers-color-scheme` fallback для первого визита.
 
@@ -88,6 +92,8 @@ cloudflared tunnel --url http://localhost:5000
 - **ffmpeg в PATH обязателен** для `_webm_to_wav` (subprocess.run) и faster-whisper (внутри). Это системная зависимость, не Python.
 
 - **`HF_TOKEN` обязателен.** Без него pyannote `from_pretrained` упадёт. И токен бесполезен пока не принять условия на ОБОИХ страницах: https://huggingface.co/pyannote/speaker-diarization-3.1 И https://huggingface.co/pyannote/speaker-diarization-community-1 (новая зависимость в 4.x).
+
+- **Ollama должна быть запущена** (фоновый сервис, слушает `http://localhost:11434`). Если не запущена — `/api/title` вернёт 503, фронт молча оставит placeholder из эвристики. Это намеренно: LLM-заголовок — приятный bonus, не блокер. Установка через `winget install Ollama.Ollama`, модель `ollama pull llama3.2:3b`. Модель грузится в RAM при первом запросе (~5-10 сек), потом отвечает за 1-3 сек. CPU-only, не конкурирует за VRAM с whisper/pyannote.
 
 - **Модели держатся в памяти между запросами.** Первый вызов медленный (~10 сек загрузки), последующие быстрые. Не сбрасывать `_model` / `_pipeline` без причины.
 
