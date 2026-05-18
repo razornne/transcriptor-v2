@@ -902,6 +902,7 @@
   <div class="hint" id="hint">
     Click <b>Start recording</b> → allow microphone → pick a tab (Meet&nbsp;/&nbsp;Teams) or <b>Entire screen</b>, enable <b>Share audio</b> → click <b>Stop</b> when done.
     <br><span class="accent">⚡</span> Processing takes 5–30s per minute of audio — GPU is faster.
+    <br><span style="opacity:.7">For long meetings: right-click this tab → <b>Pin tab</b>, and disable Chrome Memory Saver for this site (<kbd style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--surface);border:1px solid var(--border)">chrome://settings/performance</kbd>).</span>
     <br><span style="opacity:.7">Tip: press <kbd style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--surface);border:1px solid var(--border)">?</kbd> for keyboard shortcuts.</span>
   </div>
 
@@ -1657,6 +1658,167 @@ function setChunkStatus(text) {
   chunkStatusEl.textContent = text || '';
 }
 
+// ── Tab keep-alive helpers ─────────────────────────────────────
+// Браузер любит дискардить background-вкладки и засыпать. Эти трюки делают
+// запись надёжной даже когда юзер ушёл в другую вкладку или приложение.
+
+let silentNode    = null;  // GainNode с осциллятором — играет тишину для метки "audio-active"
+let wakeLock      = null;  // навигаторский WakeLockSentinel — держит экран
+let currentSessionId = null;  // UUID текущей записи в IndexedDB (для recovery)
+
+// Silent audio: подключаем тихий осциллятор к audio output → браузер думает
+// что играет звук → не дискардит вкладку даже в фоне.
+function startSilentAudio(audioCtx) {
+  try {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.0001;  // практически 0, не слышно
+    osc.frequency.value = 20;  // на грани слышимости + 0 gain → тишина
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    silentNode = { osc, gain };
+  } catch (e) { console.warn('silent audio failed:', e); }
+}
+function stopSilentAudio() {
+  if (silentNode) {
+    try { silentNode.osc.stop(); } catch {}
+    silentNode = null;
+  }
+}
+
+// Wake Lock: просит ОС не выключать экран. Авто-релизится при visibility hidden,
+// поэтому re-acquire на visibility change.
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch (e) { console.warn('wake lock failed:', e); }
+}
+async function releaseWakeLock() {
+  if (wakeLock) {
+    try { await wakeLock.release(); } catch {}
+    wakeLock = null;
+  }
+}
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && isRecording && !wakeLock) {
+    await acquireWakeLock();
+  }
+});
+
+// OS Notifications: показываем системные уведомления о статусе записи.
+async function ensureNotifPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied')  return false;
+  const result = await Notification.requestPermission();
+  return result === 'granted';
+}
+function notify(title, body, tag = 'transcriptor') {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    new Notification(title, { body, tag, silent: false });
+  } catch (e) { console.warn('notify failed:', e); }
+}
+
+// Battery check: предупреждаем если ноут не на зарядке.
+async function checkBatteryWarning() {
+  if (!('getBattery' in navigator)) return null;
+  try {
+    const b = await navigator.getBattery();
+    if (!b.charging && b.level < 0.4) {
+      return `Battery at ${Math.round(b.level * 100)}% and not charging. Plug in for reliable long recording.`;
+    }
+  } catch {}
+  return null;
+}
+
+// ── IndexedDB для autosave ────────────────────────────────────
+// Каждый чанк fullRecorder'а сохраняется. Если вкладка умрёт,
+// при следующем открытии увидим "Found unfinished recording".
+const IDB_NAME = 'transcriptor_recordings';
+const IDB_STORE = 'sessions';
+let idbConn = null;
+
+function openIDB() {
+  return new Promise((resolve, reject) => {
+    if (idbConn) return resolve(idbConn);
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => { idbConn = req.result; resolve(idbConn); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbCreateSession() {
+  const db = await openIDB();
+  const id = (crypto.randomUUID ? crypto.randomUUID() : 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10));
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).put({
+      id,
+      startedAt: Date.now(),
+      chunks: [],
+      lang: langSel.value || null,
+      numSpeakers: numSpeakersEl.value || null,
+    });
+    tx.oncomplete = () => resolve(id);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbAppendChunk(sessionId, blobChunk) {
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    const getReq = store.get(sessionId);
+    getReq.onsuccess = () => {
+      const sess = getReq.result;
+      if (!sess) return resolve();
+      sess.chunks.push(blobChunk);
+      sess.updatedAt = Date.now();
+      store.put(sess);
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbDeleteSession(sessionId) {
+  if (!sessionId) return;
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(sessionId);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbGetOrphanedSessions() {
+  const db = await openIDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const req = tx.objectStore(IDB_STORE).getAll();
+    req.onsuccess = () => {
+      const now = Date.now();
+      const dayMs = 24 * 60 * 60 * 1000;
+      // Сессии которые не updated > 2 минут — считаем орфанами.
+      // Старше 24 ч — выкидываем тихо.
+      const sessions = (req.result || []).filter(s => (now - (s.updatedAt || s.startedAt)) < dayMs);
+      resolve(sessions);
+    };
+    req.onerror = () => resolve([]);
+  });
+}
+
 // ── Async job helpers ──────────────────────────────────────────
 // Долгие операции (transcribe, generate) на сервере выполняются в фоне.
 // Сервер отдаёт job_id, мы опрашиваем GET /api/jobs/<id> каждые 2 сек,
@@ -1791,6 +1953,16 @@ startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
   setStatus('requesting permissions…', 'working');
 
+  // Предупреждаем если на батарее с низким зарядом
+  const batteryWarning = await checkBatteryWarning();
+  if (batteryWarning) {
+    if (!confirm(batteryWarning + '\n\nStart recording anyway?')) {
+      startBtn.disabled = false;
+      setStatus('ready');
+      return;
+    }
+  }
+
   // Если есть несохранённое аудио от предыдущей неудачи — спросим
   if (lastRecordingBlob) {
     const sizeMb = (lastRecordingBlob.size / (1024 * 1024)).toFixed(1);
@@ -1851,12 +2023,27 @@ startBtn.addEventListener('click', async () => {
   renderLiveText();
   updateSectionsVisibility();
 
-  // Full recorder — непрерывная запись для финальной диаризации
+  // Full recorder — непрерывная запись для финальной диаризации.
+  // timeslice = 5 сек → ondataavailable срабатывает каждые 5 сек,
+  // мы сохраняем в IndexedDB на случай если вкладку убьют.
   fullRecorder = new MediaRecorder(destStream, { mimeType: getMimeType(), audioBitsPerSecond: 32000 });
   fullChunks = [];
-  fullRecorder.ondataavailable = e => { if (e.data.size > 0) fullChunks.push(e.data); };
+  currentSessionId = await idbCreateSession();
+  fullRecorder.ondataavailable = e => {
+    if (e.data.size > 0) {
+      fullChunks.push(e.data);
+      // fire-and-forget — не блокируем
+      idbAppendChunk(currentSessionId, e.data).catch(err => console.warn('idb save failed:', err));
+    }
+  };
   fullRecorder.onstop = handleFullStop;
-  fullRecorder.start();
+  fullRecorder.start(5000);
+
+  // Keep-alive трюки: silent audio + wake lock + notification
+  startSilentAudio(audioCtx);
+  await acquireWakeLock();
+  await ensureNotifPermission();
+  notify('Recording started', 'Transcriptor is capturing audio. You can switch tabs safely.');
 
   // Chunk recorder — ротируется каждые 3 мин для live-текста
   startChunkRecorder();
@@ -1886,6 +2073,10 @@ function stopRecording() {
   stopTimer();
   clearInterval(chunkRotationTimer); chunkRotationTimer = null;
   setStatus('finalizing…', 'working');
+
+  // Освобождаем keep-alive
+  stopSilentAudio();
+  releaseWakeLock();
 
   // Финальный chunkRecorder.stop — пошлёт последний кусок live-текста
   if (chunkRecorder && chunkRecorder.state === 'recording') {
@@ -1934,8 +2125,13 @@ async function transcribeBlob(blob) {
     });
     const segments = result.segments || [];
 
-    // Успех — можем отпустить blob
+    // Успех — можем отпустить blob и почистить IDB-сессию
     lastRecordingBlob = null;
+    if (currentSessionId) {
+      idbDeleteSession(currentSessionId).catch(() => {});
+      currentSessionId = null;
+    }
+    notify('Transcription ready', 'Your meeting transcript is ready.');
 
     currentSpeakerNames = {};
     currentHistoryId = null;
@@ -1961,6 +2157,7 @@ async function transcribeBlob(blob) {
     setStatus('ready');
     hintEl.style.display = '';
     if (lastRecordingBlob) showRecoveryBox();
+    notify('Transcription failed', e.message);
   } finally {
     waitingForFull = false;
     setChunkStatus('');
@@ -2548,6 +2745,37 @@ chatClearBtn.addEventListener('click', () => {
 });
 
 renderHistory();
+
+// ── Recovery от orphaned IndexedDB sessions ──────────────────
+// При загрузке страницы проверяем, есть ли незавершённые записи.
+// Это срабатывает если предыдущая вкладка умерла из-за crash/discard.
+(async () => {
+  try {
+    const sessions = await idbGetOrphanedSessions();
+    if (!sessions.length) return;
+    // Берём самую новую — старые тихо удаляем
+    sessions.sort((a, b) => (b.updatedAt || b.startedAt) - (a.updatedAt || a.startedAt));
+    const latest = sessions[0];
+    for (const s of sessions.slice(1)) idbDeleteSession(s.id).catch(() => {});
+    if (!latest.chunks || latest.chunks.length === 0) {
+      idbDeleteSession(latest.id).catch(() => {});
+      return;
+    }
+    const dateStr = new Date(latest.startedAt).toLocaleString();
+    const sizeMb = latest.chunks.reduce((sum, c) => sum + (c.size || 0), 0) / (1024 * 1024);
+    if (confirm(`Found unfinished recording from ${dateStr} (${sizeMb.toFixed(1)} MB). Recover it?`)) {
+      // Восстанавливаем blob, выставляем как lastRecordingBlob, показываем recovery box
+      lastRecordingBlob = new Blob(latest.chunks, { type: 'audio/webm' });
+      if (latest.lang) langSel.value = latest.lang;
+      if (latest.numSpeakers) numSpeakersEl.value = latest.numSpeakers;
+      showRecoveryBox();
+      // Удаляем из IDB — если транскрипция пройдёт, мы её не восстановим повторно
+      idbDeleteSession(latest.id).catch(() => {});
+    } else {
+      idbDeleteSession(latest.id).catch(() => {});
+    }
+  } catch (e) { console.warn('recovery check failed:', e); }
+})();
 
 // ── Keyboard shortcuts ────────────────────────────────────────
 const shortcutsModal = document.getElementById('shortcutsModal');
