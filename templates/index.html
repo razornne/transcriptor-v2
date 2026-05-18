@@ -1709,17 +1709,44 @@ document.addEventListener('visibilitychange', async () => {
 
 // OS Notifications: показываем системные уведомления о статусе записи.
 async function ensureNotifPermission() {
-  if (!('Notification' in window)) return false;
+  if (!('Notification' in window)) {
+    console.warn('[notify] Notification API not supported in this browser');
+    return false;
+  }
+  console.log('[notify] current permission:', Notification.permission);
   if (Notification.permission === 'granted') return true;
-  if (Notification.permission === 'denied')  return false;
+  if (Notification.permission === 'denied') {
+    console.warn('[notify] permission denied. Enable in browser settings: chrome://settings/content/notifications');
+    return false;
+  }
   const result = await Notification.requestPermission();
+  console.log('[notify] permission request result:', result);
+  if (result === 'granted') {
+    // Сразу шлём тестовое — пользователь сразу видит работают ли вообще
+    try {
+      const n = new Notification('Notifications enabled', {
+        body: 'You will see recording status updates here.',
+        tag: 'test-notif',
+      });
+      console.log('[notify] test notification fired:', n);
+    } catch (e) { console.warn('[notify] test fire failed:', e); }
+  }
   return result === 'granted';
 }
 function notify(title, body, tag = 'transcriptor') {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!('Notification' in window)) {
+    console.warn('[notify] skipped — Notification API not available');
+    return;
+  }
+  if (Notification.permission !== 'granted') {
+    console.warn(`[notify] skipped — permission is "${Notification.permission}". Tried to send:`, title);
+    return;
+  }
   try {
-    new Notification(title, { body, tag, silent: false });
-  } catch (e) { console.warn('notify failed:', e); }
+    const n = new Notification(title, { body, tag, silent: false });
+    console.log('[notify] fired:', title, '—', body);
+    return n;
+  } catch (e) { console.warn('[notify] fire failed:', e); }
 }
 
 // Battery check: предупреждаем если ноут не на зарядке.
