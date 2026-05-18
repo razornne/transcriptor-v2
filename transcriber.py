@@ -41,9 +41,17 @@ def _get_model() -> WhisperModel:
 def transcribe(path: str, language: str | None = None, prompt: str | None = None) -> list[dict]:
     """Возвращает список сегментов: [{start, end, text}, ...]
 
-    start/end — секунды от начала аудио (float).
-    Используем встроенный VAD-фильтр faster-whisper, он отсекает тишину
-    и сокращает галлюцинации.
+    Параметры подобраны для максимального качества на русском/украинском:
+    - beam_size=5: лучше чем дефолт, аккуратнее декодирование
+    - temperature: список с fallback. На неуверенных кусках Whisper повышает T
+      и пробует снова — снижает галлюцинации и повторы
+    - compression_ratio_threshold=2.4: отбрасывает сегменты с подозрительной
+      компрессией (типичный признак галлюцинации — повторяющийся мусор)
+    - log_prob_threshold=-1.0: отбрасывает сегменты с низкой уверенностью
+    - no_speech_threshold=0.6: чувствительный детектор тишины
+    - condition_on_previous_text=True: использует контекст предыдущих сегментов
+      для согласованности (полезно для имён, терминов)
+    - vad_filter: Silero VAD отсекает тишину до Whisper'а
     """
     model = _get_model()
     segments_iter, _info = model.transcribe(
@@ -51,6 +59,12 @@ def transcribe(path: str, language: str | None = None, prompt: str | None = None
         language=language,
         initial_prompt=prompt,
         beam_size=5,
+        best_of=5,
+        temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+        compression_ratio_threshold=2.4,
+        log_prob_threshold=-1.0,
+        no_speech_threshold=0.6,
+        condition_on_previous_text=True,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
     )

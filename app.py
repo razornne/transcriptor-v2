@@ -68,12 +68,19 @@ OLLAMA_URL   = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 
 # Шаблоны промптов для /api/generate.
-# Каждый получает {text} — отформатированный транскрипт с [Speaker N]: метками.
-# Просим модель писать в том же языке что и транскрипт, в markdown.
+# {text} — отформатированный транскрипт, {lang_hint} — явное указание языка
+# (LLM плохо догадывается «по умолчанию», даже когда видит русский/украинский).
+LANG_HINTS = {
+    "ru": "Write the entire response in Russian.",
+    "uk": "Write the entire response in Ukrainian.",
+    "en": "Write the entire response in English.",
+}
+LANG_HINT_DEFAULT = "Write the entire response in the same language as the transcript."
+
 GENERATE_TEMPLATES = {
     "summary": (
-        "You are summarizing a meeting transcript. Write in markdown, in the same language "
-        "as the transcript. Be factual and concise.\n\n"
+        "You are summarizing a meeting transcript. {lang_hint} "
+        "Be factual and concise. Write in markdown.\n\n"
         "Structure:\n"
         "- A 1-2 sentence topic at the very top (no heading).\n"
         "- `## Key points` — 3-7 bullet points.\n"
@@ -81,16 +88,16 @@ GENERATE_TEMPLATES = {
         "Transcript:\n{text}"
     ),
     "actions": (
-        "Extract action items from this meeting transcript. Write in the same language as "
-        "the transcript. Use markdown checklist format:\n\n"
+        "Extract action items from this meeting transcript. {lang_hint} "
+        "Use markdown checklist format:\n\n"
         "- [ ] Task description — @speaker (if mentioned) — by date (if mentioned)\n\n"
         "Only list items where someone clearly committed to doing something. "
-        "If no clear actions, reply with: 'No action items identified.'\n\n"
+        "If no clear actions, reply with a single line: 'No action items identified.'\n\n"
         "Transcript:\n{text}"
     ),
     "sales_call": (
-        "This is a sales call transcript. Write a structured report in markdown, "
-        "in the same language as the transcript:\n\n"
+        "This is a sales call transcript. {lang_hint} "
+        "Write a structured report in markdown:\n\n"
         "## Client\nBrief description of the prospect.\n\n"
         "## Pain points\nBullet list of stated pain points or challenges.\n\n"
         "## Solution discussed\nWhat was proposed.\n\n"
@@ -99,8 +106,8 @@ GENERATE_TEMPLATES = {
         "Transcript:\n{text}"
     ),
     "one_on_one": (
-        "This is a 1-on-1 meeting transcript. Write structured notes in markdown, "
-        "in the same language as the transcript:\n\n"
+        "This is a 1-on-1 meeting transcript. {lang_hint} "
+        "Write structured notes in markdown:\n\n"
         "## What's going well\nBullet list.\n\n"
         "## Concerns / blockers\nBullet list.\n\n"
         "## Feedback exchanged\nBrief summary.\n\n"
@@ -108,8 +115,8 @@ GENERATE_TEMPLATES = {
         "Transcript:\n{text}"
     ),
     "standup": (
-        "This is a daily stand-up transcript. For each speaker who participated, write "
-        "a section in markdown (same language as the transcript):\n\n"
+        "This is a daily stand-up transcript. {lang_hint} "
+        "For each speaker who participated, write a section in markdown:\n\n"
         "### @SpeakerName\n"
         "- **Yesterday:** what they did\n"
         "- **Today:** what they plan\n"
@@ -255,7 +262,7 @@ CHAT_SYSTEM_PROMPT = (
     "You answer questions about a meeting transcript. Be concise and factual. "
     "Cite specific speakers when relevant (e.g., 'Lisa mentioned that…'). "
     "If the answer isn't in the transcript, say so honestly — don't make things up. "
-    "Reply in the same language as the user's question."
+    "{lang_hint}"
 )
 
 
@@ -332,6 +339,8 @@ def chat_endpoint():
 
     speaker_names = data.get("speakerNames") or {}
     messages = data.get("messages") or []
+    language = (data.get("language") or "").lower()
+    lang_hint = LANG_HINTS.get(language, "Reply in the same language as the user's question.")
 
     transcript = _format_segments_for_llm(segments, speaker_names)[:12000]
 
@@ -345,7 +354,7 @@ def chat_endpoint():
         history_text += f"{prefix}: {content}\n"
 
     prompt = (
-        f"{CHAT_SYSTEM_PROMPT}\n\n"
+        f"{CHAT_SYSTEM_PROMPT.format(lang_hint=lang_hint)}\n\n"
         f"Transcript:\n{transcript}\n\n"
     )
     if history_text:
@@ -390,9 +399,12 @@ def generate_endpoint():
         return jsonify({"error": f"unknown template: {template_name}",
                         "available": sorted(GENERATE_TEMPLATES.keys())}), 400
 
+    language = (data.get("language") or "").lower()
+    lang_hint = LANG_HINTS.get(language, LANG_HINT_DEFAULT)
+
     speaker_names = data.get("speakerNames") or {}
     text = _format_segments_for_llm(segments, speaker_names)[:12000]
-    prompt = GENERATE_TEMPLATES[template_name].format(text=text)
+    prompt = GENERATE_TEMPLATES[template_name].format(text=text, lang_hint=lang_hint)
 
     job_id = _create_job(f"generate:{template_name}")
 

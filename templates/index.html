@@ -342,6 +342,19 @@
     .transcript-name:hover { border-bottom-color: var(--dim); }
     .transcript-name.placeholder { color: var(--muted); font-style: italic; font-weight: 500; }
 
+    .title-thinking {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: 12px; font-weight: 500;
+      color: var(--accent);
+      letter-spacing: .02em;
+      animation: title-thinking-fade 1.6s ease-in-out infinite;
+    }
+    @keyframes title-thinking-fade {
+      0%, 100% { opacity: .55 }
+      50%      { opacity: 1 }
+    }
+
     .transcript-name-input {
       font-family: 'Bricolage Grotesque', sans-serif;
       font-variation-settings: 'wdth' 100, 'wght' 600;
@@ -1133,6 +1146,7 @@ let currentSpeakerNames = {};
 let currentHistoryId    = null;
 let currentTitle        = null;   // transcript name (или null = placeholder)
 let currentTitleIsAuto  = false;  // true = заголовок выставлен авто (heuristic/LLM), его можно перезаписать
+let titleIsGenerating   = false;  // true пока LLM думает над заголовком
 let currentDate         = null;   // ISO date of the transcript
 let currentNotes        = '';     // user notes (persisted per transcript)
 let currentAIResults    = {};     // { template: "markdown..." } — кеш сгенерированных AI-результатов
@@ -1334,6 +1348,13 @@ async function requestLLMTitle(segments, lang, forHistoryId) {
   if (!segments || !segments.length) return;
   // Берём первые ~3000 символов транскрипта — этого хватает для топика
   const fullText = segments.map(s => s.text).join(' ').slice(0, 3000);
+
+  // Показываем индикатор "thinking" только если мы всё ещё на этом транскрипте
+  if (currentHistoryId === forHistoryId) {
+    titleIsGenerating = true;
+    renderTranscriptTitle();
+  }
+
   try {
     const res = await fetch(`${API_BASE}/api/title`, {
       method: 'POST',
@@ -1348,7 +1369,6 @@ async function requestLLMTitle(segments, lang, forHistoryId) {
     // И только если мы всё ещё на этом транскрипте
     if (currentTitleIsAuto && currentHistoryId === forHistoryId) {
       currentTitle = data.title;
-      renderTranscriptTitle();
       if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
     } else if (forHistoryId !== null) {
       // Если юзер успел уйти в другой транскрипт, всё равно обновим этот в истории
@@ -1363,6 +1383,11 @@ async function requestLLMTitle(segments, lang, forHistoryId) {
     }
   } catch (e) {
     console.warn('LLM title generation failed:', e);
+  } finally {
+    if (currentHistoryId === forHistoryId) {
+      titleIsGenerating = false;
+      renderTranscriptTitle();
+    }
   }
 }
 
@@ -1411,6 +1436,14 @@ function renderTranscriptTitle() {
 
   nameEl.addEventListener('click', () => startTitleRename(nameEl));
   titleEl.appendChild(nameEl);
+
+  // Если LLM думает — рядом с placeholder показываем индикатор
+  if (titleIsGenerating && currentTitleIsAuto) {
+    const thinking = document.createElement('span');
+    thinking.className = 'title-thinking';
+    thinking.textContent = '✨ thinking…';
+    titleEl.appendChild(thinking);
+  }
 }
 
 function startTitleRename(nameEl) {
@@ -2600,6 +2633,7 @@ async function runAI(template) {
       segments: currentSegments,
       speakerNames: currentSpeakerNames,
       template,
+      language: langSel.value || null,
     });
     const result = await pollJob(jobId);
     currentAIResults[template] = result.result || '';
@@ -2738,6 +2772,7 @@ async function sendChatMessage() {
       speakerNames: currentSpeakerNames,
       messages:     historyForServer,
       question,
+      language:     langSel.value || null,
     });
     const result = await pollJob(jobId);
     const answer = (result.answer || '').trim() || '(empty response)';
