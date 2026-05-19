@@ -110,7 +110,7 @@ _CORRECTION_INSTRUCTIONS: dict[str, str] = {
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
     timeout=1200,                 # 20 мин макс (длинные созвоны)
-    container_idle_timeout=300,   # держать тёплым 5 мин после последнего вызова
+    scaledown_window=300,         # держать тёплым 5 мин после последнего вызова
 )
 class Transcriptor:
 
