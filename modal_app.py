@@ -71,7 +71,13 @@ image = (
 # Flask тут ничего не считает, только шлёт .spawn() в основной Transcriptor.
 web_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("flask", "flask-cors", "python-dotenv", "requests")
+    .pip_install(
+        "flask",
+        "flask-cors",
+        "python-dotenv",
+        "requests",
+        "pyjwt",  # для валидации Supabase JWT
+    )
     .add_local_python_source("app")
     # Шаблон index.html и статика подгружаются как файлы (Flask их ищет рядом с app.py)
     .add_local_dir("templates", remote_path="/root/templates")

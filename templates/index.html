@@ -11,6 +11,10 @@
   <link rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=JetBrains+Mono:wght@400;500&display=swap">
 
+  <!-- Supabase JS client v2: auth + database queries.
+       Anon key и URL зашиты — оба публичны, защита через RLS. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
   <script>
     // Apply theme before paint to avoid flash
     (function() {
@@ -858,9 +862,104 @@
         transition-duration: .01ms !important;
       }
     }
+
+    /* ── Login overlay ───────────────────────────────────────── */
+    .login-overlay {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 9999;
+      padding: 24px;
+    }
+    .login-card {
+      width: 100%; max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 40px 32px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .login-card h1 {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: 32px; font-weight: 700;
+      font-variation-settings: 'wdth' 85;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      text-align: center;
+      margin-bottom: 4px;
+    }
+    .login-card .sub {
+      color: var(--dim);
+      font-size: 14px;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+    .login-btn {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .login-btn:hover { background: var(--border); }
+    .login-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .login-btn-google svg { width: 18px; height: 18px; }
+    .login-divider {
+      display: flex; align-items: center; gap: 12px;
+      color: var(--dim); font-size: 12px;
+      margin: 4px 0;
+    }
+    .login-divider::before, .login-divider::after {
+      content: ''; flex: 1; height: 1px; background: var(--border);
+    }
+    .login-email {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+    }
+    .login-email:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .login-message {
+      font-size: 13px;
+      color: var(--dim);
+      text-align: center;
+      min-height: 18px;
+    }
+    .login-message.error { color: #ff6b6b; }
+    .login-message.success { color: #4ade80; }
   </style>
 </head>
 <body>
+
+<!-- Login overlay — показывается пока нет сессии Supabase Auth.
+     Управляется из JS: блокирует UI приложения до входа. -->
+<div id="loginOverlay" class="login-overlay" style="display:none">
+  <div class="login-card">
+    <h1>Skriptly</h1>
+    <p class="sub">Sign in to continue</p>
+    <button id="loginGoogleBtn" class="login-btn login-btn-google">
+      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A10.99 10.99 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1A6.6 6.6 0 0 1 5.5 12c0-.73.13-1.44.34-2.1V7.07H2.18A11.02 11.02 0 0 0 1 12c0 1.78.43 3.46 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
+      Continue with Google
+    </button>
+    <div class="login-divider"><span>or magic link</span></div>
+    <input id="loginEmailInput" class="login-email" type="email" placeholder="you@example.com" autocomplete="email">
+    <button id="loginEmailBtn" class="login-btn">Send magic link</button>
+    <p id="loginMessage" class="login-message"></p>
+  </div>
+</div>
+
 <div class="shell">
 
   <div class="hero">
@@ -1027,6 +1126,31 @@
 
 <script>
 const API_BASE = '';
+
+// ── Supabase client ───────────────────────────────────────────
+// URL и anon key публичны (anon — клиентский, защита через RLS).
+// Сервисный ключ в браузер НЕ попадает.
+const SUPABASE_URL      = 'https://bmonakhktbaliwgobrxv.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJtb25ha2hrdGJhbGl3Z29icnh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyMTY4OTMsImV4cCI6MjA5NDc5Mjg5M30.HeY7nTJrAKPPHNRrPQwrIlx0HTd5L8a3xYZNgL-zWX4';
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+});
+
+// Текущая сессия — обновляется в onAuthStateChange.
+// JWT отсюда уходит в Authorization-header при запросах к нашему бэку.
+let currentSession = null;
+let currentUser    = null;
+
+// Обёртка fetch — автоматически добавляет Authorization: Bearer <jwt>.
+// Используется для всех запросов к /api/*.
+async function authFetch(url, opts = {}) {
+  const headers = new Headers(opts.headers || {});
+  if (currentSession?.access_token) {
+    headers.set('Authorization', 'Bearer ' + currentSession.access_token);
+  }
+  return fetch(url, { ...opts, headers });
+}
 
 // ── Feature flags ─────────────────────────────────────────────
 // Можно включить когда понадобятся. Код полностью функционален,
@@ -1289,7 +1413,7 @@ async function requestLLMTags(segments, forHistoryId) {
   if (!FEATURE_TAGS) return;
   if (!segments || !segments.length) return;
   try {
-    const res = await fetch(`${API_BASE}/api/tags`, {
+    const res = await authFetch(`${API_BASE}/api/tags`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ segments, speakerNames: currentSpeakerNames }),
@@ -1333,7 +1457,7 @@ async function requestLLMTitle(segments, lang, forHistoryId) {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/title`, {
+    const res = await authFetch(`${API_BASE}/api/title`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ text: fullText, language: lang || null }),
@@ -1869,7 +1993,7 @@ async function submitJob(url, body, isFormData = false) {
     opts.headers = { 'Content-Type': 'application/json' };
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(url, opts);
+  const res = await authFetch(url, opts);
   const data = await safeJson(res);
   if (!res.ok) throw new Error(data.error || 'submit failed');
   if (!data.job_id) throw new Error('expected job_id in response');
@@ -1880,7 +2004,7 @@ async function pollJob(jobId, onProgress) {
   let waitMs = 0;
   while (true) {
     if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
-    const res = await fetch(`${API_BASE}/api/jobs/${jobId}`);
+    const res = await authFetch(`${API_BASE}/api/jobs/${jobId}`);
     const data = await safeJson(res);
     if (!res.ok) throw new Error(data.error || 'poll failed');
     if (data.status === 'done')  return data;
@@ -2083,7 +2207,8 @@ async function transcribeBlob(blob) {
     renderChatMessages();
     renderTags();
     if (segments.length) {
-      saveToHistory(segments, langSel.value);
+      // Ждём insert чтобы currentHistoryId был валидным UUID для запросов ниже
+      await saveToHistory(segments, langSel.value);
       requestLLMTitle(segments, langSel.value, currentHistoryId);
       requestLLMTags(segments, currentHistoryId);
     }
@@ -2170,60 +2295,95 @@ downloadBtn.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-// ── History ────────────────────────────────────────────────────
-const HISTORY_KEY = 'transcriptor_history';
-const MAX_HISTORY = 20;
+// ── History (Supabase Postgres) ────────────────────────────────
+// Хранится в таблице public.transcripts c RLS — каждый юзер видит свои.
+// В памяти держим кэш _historyCache чтобы getHistory() оставалась
+// синхронной (большинство существующих вызовов это ожидают).
+// После любой мутации вызываем refreshHistory() + renderHistory().
 
-function getHistory() {
-  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
-  catch { return []; }
+let _historyCache = [];
+
+function getHistory() { return _historyCache; }
+
+// Маппинг строки БД → формат который использует фронтенд
+function _rowToEntry(row) {
+  return {
+    id:           row.id,
+    date:         row.created_at,
+    lang:         row.language || 'auto',
+    segments:     row.segments || [],
+    speakerNames: row.speaker_names || {},
+    title:        row.title,
+    titleIsAuto:  row.title_is_auto,
+    notes:        row.notes || '',
+    aiResults:    row.ai_results || {},
+    chatHistory:  row.chat_history || [],
+    tags:         row.tags || [],
+  };
 }
 
-function saveToHistory(segments, lang) {
-  const history = getHistory();
-  const id = Date.now();
-  history.unshift({
-    id,
-    date: new Date().toISOString(),
-    lang: lang || 'auto',
+async function refreshHistory() {
+  if (!currentUser) { _historyCache = []; return; }
+  const { data, error } = await sb
+    .from('transcripts')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error) { console.error('[history] load failed:', error); return; }
+  _historyCache = (data || []).map(_rowToEntry);
+}
+
+async function saveToHistory(segments, lang) {
+  if (!currentUser) return null;
+  const { data, error } = await sb.from('transcripts').insert({
+    user_id:       currentUser.id,
+    title:         currentTitle,
+    title_is_auto: currentTitleIsAuto,
+    language:      lang || null,
     segments,
-    speakerNames: { ...currentSpeakerNames },
-    title: currentTitle,
-    titleIsAuto: currentTitleIsAuto,
-    notes: currentNotes,
-    aiResults: { ...currentAIResults },
-    chatHistory: [...currentChatHistory],
-    tags: [...currentTags],
-  });
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
-  currentHistoryId = id;
+    speaker_names: { ...currentSpeakerNames },
+    notes:         currentNotes,
+    tags:          [...currentTags],
+    ai_results:    { ...currentAIResults },
+    chat_history:  [...currentChatHistory],
+  }).select().single();
+  if (error) { console.error('[history] save failed:', error); return null; }
+  currentHistoryId = data.id;
+  await refreshHistory();
+  renderHistory();
+  return data.id;
+}
+
+async function updateHistoryEntry(id) {
+  if (!currentUser || !id) return;
+  const { error } = await sb.from('transcripts').update({
+    title:         currentTitle,
+    title_is_auto: currentTitleIsAuto,
+    segments:      currentSegments,
+    speaker_names: { ...currentSpeakerNames },
+    notes:         currentNotes,
+    tags:          [...currentTags],
+    ai_results:    { ...currentAIResults },
+    chat_history:  [...currentChatHistory],
+  }).eq('id', id);
+  if (error) console.error('[history] update failed:', error);
+  await refreshHistory();
   renderHistory();
 }
 
-function updateHistoryEntry(id) {
-  const history = getHistory();
-  const idx = history.findIndex(h => h.id === id);
-  if (idx === -1) return;
-  history[idx].segments = currentSegments;
-  history[idx].speakerNames = { ...currentSpeakerNames };
-  history[idx].title = currentTitle;
-  history[idx].titleIsAuto = currentTitleIsAuto;
-  history[idx].notes = currentNotes;
-  history[idx].aiResults = { ...currentAIResults };
-  history[idx].chatHistory = [...currentChatHistory];
-  history[idx].tags = [...currentTags];
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+async function deleteFromHistory(id) {
+  if (!currentUser) return;
+  const { error } = await sb.from('transcripts').delete().eq('id', id);
+  if (error) console.error('[history] delete failed:', error);
+  await refreshHistory();
   renderHistory();
 }
 
-function deleteFromHistory(id) {
-  const h = getHistory().filter(h => h.id !== id);
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
-  renderHistory();
-}
-
-function clearHistory() {
-  localStorage.removeItem(HISTORY_KEY);
+async function clearHistory() {
+  if (!currentUser) return;
+  const { error } = await sb.from('transcripts').delete().eq('user_id', currentUser.id);
+  if (error) console.error('[history] clear failed:', error);
+  await refreshHistory();
   renderHistory();
 }
 
@@ -2810,6 +2970,92 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 });
+
+// ── Supabase Auth bootstrap ────────────────────────────────────
+// Запускается последним — ждёт пока DOM и все handler'ы определены.
+// Показывает login overlay если нет сессии, скрывает при логине.
+
+const loginOverlay   = document.getElementById('loginOverlay');
+const loginGoogleBtn = document.getElementById('loginGoogleBtn');
+const loginEmailBtn  = document.getElementById('loginEmailBtn');
+const loginEmailInp  = document.getElementById('loginEmailInput');
+const loginMessage   = document.getElementById('loginMessage');
+
+function setLoginMessage(text, kind) {
+  loginMessage.textContent = text || '';
+  loginMessage.className = 'login-message' + (kind ? ' ' + kind : '');
+}
+
+function showLogin() { loginOverlay.style.display = 'flex'; }
+function hideLogin() { loginOverlay.style.display = 'none'; setLoginMessage(''); }
+
+loginGoogleBtn.addEventListener('click', async () => {
+  loginGoogleBtn.disabled = true;
+  setLoginMessage('Redirecting to Google…');
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: window.location.origin + window.location.pathname },
+  });
+  if (error) {
+    setLoginMessage(error.message, 'error');
+    loginGoogleBtn.disabled = false;
+  }
+});
+
+loginEmailBtn.addEventListener('click', async () => {
+  const email = (loginEmailInp.value || '').trim();
+  if (!email || !/.+@.+\..+/.test(email)) {
+    setLoginMessage('Enter a valid email', 'error');
+    return;
+  }
+  loginEmailBtn.disabled = true;
+  setLoginMessage('Sending magic link…');
+  const { error } = await sb.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.origin + window.location.pathname },
+  });
+  loginEmailBtn.disabled = false;
+  if (error) setLoginMessage(error.message, 'error');
+  else      setLoginMessage('Check your inbox — click the link to sign in.', 'success');
+});
+
+loginEmailInp.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); loginEmailBtn.click(); }
+});
+
+// Главный auth-handler. Реагирует на:
+// - INITIAL_SESSION: первая проверка сессии при загрузке
+// - SIGNED_IN: только что залогинились (или magic link сработал)
+// - SIGNED_OUT: вышли
+// - TOKEN_REFRESHED: токен автоматически обновился (раз в час)
+sb.auth.onAuthStateChange(async (event, session) => {
+  currentSession = session;
+  currentUser    = session?.user || null;
+
+  if (currentUser) {
+    hideLogin();
+    // Подгружаем историю юзера из БД при логине / refresh page
+    if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+      await refreshHistory();
+      renderHistory();
+    }
+  } else {
+    showLogin();
+    _historyCache = [];
+    renderHistory();
+  }
+});
+
+// Bootstrap — проверяем сессию при старте.
+// onAuthStateChange сам сработает с INITIAL_SESSION и покажет login если нужно.
+(async () => {
+  try {
+    await sb.auth.getSession();  // triggers onAuthStateChange
+  } catch (e) {
+    console.error('[auth] init failed:', e);
+    showLogin();
+  }
+})();
 </script>
 </body>
 </html>

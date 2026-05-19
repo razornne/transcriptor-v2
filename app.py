@@ -16,8 +16,9 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 
+import jwt as pyjwt
 import requests
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, g
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -224,6 +225,58 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 ALLOWED_LANGUAGES = {"ru", "uk", "en"}
+
+
+# ── Supabase JWT validation ─────────────────────────────────────
+# Проверяем JWT от Supabase Auth на всех /api/* кроме /api/health.
+# Токен фронт получает после логина (signInWithOAuth / signInWithOtp)
+# и присылает в Authorization: Bearer <jwt>.
+#
+# JWT подписан HS256 + SUPABASE_JWT_SECRET (Settings → API → JWT Secret
+# в Supabase Dashboard).
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+
+# Эндпоинты которые работают без auth (служебные, открытые)
+_PUBLIC_API_PATHS = {"/api/health"}
+
+
+@app.before_request
+def _require_jwt():
+    """Гард: все /api/* кроме PUBLIC требуют валидный Supabase JWT."""
+    # CORS preflight всегда пропускаем
+    if request.method == "OPTIONS":
+        return None
+
+    path = request.path
+    if not path.startswith("/api/") or path in _PUBLIC_API_PATHS:
+        return None
+
+    # Если секрет не задан — считаем что auth не настроен (для локальной разработки).
+    # На Modal он должен быть выставлен через Secret.
+    if not SUPABASE_JWT_SECRET:
+        return None
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return jsonify({"error": "missing token"}), 401
+
+    token = auth_header[7:].strip()
+    try:
+        payload = pyjwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated",
+        )
+    except pyjwt.ExpiredSignatureError:
+        return jsonify({"error": "token expired"}), 401
+    except pyjwt.InvalidTokenError as e:
+        return jsonify({"error": f"invalid token: {e}"}), 401
+
+    # Прокидываем user_id в request context на случай если эндпоинт хочет использовать
+    g.user_id = payload.get("sub")
+    g.user_email = payload.get("email")
+    return None
 
 
 @app.route("/")
