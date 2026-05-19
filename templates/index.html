@@ -126,6 +126,13 @@
       transition: color .15s;
     }
     .meta-toggle:hover { color: var(--text); }
+    .meta-user {
+      font-size: 11px; font-weight: 500;
+      color: var(--muted);
+      letter-spacing: .18em; text-transform: uppercase;
+      max-width: 220px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
 
     .hero-title {
       font-family: 'Bricolage Grotesque', sans-serif;
@@ -966,6 +973,8 @@
     <div class="hero-meta">
       <span>local · whisper + pyannote</span>
       <span class="meta-line"></span>
+      <span id="userEmail" class="meta-user" style="display:none"></span>
+      <button id="signOutBtn" class="meta-toggle" title="Sign out" style="display:none">sign out</button>
       <button id="themeToggle" class="meta-toggle" title="Toggle theme">light</button>
     </div>
     <h1 class="hero-title">Transcriptor</h1>
@@ -3036,6 +3045,15 @@ const loginGoogleBtn = document.getElementById('loginGoogleBtn');
 const loginEmailBtn  = document.getElementById('loginEmailBtn');
 const loginEmailInp  = document.getElementById('loginEmailInput');
 const loginMessage   = document.getElementById('loginMessage');
+const userEmailEl    = document.getElementById('userEmail');
+const signOutBtn     = document.getElementById('signOutBtn');
+
+// Sign out — очищает сессию Supabase, onAuthStateChange покажет login screen
+signOutBtn.addEventListener('click', async () => {
+  signOutBtn.disabled = true;
+  await sb.auth.signOut();
+  // onAuthStateChange сделает остальное (показать login, очистить кэш)
+});
 
 function setLoginMessage(text, kind) {
   loginMessage.textContent = text || '';
@@ -3091,6 +3109,10 @@ sb.auth.onAuthStateChange(async (event, session) => {
 
   if (currentUser) {
     hideLogin();
+    userEmailEl.textContent = currentUser.email || 'signed in';
+    userEmailEl.style.display = '';
+    signOutBtn.style.display = '';
+    signOutBtn.disabled = false;
     // Подгружаем историю юзера из БД при логине / refresh page
     if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
       await refreshHistory();
@@ -3099,6 +3121,8 @@ sb.auth.onAuthStateChange(async (event, session) => {
     }
   } else {
     showLogin();
+    userEmailEl.style.display = 'none';
+    signOutBtn.style.display = 'none';
     _historyCache = [];
     renderHistory();
   }
