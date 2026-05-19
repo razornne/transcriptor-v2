@@ -142,8 +142,9 @@ class Transcriptor:
         self.pyannote.to(torch.device("cuda"))
         print("[modal] pyannote ready", flush=True)
 
-        # aya-expanse-8b в 4-bit (~5 GB VRAM). Fallback: qwen2.5-14b-instruct
-        llm_model = os.environ.get("LLM_MODEL", "CohereForAI/aya-expanse-8b")
+        # Qwen2.5-7B-Instruct в 4-bit (~4 GB VRAM). Не гейтована, сильна на UA/RU/EN.
+        # Альтернатива: Qwen/Qwen2.5-14B-Instruct (лучше, но ~8 GB VRAM)
+        llm_model = os.environ.get("LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
         print(f"[modal] loading {llm_model}...", flush=True)
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
