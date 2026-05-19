@@ -2295,11 +2295,13 @@ downloadBtn.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-// ── History (Supabase Postgres) ────────────────────────────────
-// Хранится в таблице public.transcripts c RLS — каждый юзер видит свои.
-// В памяти держим кэш _historyCache чтобы getHistory() оставалась
-// синхронной (большинство существующих вызовов это ожидают).
-// После любой мутации вызываем refreshHistory() + renderHistory().
+// ── History (Supabase Postgres via raw REST) ───────────────────
+// Auth остаётся через Supabase JS SDK (signIn / onAuthStateChange — работает).
+// Для запросов в таблицы используем raw fetch в /rest/v1 — SDK PostgrestClient
+// в нашей среде висит на .then() (никогда не резолвится, причина непонятна).
+// Raw fetch с теми же заголовками работает идеально.
+//
+// Кэш _historyCache держим в памяти чтобы getHistory() осталась синхронной.
 
 let _historyCache = [];
 
@@ -2322,20 +2324,48 @@ function _rowToEntry(row) {
   };
 }
 
+// Минимальная обёртка над Supabase REST API.
+// Авторизует через JWT юзера (если есть) либо anon key.
+async function _sbFetch(path, opts = {}) {
+  const token = currentSession?.access_token || SUPABASE_ANON_KEY;
+  const headers = new Headers(opts.headers || {});
+  headers.set('apikey', SUPABASE_ANON_KEY);
+  headers.set('Authorization', 'Bearer ' + token);
+  if (opts.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  // POST/PATCH должны вернуть вставленную строку
+  if ((opts.method === 'POST' || opts.method === 'PATCH') && !headers.has('Prefer')) {
+    headers.set('Prefer', 'return=representation');
+  }
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, { ...opts, headers });
+  const text = await res.text();
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); }
+    catch { data = text; }
+  }
+  if (!res.ok) {
+    const msg = (data && (data.message || data.error)) || text || `HTTP ${res.status}`;
+    throw new Error(`${opts.method || 'GET'} ${path} → ${res.status}: ${msg}`);
+  }
+  return data;
+}
+
 async function refreshHistory() {
   if (!currentUser) { _historyCache = []; return; }
-  const { data, error } = await sb
-    .from('transcripts')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(200);
-  if (error) { console.error('[history] load failed:', error); return; }
-  _historyCache = (data || []).map(_rowToEntry);
+  try {
+    const data = await _sbFetch('/transcripts?select=*&order=created_at.desc&limit=200');
+    _historyCache = (data || []).map(_rowToEntry);
+  } catch (e) {
+    console.error('[history] load failed:', e);
+    _historyCache = [];
+  }
 }
 
 async function saveToHistory(segments, lang) {
-  if (!currentUser) return null;
-  const { data, error } = await sb.from('transcripts').insert({
+  if (!currentUser) { console.warn('[history] no currentUser, skipping save'); return null; }
+  const payload = {
     user_id:       currentUser.id,
     title:         currentTitle,
     title_is_auto: currentTitleIsAuto,
@@ -2346,17 +2376,30 @@ async function saveToHistory(segments, lang) {
     tags:          [...currentTags],
     ai_results:    { ...currentAIResults },
     chat_history:  [...currentChatHistory],
-  }).select().single();
-  if (error) { console.error('[history] save failed:', error); return null; }
-  currentHistoryId = data.id;
-  await refreshHistory();
-  renderHistory();
-  return data.id;
+  };
+  try {
+    const data = await _sbFetch('/transcripts', {
+      method: 'POST',
+      body:   JSON.stringify(payload),
+    });
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row?.id) {
+      console.error('[history] insert returned no row:', data);
+      return null;
+    }
+    currentHistoryId = row.id;
+    await refreshHistory();
+    renderHistory();
+    return row.id;
+  } catch (e) {
+    console.error('[history] save failed:', e);
+    return null;
+  }
 }
 
 async function updateHistoryEntry(id) {
   if (!currentUser || !id) return;
-  const { error } = await sb.from('transcripts').update({
+  const payload = {
     title:         currentTitle,
     title_is_auto: currentTitleIsAuto,
     segments:      currentSegments,
@@ -2365,24 +2408,37 @@ async function updateHistoryEntry(id) {
     tags:          [...currentTags],
     ai_results:    { ...currentAIResults },
     chat_history:  [...currentChatHistory],
-  }).eq('id', id);
-  if (error) console.error('[history] update failed:', error);
+  };
+  try {
+    await _sbFetch(`/transcripts?id=eq.${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body:   JSON.stringify(payload),
+    });
+  } catch (e) {
+    console.error('[history] update failed:', e);
+  }
   await refreshHistory();
   renderHistory();
 }
 
 async function deleteFromHistory(id) {
-  if (!currentUser) return;
-  const { error } = await sb.from('transcripts').delete().eq('id', id);
-  if (error) console.error('[history] delete failed:', error);
+  if (!currentUser || !id) return;
+  try {
+    await _sbFetch(`/transcripts?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' });
+  } catch (e) {
+    console.error('[history] delete failed:', e);
+  }
   await refreshHistory();
   renderHistory();
 }
 
 async function clearHistory() {
   if (!currentUser) return;
-  const { error } = await sb.from('transcripts').delete().eq('user_id', currentUser.id);
-  if (error) console.error('[history] clear failed:', error);
+  try {
+    await _sbFetch(`/transcripts?user_id=eq.${encodeURIComponent(currentUser.id)}`, { method: 'DELETE' });
+  } catch (e) {
+    console.error('[history] clear failed:', e);
+  }
   await refreshHistory();
   renderHistory();
 }
@@ -3029,6 +3085,7 @@ loginEmailInp.addEventListener('keydown', e => {
 // - SIGNED_OUT: вышли
 // - TOKEN_REFRESHED: токен автоматически обновился (раз в час)
 sb.auth.onAuthStateChange(async (event, session) => {
+  console.log('[auth] event:', event, 'user:', session?.user?.email || 'none');
   currentSession = session;
   currentUser    = session?.user || null;
 
@@ -3037,6 +3094,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
     // Подгружаем историю юзера из БД при логине / refresh page
     if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
       await refreshHistory();
+      console.log('[auth] history loaded, items:', _historyCache.length);
       renderHistory();
     }
   } else {

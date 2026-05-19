@@ -73,14 +73,31 @@ def _split_by_speaker(transcript_segments: list[dict], speaker_turns: list[dict]
             last_speaker = sp
             continue
 
-        current = None  # текущая группа слов одного спикера
-        for w in words:
-            sp = _best_speaker_for(w["start"], w["end"], speaker_turns)
-            # Если pyannote не нашёл овэрлапа — наследуем предыдущего спикера
-            # (типично у первого/последнего слова сегмента у границы турна).
-            if sp == "SPEAKER_UNKNOWN" and last_speaker is not None:
-                sp = last_speaker
+        # Заранее посчитаем спикеров для всех слов — это позволит делать
+        # forward-fill (если на первых словах pyannote не определился, берём
+        # спикера со следующего слова где определился).
+        word_speakers = [_best_speaker_for(w["start"], w["end"], speaker_turns) for w in words]
 
+        # Forward-fill: если первые слова SPEAKER_UNKNOWN, ищем первый известный
+        first_known = next((s for s in word_speakers if s != "SPEAKER_UNKNOWN"), None)
+        for i, s in enumerate(word_speakers):
+            if s != "SPEAKER_UNKNOWN":
+                break
+            if first_known:
+                word_speakers[i] = first_known
+            elif last_speaker:
+                word_speakers[i] = last_speaker
+
+        # Backward-fill: остальные UNKNOWN наследуют предыдущего
+        running = last_speaker or first_known or "SPEAKER_UNKNOWN"
+        for i, s in enumerate(word_speakers):
+            if s == "SPEAKER_UNKNOWN":
+                word_speakers[i] = running
+            else:
+                running = s
+
+        current = None  # текущая группа слов одного спикера
+        for w, sp in zip(words, word_speakers):
             if current is None or current["speaker"] != sp:
                 if current is not None:
                     result.append(current)
