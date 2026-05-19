@@ -246,6 +246,7 @@ def title_endpoint():
     except requests.exceptions.ConnectionError:
         return jsonify({"error": "ollama unreachable (is it running?)"}), 503
     except Exception as e:
+        import traceback; traceback.print_exc()
         return jsonify({"error": f"ollama failed: {e}"}), 500
 
     # Чистим вывод: первая строка, без кавычек/префиксов
