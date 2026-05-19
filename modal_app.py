@@ -250,13 +250,16 @@ class Transcriptor:
                 },
                 word_timestamps=True,  # для word-level alignment в merger
             )
+            # Кастуем к нативным Python типам — faster-whisper иногда возвращает
+            # numpy.float32 для start/end, и Modal/cbor2 на стороне Flask-контейнера
+            # без numpy падает с "Deserialization failed because 'numpy' is not available".
             segments = [
                 {
-                    "start": s.start,
-                    "end":   s.end,
+                    "start": float(s.start),
+                    "end":   float(s.end),
                     "text":  s.text.strip(),
                     "words": [
-                        {"start": w.start, "end": w.end, "word": w.word}
+                        {"start": float(w.start), "end": float(w.end), "word": w.word}
                         for w in (s.words or [])
                     ],
                 }
@@ -281,12 +284,17 @@ class Transcriptor:
             result = self.pyannote(audio_input, **kwargs)
             annotation = result.speaker_diarization
             speaker_turns = [
-                {"start": turn.start, "end": turn.end, "speaker": speaker}
+                {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
                 for turn, _, speaker in annotation.itertracks(yield_label=True)
             ]
 
             # --- Merge ---
             merged = merge(segments, speaker_turns)
+            # На случай если merger пропустил numpy типы — финальная нормализация
+            for m in merged:
+                m["start"]   = float(m["start"])
+                m["end"]     = float(m["end"])
+                m["speaker"] = str(m["speaker"])
 
             # --- LLM correction ---
             merged = self._correct_segments(merged, language)
