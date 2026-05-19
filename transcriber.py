@@ -32,6 +32,28 @@ MODEL_SIZE   = os.environ.get("WHISPER_MODEL", "large-v3")
 DEVICE       = os.environ.get("WHISPER_DEVICE", "cuda")
 COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE", "float16")
 
+# Внутренние промпты по языку. Whisper воспринимает initial_prompt как
+# предшествующий транскрипт — пишем как живую речь, не как инструкцию.
+# Это прайминг: правильный алфавит, пунктуация, лексика домена.
+# Пользовательский контекст (если придёт) добавляется ПОСЛЕ через пробел.
+_LANG_PROMPTS: dict[str, str] = {
+    "ru": (
+        "Запись деловой беседы или интервью на русском языке. "
+        "— Добрый день, рад вас видеть. — Взаимно, давайте обсудим. "
+        "Обсуждаем бизнес, маркетинг, YouTube, медиа, технологии, стартапы."
+    ),
+    "uk": (
+        "Запис ділової розмови або інтерв'ю українською мовою. "
+        "— Добрий день, радий вас бачити. — Взаємно, давайте обговоримо. "
+        "Обговорюємо бізнес, маркетинг, YouTube, медіа, технології, стартапи."
+    ),
+    "en": (
+        "Recording of a business conversation or interview in English. "
+        "— Good morning, great to meet you. — Likewise, let's get started. "
+        "Topics: business, marketing, YouTube, media, technology, startups."
+    ),
+}
+
 _model = None
 
 
@@ -48,22 +70,30 @@ def transcribe(path: str, language: str | None = None, prompt: str | None = None
     """Возвращает список сегментов: [{start, end, text}, ...]
 
     Параметры подобраны для максимального качества на русском/украинском:
-    - beam_size=5: лучше чем дефолт, аккуратнее декодирование
-    - temperature: список с fallback. На неуверенных кусках Whisper повышает T
+    - beam_size=5, best_of=5: точнее декодирование
+    - temperature с fallback: на неуверенных кусках Whisper повышает T
       и пробует снова — снижает галлюцинации и повторы
     - compression_ratio_threshold=2.4: отбрасывает сегменты с подозрительной
       компрессией (типичный признак галлюцинации — повторяющийся мусор)
     - log_prob_threshold=-1.0: отбрасывает сегменты с низкой уверенностью
     - no_speech_threshold=0.6: чувствительный детектор тишины
     - condition_on_previous_text=True: использует контекст предыдущих сегментов
-      для согласованности (полезно для имён, терминов)
-    - vad_filter: Silero VAD отсекает тишину до Whisper'а
+    - vad_filter + параметры: Silero VAD отсекает тишину, speech_pad_ms не
+      срезает начало/конец слов, threshold=0.45 чуть мягче дефолта (0.5)
+    - initial_prompt: внутренний языковой прайминг + пользовательский контекст
     """
+    # Собираем effective_prompt: языковой якорь + пользовательский контекст
+    lang_hint = _LANG_PROMPTS.get(language or "")
+    if lang_hint and prompt:
+        effective_prompt = f"{lang_hint} {prompt}"
+    else:
+        effective_prompt = lang_hint or prompt  # один из них или None
+
     model = _get_model()
     segments_iter, _info = model.transcribe(
         path,
         language=language,
-        initial_prompt=prompt,
+        initial_prompt=effective_prompt,
         beam_size=5,
         best_of=5,
         temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
@@ -72,7 +102,11 @@ def transcribe(path: str, language: str | None = None, prompt: str | None = None
         no_speech_threshold=0.6,
         condition_on_previous_text=True,
         vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 500},
+        vad_parameters={
+            "threshold": 0.45,
+            "min_silence_duration_ms": 500,
+            "speech_pad_ms": 200,
+        },
     )
     return [
         {"start": s.start, "end": s.end, "text": s.text.strip()}
