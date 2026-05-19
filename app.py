@@ -208,6 +208,85 @@ def _ollama_generate(prompt: str, *, max_tokens: int = 60, temperature: float = 
     return (r.json().get("response") or "").strip()
 
 
+_CORRECTION_INSTRUCTIONS: dict[str, str] = {
+    "ru": (
+        "Исправь ТОЛЬКО очевидные фонетические ошибки распознавания речи (STT). "
+        "НЕ меняй смысл, стиль, порядок слов, пунктуацию, регистр. "
+        "НЕ добавляй и НЕ удаляй слова. Язык оставляй русским. "
+        "Если не уверен — оставь как есть."
+    ),
+    "uk": (
+        "Виправ ЛИШЕ очевидні фонетичні помилки розпізнавання мовлення (STT). "
+        "НЕ змінюй зміст, стиль, порядок слів, пунктуацію, регістр. "
+        "НЕ додавай і НЕ видаляй слова. Мова залишається українською. "
+        "Якщо не впевнений — залиш як є."
+    ),
+    "en": (
+        "Fix ONLY obvious phonetic speech-to-text (STT) errors. "
+        "Do NOT change meaning, style, word order, punctuation, or capitalization. "
+        "Do NOT add or remove words. If unsure, leave as is."
+    ),
+}
+
+
+def _llm_correct_segments(segments: list[dict], language: str | None) -> list[dict]:
+    """Постобработка: LLM исправляет фонетические STT-ошибки, ничего больше.
+
+    Обрабатывает батчами по 40 сегментов. Если LLM недоступна или батч
+    не парсится — тихо возвращает оригинал для этого батча.
+    """
+    if not segments:
+        return segments
+
+    instruction = _CORRECTION_INSTRUCTIONS.get(language or "", _CORRECTION_INSTRUCTIONS["en"])
+    batch_size = 40
+    corrected = [dict(s) for s in segments]
+
+    for batch_start in range(0, len(segments), batch_size):
+        batch = segments[batch_start:batch_start + batch_size]
+        lines_in = "\n".join(f"{i + 1}. {seg['text']}" for i, seg in enumerate(batch))
+
+        prompt = (
+            f"{instruction}\n\n"
+            "Return ONLY the same numbered lines with corrections applied. "
+            "Keep numbering and format identical.\n\n"
+            f"{lines_in}"
+        )
+
+        try:
+            # max_tokens: ~2x input length in chars converted to rough token estimate
+            max_tok = max(256, len(lines_in) // 2)
+            raw = _ollama_generate(prompt, max_tokens=max_tok, temperature=0.0, timeout=120)
+
+            parsed: dict[int, str] = {}
+            for line in raw.splitlines():
+                m = re.match(r'^(\d+)\.\s+(.+)$', line.strip())
+                if m:
+                    idx = int(m.group(1)) - 1
+                    if 0 <= idx < len(batch):
+                        parsed[idx] = m.group(2).strip()
+
+            for idx, text in parsed.items():
+                orig = batch[idx]["text"]
+                # Отклоняем по двум признакам галлюцинации:
+                # 1. Текст сильно изменился по длине (>40%)
+                if len(text) == 0 or abs(len(text) - len(orig)) / max(len(orig), 1) > 0.4:
+                    continue
+                # 2. Кириллический оригинал получил латиницу которой не было —
+                #    признак что модель вставила иностранное слово
+                orig_latin = sum(1 for c in orig if c.isascii() and c.isalpha())
+                new_latin  = sum(1 for c in text if c.isascii() and c.isalpha())
+                orig_cyrillic = sum(1 for c in orig if 'Ѐ' <= c <= 'ӿ')
+                if orig_cyrillic > len(orig) * 0.5 and new_latin > orig_latin + 1:
+                    continue
+                corrected[batch_start + idx]["text"] = text
+
+        except Exception as e:
+            print(f"[llm-correct] batch {batch_start // batch_size} failed: {e}", flush=True)
+
+    return corrected
+
+
 @app.route("/api/title", methods=["POST"])
 def title_endpoint():
     """Генерация короткого названия транскрипта через локальную LLM.
@@ -512,6 +591,9 @@ def transcribe_endpoint():
 
             _update_job(job_id, progress="merging")
             merged = merge(segments, speaker_turns)
+
+            _update_job(job_id, progress="correcting")
+            merged = _llm_correct_segments(merged, language)
 
             _update_job(job_id, status="done", segments=merged)
         except Exception as e:
