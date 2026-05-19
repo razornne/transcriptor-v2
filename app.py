@@ -232,9 +232,22 @@ ALLOWED_LANGUAGES = {"ru", "uk", "en"}
 # Токен фронт получает после логина (signInWithOAuth / signInWithOtp)
 # и присылает в Authorization: Bearer <jwt>.
 #
-# JWT подписан HS256 + SUPABASE_JWT_SECRET (Settings → API → JWT Secret
-# в Supabase Dashboard).
-SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+# Верификация через JWKS endpoint Supabase
+#   https://<project>.supabase.co/auth/v1/.well-known/jwks.json
+# PyJWKClient кэширует ключи. Работает с HS256 (legacy) и ES256/RS256 (новый
+# JWT Signing Keys), без необходимости хранить секрет на нашей стороне.
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+
+_jwks_client = None
+def _get_jwks_client():
+    """Ленивая инициализация — клиент кэширует ключи между запросами."""
+    global _jwks_client
+    if _jwks_client is None and SUPABASE_URL:
+        _jwks_client = pyjwt.PyJWKClient(
+            f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json",
+            cache_keys=True,
+        )
+    return _jwks_client
 
 # Эндпоинты которые работают без auth (служебные, открытые)
 _PUBLIC_API_PATHS = {"/api/health"}
@@ -251,9 +264,10 @@ def _require_jwt():
     if not path.startswith("/api/") or path in _PUBLIC_API_PATHS:
         return None
 
-    # Если секрет не задан — считаем что auth не настроен (для локальной разработки).
-    # На Modal он должен быть выставлен через Secret.
-    if not SUPABASE_JWT_SECRET:
+    # Если SUPABASE_URL не задан — считаем что auth не настроен (локальная разработка).
+    # На Modal должен быть выставлен через Secret.
+    jwks_client = _get_jwks_client()
+    if jwks_client is None:
         return None
 
     auth_header = request.headers.get("Authorization", "")
@@ -262,16 +276,19 @@ def _require_jwt():
 
     token = auth_header[7:].strip()
     try:
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
         payload = pyjwt.decode(
             token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
+            signing_key.key,
+            algorithms=["HS256", "ES256", "RS256"],
             audience="authenticated",
         )
     except pyjwt.ExpiredSignatureError:
         return jsonify({"error": "token expired"}), 401
     except pyjwt.InvalidTokenError as e:
         return jsonify({"error": f"invalid token: {e}"}), 401
+    except Exception as e:
+        return jsonify({"error": f"jwt verification failed: {e}"}), 401
 
     # Прокидываем user_id в request context на случай если эндпоинт хочет использовать
     g.user_id = payload.get("sub")

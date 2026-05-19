@@ -76,7 +76,7 @@ web_image = (
         "flask-cors",
         "python-dotenv",
         "requests",
-        "pyjwt",  # для валидации Supabase JWT
+        "pyjwt[crypto]",  # для валидации Supabase JWT (включая asymmetric ES256/RS256)
     )
     .add_local_python_source("app")
     # Шаблон index.html и статика подгружаются как файлы (Flask их ищет рядом с app.py)
