@@ -10,10 +10,11 @@ This file provides guidance to Claude Code when working with code in this reposi
 - **pyannote-3.1** для разделения по спикерам, тоже на CUDA
 - **Ollama + qwen2.5:3b** (CPU) для LLM-задач: title / summary / action items / templates / chat. Qwen лучше llama3.2 на славянских языках.
 - Сервер запускается на ноуте, доступен публично через Cloudflare Tunnel (быстрый named-less tunnel)
-- **Двухступенчатый поток обработки:**
-  - Во время записи: каждые 3 минуты чанк уходит на `/api/transcribe-chunk` (только whisper) → live-текст без спикеров появляется по ходу созвона
-  - По нажатию Стоп: полная запись уходит на `/api/transcribe` (whisper + pyannote + merge) → live-текст заменяется на блоки со спикерами
+- **Поток обработки:**
+  - Во время записи фронт пишет `fullRecorder` с `timeslice=5s` и сохраняет каждый чанк в IndexedDB (autosave для recovery при краше вкладки). UI ничего не показывает — только статус «recording» и таймер.
+  - По нажатию Стоп: полная запись уходит на `/api/transcribe` (whisper + pyannote + merge) → блоки со спикерами
   - После — фронт асинхронно дёргает `/api/title` за умным названием транскрипта от LLM (с индикатором ✨ thinking…)
+  - Бэк-эндпоинт `/api/transcribe-chunk` остался в коде, но фронтом не вызывается — оставлен на случай возврата live-text фичи.
 
 v1 продолжает работать параллельно — это **намеренно**. Не пытаться слить версии обратно.
 
@@ -56,7 +57,7 @@ cloudflared tunnel --url http://localhost:5000
 
 Четыре питон-файла:
 
-- **`transcriber.py`** — `transcribe(path, language, prompt)`. Грузит faster-whisper-large-v3 на GPU при первом вызове, держит модель в памяти (`_model` глобально). Параметры подобраны под качество: `temperature=(0,0.2,...,1.0)` fallback, `compression_ratio_threshold=2.4`, `log_prob_threshold=-1.0`, `no_speech_threshold=0.6`, `condition_on_previous_text=True`, `beam_size=5`, `best_of=5`. Возвращает список `{start, end, text}` — секунды от начала аудио. Включён встроенный `vad_filter=True` (Silero VAD внутри faster-whisper) — отсекает тишину до обработки.
+- **`transcriber.py`** — `transcribe(path, language, prompt)`. Грузит faster-whisper-large-v3 (захардкоженный дефолт, override через `WHISPER_MODEL` env) на GPU при первом вызове, держит модель в памяти (`_model` глобально). Параметры подобраны под качество: `temperature=(0,0.2,...,1.0)` fallback, `compression_ratio_threshold=2.4`, `log_prob_threshold=-1.0`, `no_speech_threshold=0.6`, `condition_on_previous_text=True`, `beam_size=5`, `best_of=5`. Возвращает список `{start, end, text}` — секунды от начала аудио. Включён встроенный `vad_filter=True` (Silero VAD внутри faster-whisper) — отсекает тишину до обработки.
 
 - **`diarizer.py`** — `diarize(path, num_speakers)`. Грузит pyannote/speaker-diarization-3.1 (требует `HF_TOKEN` в env и принятых условий модели на HF). Переносит на CUDA если доступна. **Аудио читаем сами через `soundfile`** и передаём как `{waveform: tensor, sample_rate: int}` — torchcodec на Windows не работает со static-ffmpeg, поэтому обходим. Возвращает `{start, end, speaker}` где speaker = "SPEAKER_00", "SPEAKER_01"... `num_speakers` — необязательная подсказка, если известно точное число. В pyannote 4.x результат лежит в `.speaker_diarization` (а не на верхнем уровне).
 
@@ -72,7 +73,7 @@ cloudflared tunnel --url http://localhost:5000
     - `POST /api/chat` — вопрос-ответ по транскрипту. Принимает `{segments, speakerNames?, messages, question, language?}`. Промпт: системный + транскрипт + последние 10 сообщений из истории + новый вопрос. Возвращает `{job_id}`.
     - `GET /api/jobs/<job_id>` — статус задачи. Поля: `status` (`queued` | `processing` | `done` | `error`), `progress` (для transcribe — `converting/transcribing/diarizing/merging`), плюс результат при `done` (`segments` / `result` / `answer`) или `error` при ошибке.
   - **Sync** (быстрые операции):
-    - `POST /api/transcribe-chunk` — быстрый, только whisper. Возвращает `{"text": "..."}`. Используется фронтом для live-текста во время записи.
+    - `POST /api/transcribe-chunk` — быстрый, только whisper. Возвращает `{"text": "..."}`. **Фронтом сейчас не используется** (live-text отключён), но эндпоинт оставлен на случай возврата фичи.
     - `POST /api/title` — LLM-генерация заголовка (~5-10 с). JSON-вход `{text, language?}`, возвращает `{"title": "..."}`. Sync т.к. короткий.
     - `POST /api/tags` — LLM-генерация 2-4 тегов категории (всегда на английском для надёжной фильтрации). Sync, ~5-10 с. JSON-вход `{segments, speakerNames?}`, возвращает `{"tags": [...]}`. **Фронт не использует** пока (FEATURE_TAGS=false).
   - **Internals**:
@@ -93,9 +94,8 @@ cloudflared tunnel --url http://localhost:5000
 - **Markdown renderer** — собственный мини-парсер `renderMarkdown()` (~70 строк). Поддерживает: `#`/`##`/`###` headings, `**bold**`/`*italic*`/`_italic_`/` `code` `, `-`/`*` списки, `1.` нумерованные, `- [ ]`/`- [x]` task checkboxes (рендерятся как стилизованные чекбоксы с псевдоэлементами). Не нужно тащить marked.js.
 
 ### Запись
-- **Два параллельных MediaRecorder'а** на одном `dest.stream` (микс mic + getDisplayMedia через AudioContext):
-  - `chunkRecorder` стопается/перезапускается каждые `CHUNK_INTERVAL_MS = 3 мин` → каждый чанк уходит на `/api/transcribe-chunk` → текст накапливается в `liveTextParts`
-  - `fullRecorder` пишет всё непрерывно с `start(5000)` timeslice → на Стопе отправляется на `/api/transcribe` для финальной диаризации
+- **Один MediaRecorder** (`fullRecorder`) на `dest.stream` (микс mic + getDisplayMedia через AudioContext). `start(5000)` timeslice → `ondataavailable` срабатывает каждые 5 сек, каждый кусок пишется в IndexedDB (см. Audio safety net). На Стопе склеенный blob отправляется на `/api/transcribe` для финальной диаризации.
+- Во время записи UI ничего не показывает кроме статуса/таймера — live-текст был намеренно убран (создавал лишнюю GPU-нагрузку на ноуте во время созвона без реальной пользы).
 
 ### Tab keep-alive trics (важно для долгих созвонов с background-вкладкой)
 - **Silent audio playback** — на старте создаётся `OscillatorNode` с gain=0.0001, подключённый к `audioCtx.destination`. Браузер видит «играет звук» → не дискардит вкладку даже когда юзер на других окнах. Самый мощный трюк, без него Chrome убивает вкладку через ~5 минут в фоне.
@@ -155,13 +155,11 @@ cloudflared tunnel --url http://localhost:5000
 
 - **Модели держатся в памяти между запросами.** Первый вызов медленный (~10 сек загрузки), последующие быстрые. Не сбрасывать `_model` / `_pipeline` без причины.
 
-- **VRAM 8 GB на RTX 3070 впритык** для large-v3 + pyannote одновременно. Whisper large-v3 float16 ≈ 3 GB, pyannote ≈ 2 GB. Если упрётся — fallback на `WHISPER_MODEL=large-v3-turbo` (быстрее, чуть хуже) или `medium` (~3.5 GB, заметно хуже на UA/RU).
+- **VRAM 8 GB на RTX 3070** хватает с запасом для large-v3 + pyannote. Whisper large-v3 float16 ≈ 3 GB, pyannote ≈ 2 GB — суммарно ~5 GB, остаётся буфер. Если на другой машине упрётся — fallback на `WHISPER_MODEL=large-v3-turbo` (быстрее, чуть хуже) или `medium` (заметно хуже на UA/RU).
 
 - **Whisper параметры подобраны под качество, не скорость.** `temperature` с fallback от 0 до 1.0, `best_of=5`, `beam_size=5`, `condition_on_previous_text=True`. На длинных созвонах это даёт ~2-3x slowdown vs дефолтов. Не убирать без причины.
 
-- **Диаризация требует полное аудио целиком** — поэтому два MediaRecorder'а (см. Architecture). Метки спикеров между независимыми чанками не совпали бы. Не пытаться диаризовать каждый chunk отдельно.
-
-- **При первой /api/transcribe могут пройти несколько /api/transcribe-chunk параллельно** (Flask dev server однопоточный, но запросы могут перекрыться по идее). На практике это ок т.к. модели shared в памяти, GIL сериализует. Если переводить на gunicorn — `--workers 1` обязателен (модели не делятся между процессами через fork).
+- **Диаризация требует полное аудио целиком.** Метки спикеров между независимыми чанками не совпали бы. Не пытаться диаризовать chunk отдельно.
 
 - **Async jobs vs Cloudflare 100s timeout.** Cloudflare Quick Tunnel убивает запросы дольше 100 секунд → HTML 524 страница. Длинные операции (transcribe, generate, chat) переведены на async с polling — каждый GET /api/jobs быстрый, никогда не упирается. **Не возвращать назад в sync для этих эндпоинтов.**
 
