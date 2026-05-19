@@ -5,3 +5,4 @@ faster-whisper
 pyannote.audio
 soundfile
 requests
+modal

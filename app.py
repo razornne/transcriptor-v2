@@ -1,11 +1,13 @@
 """Flask backend для transcriptor-v2.
 
 Полный пайплайн: WebM аудио → faster-whisper → pyannote → merge → JSON со спикерами.
-Доп. эндпоинт /api/title использует локальную LLM через Ollama
-(http://localhost:11434) для генерации заголовка по транскрипту.
+Доп. эндпоинт /api/title использует LLM для генерации заголовка по транскрипту.
 
-CORS открыт по умолчанию — рассчитан на фронт на отдельном домене (Vercel)
-или localhost. Для прода настроить allowed origins через ENV.
+USE_MODAL=true → тяжёлый ML и LLM запускаются на Modal (облачный A10G).
+                  Flask становится тонким прокси, ноут не нужен для инференса.
+USE_MODAL не задан → локальный режим: faster-whisper + pyannote + Ollama на ноуте.
+
+CORS открыт по умолчанию — рассчитан на фронт на отдельном домене (Vercel).
 """
 import os
 import re
@@ -19,9 +21,17 @@ from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-from transcriber import transcribe
-from diarizer import diarize
-from merger import merge
+# ── Modal / Local mode switch ──────────────────────────────────
+load_dotenv()
+USE_MODAL = os.environ.get("USE_MODAL", "").lower() in ("1", "true", "yes")
+
+if USE_MODAL:
+    import modal as _modal
+    _transcriptor = _modal.Cls.from_name("transcriptor-v2", "Transcriptor")()
+else:
+    from transcriber import transcribe
+    from diarizer import diarize
+    from merger import merge
 
 
 # ── Async jobs registry ────────────────────────────────────────
@@ -155,8 +165,6 @@ def _webm_to_wav(webm_path: str) -> str:
     )
     return wav_path
 
-load_dotenv()
-
 RECORDINGS_DIR = os.path.join(os.path.dirname(__file__), "recordings")
 os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
@@ -193,7 +201,10 @@ def job_status_endpoint(job_id):
 
 
 def _ollama_generate(prompt: str, *, max_tokens: int = 60, temperature: float = 0.4, timeout: int = 60) -> str:
-    """Дёргаем локальную Ollama через её HTTP API."""
+    """LLM inference: Modal (USE_MODAL=true) или локальная Ollama."""
+    if USE_MODAL:
+        return _transcriptor.run_llm.remote(prompt, max_tokens=max_tokens, temperature=temperature)
+
     r = requests.post(
         f"{OLLAMA_URL}/api/generate",
         json={
@@ -576,26 +587,38 @@ def transcribe_endpoint():
     def worker():
         wav_path = None
         try:
-            _update_job(job_id, status="processing", progress="converting")
-            wav_path = _webm_to_wav(webm_path)
+            if USE_MODAL:
+                # ── Modal path: отправляем WebM в облако, получаем готовые сегменты
+                _update_job(job_id, status="processing", progress="transcribing")
+                with open(webm_path, "rb") as f:
+                    audio_bytes = f.read()
+                merged = _transcriptor.transcribe_full.remote(
+                    audio_bytes, language, num_speakers, prompt
+                )
+                _update_job(job_id, status="done", segments=merged or [])
+            else:
+                # ── Local path: весь пайплайн на ноуте
+                _update_job(job_id, status="processing", progress="converting")
+                wav_path = _webm_to_wav(webm_path)
 
-            _update_job(job_id, progress="transcribing")
-            segments = transcribe(wav_path, language=language, prompt=prompt)
+                _update_job(job_id, progress="transcribing")
+                segments = transcribe(wav_path, language=language, prompt=prompt)
 
-            if not segments:
-                _update_job(job_id, status="done", segments=[])
-                return
+                if not segments:
+                    _update_job(job_id, status="done", segments=[])
+                    return
 
-            _update_job(job_id, progress="diarizing")
-            speaker_turns = diarize(wav_path, num_speakers=num_speakers)
+                _update_job(job_id, progress="diarizing")
+                speaker_turns = diarize(wav_path, num_speakers=num_speakers)
 
-            _update_job(job_id, progress="merging")
-            merged = merge(segments, speaker_turns)
+                _update_job(job_id, progress="merging")
+                merged = merge(segments, speaker_turns)
 
-            _update_job(job_id, progress="correcting")
-            merged = _llm_correct_segments(merged, language)
+                _update_job(job_id, progress="correcting")
+                merged = _llm_correct_segments(merged, language)
 
-            _update_job(job_id, status="done", segments=merged)
+                _update_job(job_id, status="done", segments=merged)
+
         except Exception as e:
             _update_job(job_id, status="error", error=f"processing failed: {e}")
         finally:
