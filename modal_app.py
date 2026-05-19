@@ -67,6 +67,16 @@ image = (
     .add_local_python_source("merger")
 )
 
+# Отдельный лёгкий image для Flask-обёртки (без torch/CUDA) — экономит cold start.
+# Flask тут ничего не считает, только шлёт .spawn() в основной Transcriptor.
+web_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install("flask", "flask-cors", "python-dotenv", "requests")
+    .add_local_python_source("app")
+    # Шаблон index.html и статика подгружаются как файлы (Flask их ищет рядом с app.py)
+    .add_local_dir("templates", remote_path="/root/templates")
+)
+
 # Language prompts — зеркало из transcriber.py
 _LANG_PROMPTS: dict[str, str] = {
     "ru": (
@@ -372,3 +382,29 @@ class Transcriptor:
 
         response = self.llm_tokenizer.decode(output[0][input_len:], skip_special_tokens=True)
         return response.strip()
+
+
+# ── Flask web endpoint ───────────────────────────────────────────
+#
+# Оборачиваем Flask-приложение в Modal как WSGI app. Получаем публичный
+# URL вида https://razornne--transcriptor-v2-flask-app.modal.run
+# Кастомный домен api.skriptly.io привязывается через Modal Dashboard.
+#
+# Контейнер лёгкий (CPU, без torch) — мгновенный cold start.
+# Внутри Flask делает .spawn() в Transcriptor (см. app.py).
+
+@app.function(
+    image=web_image,
+    secrets=[hf_secret],         # USE_MODAL и т.п. — через переменные среды
+    timeout=120,                 # на сам HTTP запрос (spawn моментален)
+    scaledown_window=60,         # держим тёплым 1 мин между запросами
+    min_containers=0,            # скейл в ноль когда idle = бесплатно
+)
+@modal.wsgi_app()
+def flask_app():
+    """Публичный HTTP-endpoint. Flask внутри использует Modal SDK
+    чтобы спавнить тяжёлый ML на отдельных GPU-контейнерах.
+    """
+    os.environ["USE_MODAL"] = "true"  # принудительно включаем Modal-режим
+    from app import app as _flask
+    return _flask
