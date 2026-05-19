@@ -3,14 +3,16 @@
 Алгоритм:
 1. Для каждого Whisper-сегмента находим перекрывающийся pyannote-турн
    с наибольшим overlap → присваиваем этот speaker.
-2. Smoothing: короткий сегмент (< MIN_SEGMENT_DURATION_S), у которого
-   сосед слева и справа — один и тот же другой спикер, переназначаем
-   на их спикера. Это лечит случаи когда "Это дурак" (1 сек) прилипает
-   не к тому спикеру из-за overlap-границы.
+2. Smoothing (опционально): короткий сегмент (< SMOOTH_THRESHOLD_S),
+   зажатый между двумя одинаковыми спикерами, переназначается на их
+   спикера. По умолчанию отключено (0) — pyannote-3.1 достаточно точен.
+   Включить можно через env SMOOTH_THRESHOLD_S=1.0 если нужно.
 3. Склеиваем подряд идущие сегменты одного спикера в блоки.
 """
+import os
 
-MIN_SEGMENT_DURATION_S = 2.0
+# 0 = выключено (доверяем pyannote как есть). Любое >0 = порог в секундах.
+SMOOTH_THRESHOLD_S = float(os.environ.get("SMOOTH_THRESHOLD_S", "0"))
 
 
 def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -41,14 +43,16 @@ def _assign_initial(transcript_segments: list[dict], speaker_turns: list[dict]) 
 def _smooth(labeled: list[dict]) -> list[dict]:
     """Короткий сегмент, зажатый между двумя одинаковыми спикерами,
     переназначается на их спикера. Лечит мелкие ошибки диаризации.
+
+    Управляется SMOOTH_THRESHOLD_S (env). 0 = выключено.
     """
-    if len(labeled) < 3:
+    if SMOOTH_THRESHOLD_S <= 0 or len(labeled) < 3:
         return labeled
 
     for i in range(1, len(labeled) - 1):
         cur      = labeled[i]
         duration = cur["end"] - cur["start"]
-        if duration >= MIN_SEGMENT_DURATION_S:
+        if duration >= SMOOTH_THRESHOLD_S:
             continue
         prev_sp = labeled[i - 1]["speaker"]
         next_sp = labeled[i + 1]["speaker"]
