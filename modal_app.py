@@ -331,25 +331,32 @@ class Transcriptor:
         """Внутренний LLM inference через transformers."""
         import torch
 
-        # Chat template (aya-expanse и qwen2.5 оба его поддерживают)
+        # В transformers 5.x apply_chat_template возвращает BatchEncoding (dict),
+        # а не тензор — нужно передавать как **kwargs в generate().
         messages = [{"role": "user", "content": prompt}]
         try:
-            inputs = self.llm_tokenizer.apply_chat_template(
+            result = self.llm_tokenizer.apply_chat_template(
                 messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
-            ).to("cuda")
+            )
         except Exception:
-            # Fallback если модель не поддерживает chat template
-            inputs = self.llm_tokenizer(prompt, return_tensors="pt").input_ids.to("cuda")
+            result = self.llm_tokenizer(prompt, return_tensors="pt")
+
+        # Нормализуем: всегда работаем как BatchEncoding-dict на cuda
+        if isinstance(result, torch.Tensor):
+            encoded = {"input_ids": result.to("cuda")}
+        else:
+            encoded = {k: v.to("cuda") for k, v in result.items()}
+
+        input_len = encoded["input_ids"].shape[-1]
 
         with torch.no_grad():
             output = self.llm_model.generate(
-                inputs if isinstance(inputs, torch.Tensor) else inputs,
+                **encoded,
                 max_new_tokens=max_tokens,
-                temperature=max(temperature, 1e-6),
                 do_sample=temperature > 0,
+                temperature=max(temperature, 1e-6) if temperature > 0 else 1.0,
                 pad_token_id=self.llm_tokenizer.eos_token_id,
             )
 
-        input_len = inputs.shape[-1] if hasattr(inputs, "shape") else inputs["input_ids"].shape[-1]
-        response  = self.llm_tokenizer.decode(output[0][input_len:], skip_special_tokens=True)
+        response = self.llm_tokenizer.decode(output[0][input_len:], skip_special_tokens=True)
         return response.strip()
