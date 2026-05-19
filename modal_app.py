@@ -129,9 +129,12 @@ class Transcriptor:
 
         hf_token = os.environ["HF_TOKEN"]
 
-        print("[modal] loading whisper large-v3...", flush=True)
+        # large-v3-turbo — дефолт в Modal: ~3-4x быстрее large-v3, качество сопоставимо.
+        # Переопределить: WHISPER_MODEL=large-v3 в Modal Secrets или .env
+        whisper_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+        print(f"[modal] loading whisper {whisper_model}...", flush=True)
         self.whisper = WhisperModel(
-            "large-v3",
+            whisper_model,
             device="cuda",
             compute_type="float16",
             download_root=f"{MODELS_DIR}/whisper",
@@ -216,8 +219,8 @@ class Transcriptor:
                 wav_path,
                 language=language,
                 initial_prompt=effective_prompt,
-                beam_size=5,
-                best_of=5,
+                beam_size=3,
+                best_of=3,
                 temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
@@ -278,7 +281,7 @@ class Transcriptor:
             return segments
 
         instruction = _CORRECTION_INSTRUCTIONS.get(language or "", _CORRECTION_INSTRUCTIONS["en"])
-        batch_size  = 40
+        batch_size  = 60
         corrected   = [dict(s) for s in segments]
 
         for batch_start in range(0, len(segments), batch_size):
