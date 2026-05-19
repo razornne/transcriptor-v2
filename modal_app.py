@@ -37,9 +37,14 @@ MODELS_DIR = "/models"
 # Modal Secret с HF_TOKEN (создать: modal secret create transcriptor-secrets HF_TOKEN=hf_...)
 hf_secret = modal.Secret.from_name("transcriptor-secrets")
 
-# Образ контейнера — собирается один раз, кэшируется Modal'ом
+# Образ контейнера — собирается один раз, кэшируется Modal'ом.
+# Используем CUDA 12.4 base image чтобы libcublas.so.12 и libcudnn были
+# доступны системно — без этого torch/ctranslate2 падают с "library not found".
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04",
+        add_python="3.11",
+    )
     .apt_install("ffmpeg")
     .pip_install(
         # Whisper
@@ -47,10 +52,10 @@ image = (
         # Pyannote (4.x API: result.speaker_diarization)
         "pyannote.audio",
         "soundfile",
-        # Torch — Modal ставит CUDA-совместимую версию автоматически для GPU
+        # Torch — ставим явно cu124 чтобы совпало с base image
         "torch",
         "torchaudio",
-        # LLM (aya-expanse через transformers + 4-bit quantization)
+        # LLM (transformers + 4-bit quantization)
         "transformers>=4.45.0",
         "accelerate",
         "bitsandbytes",
