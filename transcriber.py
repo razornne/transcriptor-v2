@@ -107,9 +107,18 @@ def transcribe(path: str, language: str | None = None, prompt: str | None = None
             "min_silence_duration_ms": 500,
             "speech_pad_ms": 200,
         },
+        word_timestamps=True,  # для word-level alignment в merger
     )
     return [
-        {"start": s.start, "end": s.end, "text": s.text.strip()}
+        {
+            "start": s.start,
+            "end":   s.end,
+            "text":  s.text.strip(),
+            "words": [
+                {"start": w.start, "end": w.end, "word": w.word}
+                for w in (s.words or [])
+            ],
+        }
         for s in segments_iter
         if s.text.strip()
     ]
