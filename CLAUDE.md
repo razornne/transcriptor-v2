@@ -34,7 +34,11 @@ Modal flask_app (CPU, scale-to-zero)
 Modal Transcriptor (A10G GPU, scaledown_window=300)
    - faster-whisper large-v3-turbo
    - pyannote-3.1
-   - Qwen2.5-7B-Instruct (4-bit)
+   - Qwen2.5-7B-Instruct (4-bit) — title, LLM correction
+
+Modal gemini_generate (CPU, scaledown_window=60)
+   - Gemini 2.5 Pro REST API — summary, action items
+   - Полный транскрипт без обрезки (контекст 2M токенов)
 
 Supabase Postgres
    - auth.users (Google OAuth / Email magic link)
@@ -48,8 +52,9 @@ Supabase Postgres
 - **razornne--transcriptor-v2-flask-app.modal.run** — Modal endpoint напрямую
 
 **Стек:**
-- **Modal** — serverless GPU. Два контейнера в одном app (`transcriptor-v2`):
-  - `Transcriptor` cls — A10G GPU, whisper large-v3-turbo + pyannote-3.1 + Qwen2.5-7B-Instruct (4-bit)
+- **Modal** — serverless GPU. Три контейнера в одном app (`transcriptor-v2`):
+  - `Transcriptor` cls — A10G GPU, whisper large-v3-turbo + pyannote-3.1 + Qwen2.5-7B-Instruct (4-bit). Используется для транскрипции, диаризации, title, LLM-коррекции
+  - `gemini_generate` fn — лёгкий CPU контейнер, вызывает Gemini 2.5 Pro REST API для summary/action items (Qwen на длинной аналитике сильно слабее)
   - `flask_app` wsgi — лёгкий CPU контейнер, тонкий прокси
 - **Supabase** — Auth (Google + magic link) + Postgres (история транскриптов, RLS)
 - **Vercel** — Next.js landing на `skriptly.io`, rewrites для `/app` и `/api/*` (fallback)
@@ -63,7 +68,8 @@ Supabase Postgres
 5. Фронт polling'ует `/api/jobs/<job_id>` каждые 2с → `FunctionCall.from_id(id).get(timeout=0)`
 6. На done — segments возвращаются, рендерятся
 7. Фронт сохраняет в Supabase `public.transcripts` через **raw fetch** (Supabase JS PostgrestClient зависает в нашей среде)
-8. Параллельно `/api/title` генерирует заголовок через `run_llm.spawn(...)`
+8. Параллельно `/api/title` генерирует заголовок через `run_llm.spawn(...)` (Qwen)
+9. По кнопке Summary / Action items — `/api/generate` спавнит `gemini_generate.spawn(...)` (Gemini 2.5 Pro), polling через тот же `/api/jobs/<id>` механизм
 
 ## Файлы
 
@@ -72,12 +78,13 @@ Supabase Postgres
   - `image` — GPU образ (CUDA 12.4 + faster-whisper + pyannote + transformers + bitsandbytes)
   - `web_image` — лёгкий CPU образ (Flask + flask-cors + pyjwt[crypto] + requests)
   - `Transcriptor` (cls, A10G) — `load_models()` грузит whisper / pyannote / Qwen в `@modal.enter()`. Методы `transcribe_full(audio_bytes, language, num_speakers, prompt)` и `run_llm(prompt, max_tokens, temperature)`.
+  - `gemini_generate(prompt, max_output_tokens, temperature)` — CPU функция на `web_image`, POST в `generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent`. Модель задана в `GEMINI_MODEL` (сейчас `gemini-2.5-pro`). Возвращает текст или бросает `RuntimeError`.
   - `flask_app()` — `@modal.wsgi_app()` декоратор, импортирует `app.py` и отдаёт Flask instance. Принудительно выставляет `USE_MODAL=true`.
 
 - **`app.py`** — Flask backend. Эндпоинты:
   - `GET /api/health` — без auth, для проверки
   - `POST /api/transcribe` (auth) — принимает audio, `_transcriptor.transcribe_full.spawn(...)` → `{job_id: "t_<id>"}`
-  - `POST /api/generate` (auth) — LLM template processing → `{job_id: "g_<id>"}`
+  - `POST /api/generate` (auth) — LLM template processing → `{job_id: "g_<id>"}`. Для `template in {"summary", "actions"}` спавнит `gemini_generate` (Gemini 2.5 Pro, без обрезки текста). Иначе — Qwen через `run_llm.spawn(...)` с обрезкой до 12k символов
   - `POST /api/chat` (auth) — вопрос-ответ по транскрипту → `{job_id: "c_<id>"}`
   - `GET /api/jobs/<job_id>` (auth) — `FunctionCall.from_id(...).get(timeout=0)`. Префикс job_id определяет какое поле возвращать (`segments` / `result` / `answer`)
   - `POST /api/title` (auth, sync) — короткий LLM запрос ~5-10c
@@ -139,8 +146,13 @@ modal deploy modal_app.py
 
 # Frontend (Vercel) автоматом при git push в main
 
-# Modal Secret c HF_TOKEN и SUPABASE_URL
-modal secret create transcriptor-secrets HF_TOKEN=hf_... SUPABASE_URL=https://bmonakhktbaliwgobrxv.supabase.co --force
+# Modal Secret — все ключи разом (--force ЗАМЕНЯЕТ содержимое секрета целиком,
+# а не мерджит — всегда указывай все три)
+modal secret create transcriptor-secrets `
+  HF_TOKEN=hf_... `
+  SUPABASE_URL=https://bmonakhktbaliwgobrxv.supabase.co `
+  GEMINI_API_KEY=AIza... `
+  --force
 
 # ── Локальная разработка (без Modal) ──────────────────────────
 python -m venv venv
@@ -264,6 +276,15 @@ python app.py
 - **`?error=...` в URL после неудачного Google OAuth** — Supabase JS не очищает URL, остаётся как параметр. Не критично, но user видит. Идея для cleanup: `history.replaceState({}, '', window.location.pathname)` после успешного `SIGNED_IN`.
 - **OAuth consent screen в testing mode** — только добавленные test users могут логиниться через Google. Для широкой аудитории — Publish app в Google Cloud Console.
 - **Supabase magic link rate limit** — 4 в час на default SMTP. Custom SMTP (Resend / SendGrid) снимает лимит.
+
+### Gemini для summary / action items
+- **`/api/generate` маршрутизация по шаблону.** `summary` и `actions` идут в `gemini_generate` (Gemini 2.5 Pro). Все остальные — в Qwen на A10G. Список переключаемых шаблонов: `GEMINI_TEMPLATES` в `app.py`.
+- **Полный транскрипт без обрезки** для Gemini-пути. У 2.5 Pro контекст 2M токенов — часовой созвон (~50-80k символов) влезает целиком. Для Qwen-пути обрезка `[:12000]` сохранена (7B-4bit деградирует на длинном контексте).
+- **Промпты в `GENERATE_TEMPLATES`** написаны под Gemini Pro: длинные структурированные с адаптивным набором секций, жёсткими анти-галлюцинационными правилами, инструкциями по глубине пропорциональной длине транскрипта. **Не сокращай промпты «для краткости»** — это сильно ухудшает результат.
+- **`GEMINI_MODEL` в `modal_app.py`** — одна строка для смены модели. Pro даёт лучшее качество, Flash в ~4x дешевле. Free tier Google Gemini API не пускает Pro (`limit: 0`) — нужен billing в Google Cloud Console.
+- **`GEMINI_API_KEY` в Modal Secret `transcriptor-secrets`.** Ключ от AI Studio (aistudio.google.com).
+- **Цены на 2026-05 (с billing):** Pro $1.25 / $10 за MTok (input/output) → ~$0.06 за summary часового созвона. Flash $0.30 / $2.50 → ~$0.015.
+- **Ошибки Gemini проходят через Modal FunctionCall как `RuntimeError`** — фронт получает их в `error` поле job status'а как обычно. Safety filter блокировки → "gemini: no candidates (feedback=...)". Rate limit → "gemini 429: ...".
 
 ### LLM language hints
 - **При autodetect фронт прислал пустую строку — бэк сам детектит язык.** `_detect_transcript_language()` в app.py считает кириллицу vs латиницу + украинские специфичные буквы (`іїєґ`) → возвращает `uk`/`ru`/`en`. Используется в `/api/title`, `/api/chat`, `/api/generate`. Без этого Qwen2.5 регулярно сваливался в английский, даже когда транскрипт был украинский. Тэги (`/api/tags`) ВСЕГДА на английском намеренно — для надёжной фильтрации across languages.

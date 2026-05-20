@@ -398,6 +398,85 @@ class Transcriptor:
         return response.strip()
 
 
+# ── External LLM (Gemini) ────────────────────────────────────────
+#
+# Лёгкая CPU-функция: тянет Gemini 2.5 Pro для длинных аналитических
+# задач (summary / action items). Qwen на A10G справляется хуже —
+# слабее на длинных контекстах и многомерной аналитике.
+#
+# Spawn-pattern такой же как у Transcriptor.run_llm: app.py делает
+# .spawn() и сразу возвращает job_id фронту.
+
+GEMINI_MODEL = "gemini-2.5-pro"
+GEMINI_ENDPOINT = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+)
+
+
+@app.function(
+    image=web_image,            # тот же лёгкий CPU образ что и flask_app
+    secrets=[hf_secret],        # GEMINI_API_KEY лежит в общем секрете
+    timeout=300,                # Gemini Pro на длинном контексте ~30-120с
+    scaledown_window=60,
+    min_containers=0,
+)
+def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: float = 0.3) -> str:
+    """Вызов Gemini 2.5 Pro REST API. Возвращает сгенерированный текст.
+    Бросает RuntimeError с человекочитаемым сообщением при ошибке —
+    оно проходит через Modal FunctionCall и доедет до фронта.
+    """
+    import os
+    import requests
+
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not configured")
+
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_output_tokens,
+        },
+    }
+
+    try:
+        resp = requests.post(
+            GEMINI_ENDPOINT,
+            params={"key": api_key},
+            json=body,
+            timeout=240,
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f"gemini request failed: {e}") from e
+
+    if resp.status_code != 200:
+        # Gemini кладёт детали в JSON.error.message
+        try:
+            err = resp.json().get("error", {}).get("message") or resp.text[:300]
+        except Exception:
+            err = resp.text[:300]
+        raise RuntimeError(f"gemini {resp.status_code}: {err}")
+
+    data = resp.json()
+    candidates = data.get("candidates") or []
+    if not candidates:
+        # Скорее всего сработал safety filter — детали в promptFeedback
+        feedback = data.get("promptFeedback") or {}
+        raise RuntimeError(f"gemini: no candidates (feedback={feedback})")
+
+    cand = candidates[0]
+    # finishReason: STOP / MAX_TOKENS / SAFETY / RECITATION / OTHER
+    finish = cand.get("finishReason", "")
+    parts = (cand.get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts).strip()
+
+    if not text:
+        raise RuntimeError(f"gemini: empty response (finishReason={finish})")
+
+    return text
+
+
 # ── Flask web endpoint ───────────────────────────────────────────
 #
 # Оборачиваем Flask-приложение в Modal как WSGI app. Получаем публичный
