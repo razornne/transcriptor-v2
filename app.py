@@ -169,52 +169,117 @@ def _detect_transcript_language(segments_or_text) -> str | None:
 
 GENERATE_TEMPLATES = {
     "summary": (
-        "You are summarizing a meeting transcript. {lang_hint} "
-        "Be factual and concise. Write in markdown.\n\n"
-        "Structure:\n"
-        "- A 1-2 sentence topic at the very top (no heading).\n"
-        "- `## Key points` — 3-7 bullet points.\n"
-        "- `## Decisions` — bullet list, or 'No explicit decisions.' if none.\n\n"
-        "Transcript:\n{text}"
+        "You are a senior analyst writing a detailed written report on a meeting "
+        "for someone who did not attend but needs to understand what happened "
+        "deeply enough to act on it. This is NOT a TL;DR — it is a thorough "
+        "analytical document.\n\n"
+        "{lang_hint} Preserve speaker names exactly as given in the transcript "
+        "(e.g. [Eli], [Speaker 1]). Write in clean markdown.\n\n"
+        "==== HARD RULES ====\n"
+        "1. Use ONLY information that is actually present in the transcript. "
+        "Do not invent names, numbers, dates, companies, or facts. If something "
+        "is unclear from the transcript, write 'unclear from context' rather "
+        "than guessing.\n"
+        "2. When you describe a participant's position, attribute it explicitly "
+        "(e.g. 'Speaker 2 emphasized that...', 'The client argued...').\n"
+        "3. Distinguish between three different things and never mix them:\n"
+        "   - DECISIONS: things that were explicitly agreed to happen.\n"
+        "   - IDEAS / PROPOSALS: things someone suggested but were not agreed.\n"
+        "   - FACTS / POSITIONS: what people said about the current state.\n"
+        "4. Prefer concrete detail over generic phrases. Replace empty "
+        "formulations like 'the team discussed the issue' with what was "
+        "actually discussed and where it landed.\n"
+        "5. Quote short verbatim phrases (1-10 words) when they capture an "
+        "important position especially well.\n\n"
+        "==== ADAPTIVE STRUCTURE ====\n"
+        "Choose 4-8 of the following sections — only the ones relevant to THIS "
+        "meeting. Do not force sections that don't apply. Do not invent "
+        "sections beyond this list. Order them to tell the story of the "
+        "meeting clearly.\n\n"
+        "- **Контекст / Context** (always include): 1-3 sentences — what kind "
+        "of meeting, who participated, what was the purpose.\n"
+        "- **Основні теми обговорення / Main topics**: narrative paragraphs "
+        "(not just bullets) covering what was actually discussed and what came "
+        "out of each topic.\n"
+        "- **Позиції сторін / Positions of the parties**: include when "
+        "different participants had distinct views. Give each side its own "
+        "sub-section with their reasoning.\n"
+        "- **Виявлені проблеми / Problems identified**: concrete issues that "
+        "surfaced, with enough detail that the reader understands the root "
+        "cause, not just the symptom.\n"
+        "- **Рішення та домовленості / Decisions and agreements**: ONLY things "
+        "explicitly agreed in the meeting. If none, omit this section.\n"
+        "- **Ідеї та пропозиції / Ideas and proposals**: suggestions that were "
+        "raised but not formally agreed. Attribute to whoever proposed them.\n"
+        "- **Що можна покращити / What can be improved**: include only if the "
+        "meeting itself surfaced recommendations for improvement (e.g. process "
+        "feedback, retrospective points).\n"
+        "- **Відкриті питання / Open questions**: things left unresolved that "
+        "need follow-up.\n"
+        "- **Подальші кроки та статус / Next steps and status**: concrete next "
+        "actions and overall status (e.g. 'project continues', 'cooperation "
+        "ends', 'follow-up meeting scheduled').\n\n"
+        "==== DEPTH ====\n"
+        "Target length scales with transcript length:\n"
+        "- Short meeting (<15 min): 300-600 words.\n"
+        "- Medium meeting (15-45 min): 700-1500 words.\n"
+        "- Long meeting (>45 min): 1500-3000 words.\n"
+        "Do not pad. But do not under-report either — a 1-hour meeting should "
+        "not collapse into 5 bullet points.\n\n"
+        "==== STYLE ====\n"
+        "- Use `## Heading` for main sections, `### Sub-heading` for sides of "
+        "a position or sub-topics.\n"
+        "- Use bullet lists inside sections where appropriate, but lead "
+        "complex sections with a 1-2 sentence narrative paragraph before the "
+        "bullets.\n"
+        "- Bold (`**word**`) for key terms, names, and numbers worth scanning.\n"
+        "- No emoji. No 'I' or 'you' — write in third person, analytical voice.\n\n"
+        "==== TRANSCRIPT ====\n"
+        "{text}"
     ),
     "actions": (
-        "Extract action items from this meeting transcript. {lang_hint} "
-        "Use markdown checklist format:\n\n"
-        "- [ ] Task description — @speaker (if mentioned) — by date (if mentioned)\n\n"
-        "Only list items where someone clearly committed to doing something. "
-        "If no clear actions, reply with a single line: 'No action items identified.'\n\n"
-        "Transcript:\n{text}"
-    ),
-    "sales_call": (
-        "This is a sales call transcript. {lang_hint} "
-        "Write a structured report in markdown:\n\n"
-        "## Client\nBrief description of the prospect.\n\n"
-        "## Pain points\nBullet list of stated pain points or challenges.\n\n"
-        "## Solution discussed\nWhat was proposed.\n\n"
-        "## Objections\nAny hesitations or concerns raised.\n\n"
-        "## Next steps\n- [ ] Concrete next action — @owner — by date\n\n"
-        "Transcript:\n{text}"
-    ),
-    "one_on_one": (
-        "This is a 1-on-1 meeting transcript. {lang_hint} "
-        "Write structured notes in markdown:\n\n"
-        "## What's going well\nBullet list.\n\n"
-        "## Concerns / blockers\nBullet list.\n\n"
-        "## Feedback exchanged\nBrief summary.\n\n"
-        "## Action items\n- [ ] item — @owner\n\n"
-        "Transcript:\n{text}"
-    ),
-    "standup": (
-        "This is a daily stand-up transcript. {lang_hint} "
-        "For each speaker who participated, write a section in markdown:\n\n"
-        "### @SpeakerName\n"
-        "- **Yesterday:** what they did\n"
-        "- **Today:** what they plan\n"
-        "- **Blockers:** what's blocking them (or 'none')\n\n"
-        "Skip speakers who didn't give an update.\n\n"
-        "Transcript:\n{text}"
+        "You are extracting action items from a meeting transcript. "
+        "{lang_hint} Preserve speaker names exactly as given.\n\n"
+        "==== WHAT COUNTS AS AN ACTION ITEM ====\n"
+        "An action item is a CONCRETE TASK someone is going to do as a result "
+        "of this meeting. Look for explicit commitments:\n"
+        "- 'I will ...', 'We agreed to ...', 'Let's ...', 'Я зроблю...', "
+        "'Давайте...', 'Нужно сделать...', 'До п'ятниці я...'.\n"
+        "- Tasks assigned to a specific person, even if not by themselves: "
+        "'Sasha will draft the brief'.\n\n"
+        "DO NOT include:\n"
+        "- General ideas or proposals that were not agreed ('we could try X').\n"
+        "- Topics that were merely discussed without a commitment.\n"
+        "- Things that already happened.\n\n"
+        "==== OUTPUT FORMAT ====\n"
+        "Markdown checklist. One line per action:\n\n"
+        "`- [ ] {{task}} — @{{owner}} — by {{deadline}}`\n\n"
+        "Rules:\n"
+        "- Write each task as a clear imperative ('Send the updated brief to "
+        "the client', not 'brief').\n"
+        "- `@{{owner}}` = the speaker's name (or 'team' if unassigned). Omit "
+        "the `@owner` segment entirely if it's truly unclear from the "
+        "transcript — do NOT guess.\n"
+        "- `by {{deadline}}` only if a specific deadline was stated. Omit the "
+        "`— by ...` segment entirely if not. Never invent dates.\n"
+        "- If there are more than 3 actions for the same owner, group them "
+        "under a `### @Owner` sub-heading instead of repeating the `@owner` "
+        "suffix on each line.\n"
+        "- Order actions by importance / urgency, not by when they were "
+        "mentioned in the meeting.\n\n"
+        "==== IF NOTHING ====\n"
+        "If the meeting genuinely produced no concrete commitments, reply "
+        "with a single line in the target language, e.g. "
+        "'Конкретних action items не зафіксовано.' / "
+        "'No concrete action items were committed to.'\n\n"
+        "==== TRANSCRIPT ====\n"
+        "{text}"
     ),
 }
+
+# Шаблоны которые идут через Gemini 2.5 Pro (для качества аналитики).
+# Остальные (если появятся в будущем) — через локальный Qwen.
+GEMINI_TEMPLATES = {"summary", "actions"}
 
 
 def _format_segments_for_llm(segments: list[dict], speaker_names: dict[str, str] | None = None) -> str:
@@ -667,10 +732,26 @@ def generate_endpoint():
     lang_hint = LANG_HINTS.get(language, LANG_HINT_DEFAULT)
 
     speaker_names = data.get("speakerNames") or {}
-    text = _format_segments_for_llm(segments, speaker_names)[:12000]
+    full_text = _format_segments_for_llm(segments, speaker_names)
+
+    use_gemini = USE_MODAL and template_name in GEMINI_TEMPLATES
+
+    # Gemini 2.5 Pro: контекст 2M токенов, влезает любой созвон без обрезки.
+    # Qwen 7B на A10G и локальный Ollama — режем до 12k символов, иначе деградирует.
+    text = full_text if use_gemini else full_text[:12000]
     prompt = GENERATE_TEMPLATES[template_name].format(text=text, lang_hint=lang_hint)
 
-    # Modal path: spawn LLM напрямую
+    # Gemini-путь для summary/actions: внешний LLM, отдельная Modal функция.
+    if use_gemini:
+        try:
+            gemini_fn = _modal.Function.from_name("transcriptor-v2", "gemini_generate")
+            call = gemini_fn.spawn(prompt, max_output_tokens=8000, temperature=0.3)
+        except Exception as e:
+            return jsonify({"error": f"gemini spawn failed: {e}"}), 502
+        return jsonify({"job_id": JOB_PREFIX_GENERATE + call.object_id, "status": "queued"})
+
+    # Modal path с Qwen: для шаблонов вне GEMINI_TEMPLATES (сейчас не используется,
+    # но оставлено на случай возврата лёгких шаблонов).
     if USE_MODAL:
         try:
             call = _transcriptor.run_llm.spawn(prompt, max_tokens=800, temperature=0.5)
@@ -684,7 +765,7 @@ def generate_endpoint():
     def worker():
         try:
             _update_local_job(job_id, status="processing", progress="generating")
-            result = _ollama_generate(prompt, max_tokens=800, temperature=0.5, timeout=180)
+            result = _ollama_generate(prompt, max_tokens=2000, temperature=0.3, timeout=300)
             _update_local_job(job_id, status="done", result=result.strip())
         except requests.exceptions.ConnectionError:
             _update_local_job(job_id, status="error", error="ollama unreachable (is it running?)")

@@ -1065,12 +1065,6 @@
     <div class="ai-toolbar">
       <button class="ai-btn" data-template="summary">Summary</button>
       <button class="ai-btn" data-template="actions">Action items</button>
-      <select id="aiTemplateSelect" class="ai-template-select">
-        <option value="">More templates…</option>
-        <option value="sales_call">Sales call</option>
-        <option value="one_on_one">1-on-1</option>
-        <option value="standup">Stand-up</option>
-      </select>
     </div>
     <div id="aiResults"></div>
   </div>
@@ -1202,7 +1196,6 @@ const notesSection  = document.getElementById('notesSection');
 const notesArea     = document.getElementById('notesArea');
 const aiSection     = document.getElementById('aiSection');
 const aiResultsEl   = document.getElementById('aiResults');
-const aiTemplateSelect = document.getElementById('aiTemplateSelect');
 const chatSection   = document.getElementById('chatSection');
 const chatMessagesEl = document.getElementById('chatMessages');
 const chatInput     = document.getElementById('chatInput');
@@ -1210,11 +1203,8 @@ const chatSendBtn   = document.getElementById('chatSendBtn');
 const chatClearBtn  = document.getElementById('chatClearBtn');
 
 const TEMPLATE_LABELS = {
-  summary:    'Summary',
-  actions:    'Action items',
-  sales_call: 'Sales call',
-  one_on_one: '1-on-1',
-  standup:    'Stand-up',
+  summary: 'Summary',
+  actions: 'Action items',
 };
 
 // ── Theme toggle ───────────────────────────────────────────────
@@ -1778,7 +1768,7 @@ function segmentsToMarkdown(segments) {
   }
 
   // AI-результаты — в порядке, добавляем секциями
-  const order = ['summary', 'actions', 'sales_call', 'one_on_one', 'standup'];
+  const order = ['summary', 'actions'];
   order.forEach(template => {
     const result = currentAIResults[template];
     if (result && result !== '__loading__') {
@@ -2761,7 +2751,7 @@ async function runAI(template) {
 
 function renderAIResults() {
   aiResultsEl.innerHTML = '';
-  const order = ['summary', 'actions', 'sales_call', 'one_on_one', 'standup'];
+  const order = ['summary', 'actions'];
   order.forEach(template => {
     const result = currentAIResults[template];
     if (result === undefined) return;
@@ -2830,11 +2820,6 @@ function renderAIResults() {
 // Кнопки AI-toolbar
 aiSection.querySelectorAll('.ai-btn').forEach(btn => {
   btn.addEventListener('click', () => runAI(btn.dataset.template));
-});
-aiTemplateSelect.addEventListener('change', () => {
-  const t = aiTemplateSelect.value;
-  aiTemplateSelect.value = '';
-  if (t) runAI(t);
 });
 
 // ── Chat with transcript ─────────────────────────────────────
