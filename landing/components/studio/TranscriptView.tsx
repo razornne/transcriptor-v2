@@ -1,0 +1,64 @@
+"use client";
+import type { Segment } from "@/lib/studio/mock-data";
+
+const SPEAKER_COLORS = ["var(--s-spk-1)", "var(--s-spk-2)", "var(--s-spk-3)", "var(--s-spk-4)"];
+
+// Чат-стиль транскрипта со speaker chips слева
+
+export function TranscriptView({
+  segments,
+  speakerNames,
+  liveLast = false,
+}: {
+  segments: Segment[];
+  speakerNames: Record<string, string>;
+  liveLast?: boolean;          // последняя строка с мигающим курсором (Live)
+}) {
+  // Уникальные raw-метки → индекс цвета (стабильный по очерёдности)
+  const uniqueRaw = Array.from(new Set(segments.map((s) => s.speaker)));
+  const colorIdx = (raw: string) => uniqueRaw.indexOf(raw);
+
+  return (
+    <div className="s-transcript">
+      {segments.map((seg, i) => {
+        const isLast = i === segments.length - 1;
+        const display = speakerNames[seg.speaker] ?? defaultSpeakerLabel(seg.speaker);
+        const idx = colorIdx(seg.speaker);
+        const color = SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
+
+        return (
+          <div className="s-tx-line" key={i}>
+            <span className="s-tx-avatar" style={{ background: color }}>
+              {idx + 1}
+            </span>
+            <div className="s-tx-content">
+              <div className="s-tx-meta">
+                <b>{display}</b>
+                <span>{formatTime(seg.start)}</span>
+                {seg.edited && <span style={{ color: "var(--s-mute)" }}>edited</span>}
+              </div>
+              <div className={"s-tx-text" + (liveLast && isLast ? " live" : "")}>
+                {seg.text}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function defaultSpeakerLabel(raw: string): string {
+  const m = raw.match(/(\d+)/);
+  if (!m) return raw;
+  return `Speaker ${parseInt(m[1], 10) + 1}`;
+}
+
+function formatTime(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `00:${mm}:${ss}`;
+}
