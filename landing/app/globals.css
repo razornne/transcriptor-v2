@@ -21,7 +21,7 @@
   --sans: "Manrope", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
           "Helvetica Neue", Helvetica, Arial, sans-serif;
   --display: "Bricolage Grotesque", var(--sans);
-  --display-cyr: "Unbounded", var(--sans);
+  --display-cyr: "Onest", var(--sans);
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Rhythm */
@@ -198,8 +198,9 @@ button { font: inherit; cursor: pointer; }
 .display.xl   { font-size: clamp(32px, 3.6vw, 56px);  font-weight: 600; }
 .display.lg   { font-size: clamp(24px, 2.4vw, 36px);  font-weight: 600; }
 
-/* Cyrillic — Bricolage's wide axis doesn't render reliably for Cyrillic,
-   so we swap the whole display family to Unbounded. */
+/* Cyrillic — Bricolage's wide axis doesn't reliably support Cyrillic,
+   so we swap the display family to Onest (designed for Latin+Cyrillic,
+   metrics closer to Bricolage than Unbounded was). */
 [data-lang="ua"] .display,
 [data-lang="ua"] .step h3,
 [data-lang="ua"] .feature-card h3,
@@ -207,24 +208,27 @@ button { font: inherit; cursor: pointer; }
 [data-lang="ua"] .social blockquote .q {
   font-family: var(--display-cyr);
   font-variation-settings: normal;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.03em;
+  font-weight: 800;
 }
+/* Onest at heavy weight is narrower than Bricolage at wide-100 — bump scale */
 [data-lang="ua"] .display.xxxl {
-  font-size: clamp(40px, 6.2vw, 76px);
-  letter-spacing: -0.04em;
-  line-height: 1.0;
+  font-size: clamp(52px, 8vw, 108px);
+  letter-spacing: -0.035em;
+  line-height: 0.98;
 }
 [data-lang="ua"] .display.xxl {
-  font-size: clamp(32px, 4.2vw, 56px);
-  letter-spacing: -0.035em;
+  font-size: clamp(38px, 4.8vw, 68px);
+  letter-spacing: -0.03em;
 }
 [data-lang="ua"] .display.xl {
-  font-size: clamp(28px, 3vw, 44px);
+  font-size: clamp(30px, 3.2vw, 48px);
 }
 [data-lang="ua"] .pricing-card .price .amt {
-  letter-spacing: -0.04em;
+  letter-spacing: -0.035em;
   font-family: var(--display-cyr);
   font-variation-settings: normal;
+  font-weight: 800;
 }
 
 .eyebrow {
@@ -281,18 +285,27 @@ button { font: inherit; cursor: pointer; }
   transition: transform 140ms ease, background 140ms ease, color 140ms ease, border-color 140ms ease;
 }
 .btn:active { transform: translateY(1px); }
+.btn:hover { transform: translateY(-1px); }
 .btn-primary {
   background: var(--cta); color: var(--cta-ink);
   box-shadow: 0 1px 0 rgba(255,255,255,0.25) inset,
               0 6px 16px -6px rgba(63,101,221,0.55),
               0 1px 2px rgba(63,101,221,0.20);
 }
-.btn-primary:hover { background: var(--cta-hover); }
+.btn-primary:hover {
+  background: var(--cta-hover);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.25) inset,
+              0 10px 22px -6px rgba(63,101,221,0.60),
+              0 2px 4px rgba(63,101,221,0.24);
+}
 .btn-ghost {
   background: transparent; color: var(--ink);
   border-color: var(--hairline-2);
 }
-.btn-ghost:hover { background: rgba(127,127,127,0.06); }
+.btn-ghost:hover {
+  background: rgba(127,127,127,0.08);
+  border-color: var(--ink);
+}
 .btn-lg { height: 56px; padding: 0 26px; font-size: 17px; }
 
 /* ─── Pill ─── */
@@ -346,8 +359,20 @@ button { font: inherit; cursor: pointer; }
 .nav-links a {
   text-decoration: none; opacity: 0.85;
   padding: 4px 0;
+  position: relative;
+  transition: opacity 180ms ease, color 180ms ease;
 }
-.nav-links a:hover { opacity: 1; }
+.nav-links a::after {
+  content: ""; position: absolute;
+  left: 0; right: 0; bottom: -2px;
+  height: 2px; border-radius: 2px;
+  background: var(--cta);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 220ms cubic-bezier(.2,.7,.2,1);
+}
+.nav-links a:hover { opacity: 1; color: var(--ink); }
+.nav-links a:hover::after { transform: scaleX(1); }
 .nav-right { display: flex; align-items: center; gap: 14px; }
 
 /* Hide some nav items on small screens to free up space */
@@ -395,8 +420,26 @@ button { font: inherit; cursor: pointer; }
 .seg-btn.on { color: var(--ground); }
 .seg-btn:hover:not(.on) { color: var(--ink-2); }
 .seg-sm { font-size: 11.5px; }
+.seg-sm .seg-btn { padding: 4px 10px; }
+.seg-md { font-size: 12px; }
+.seg-md .seg-btn { padding: 8px 16px; text-transform: uppercase; }
+.seg .save {
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--speaker-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  transition: color 240ms ease;
+}
+.seg .seg-btn.on .save { color: rgba(255,255,255,0.78); }
 @media (prefers-reduced-motion: reduce) {
   .seg-ind { transition: none; }
+}
+
+/* Billing toggle row */
+.pricing-billing {
+  display: flex; justify-content: center;
+  margin-bottom: 32px;
 }
 
 /* ─── Theme toggle icon button ─── */
@@ -712,7 +755,11 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
   display: grid; gap: 16px;
   padding-top: 28px;
   border-top: 1px solid var(--hairline-2);
+  transition: border-color 240ms ease;
 }
+.step:hover { border-top-color: var(--ink); }
+.step:hover .step-art { transform: translateY(-2px); }
+.step-art { transition: transform 240ms cubic-bezier(.2,.7,.2,1); }
 .step .num {
   font-family: var(--mono);
   font-size: 12px;
@@ -753,14 +800,22 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
   background: var(--card-bg);
   border: 1px solid var(--hairline);
   box-shadow: 0 1px 0 var(--hairline) inset, 0 1px 3px rgba(0,0,0,0.05);
-  transition: transform 240ms cubic-bezier(.2,.7,.2,1), box-shadow 240ms ease;
+  transition: transform 280ms cubic-bezier(.2,.7,.2,1),
+              box-shadow 280ms ease,
+              border-color 280ms ease;
 }
 .feature-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset,
-              0 24px 50px -28px rgba(0,0,0,0.28),
-              0 6px 16px -8px rgba(0,0,0,0.10);
+  transform: translateY(-6px);
+  border-color: var(--hairline-2);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset,
+              0 28px 60px -28px rgba(0,0,0,0.32),
+              0 10px 22px -10px rgba(0,0,0,0.16);
 }
+.feature-card:hover .ico {
+  background: var(--ink);
+  color: var(--ground);
+}
+.feature-card .ico { transition: background 240ms ease, color 240ms ease; }
 .feature-card h3 {
   margin: 0;
   font-family: var(--display);
@@ -855,13 +910,16 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
   background: var(--card-bg);
   border: 1px solid var(--hairline);
   box-shadow: 0 1px 0 var(--hairline) inset, 0 1px 3px rgba(0,0,0,0.05);
-  transition: transform 240ms cubic-bezier(.2,.7,.2,1), box-shadow 240ms ease;
+  transition: transform 280ms cubic-bezier(.2,.7,.2,1),
+              box-shadow 280ms ease,
+              border-color 280ms ease;
 }
 .pricing-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset,
-              0 24px 50px -28px rgba(0,0,0,0.28),
-              0 6px 16px -8px rgba(0,0,0,0.10);
+  transform: translateY(-6px);
+  border-color: var(--hairline-2);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.10) inset,
+              0 28px 60px -28px rgba(0,0,0,0.32),
+              0 10px 22px -10px rgba(0,0,0,0.16);
 }
 .pricing-card.featured {
   outline: 2px solid var(--ink);
@@ -901,6 +959,11 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
   color: var(--muted); font-size: 13px;
   letter-spacing: 0;
 }
+.pricing-card .price .strike {
+  font-family: var(--mono); font-size: 12px;
+  color: var(--faint); text-decoration: line-through;
+  margin-left: 4px;
+}
 .pricing-card ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .pricing-card li {
   font-size: 14px; color: var(--ink-2);
@@ -936,8 +999,11 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
   flex-wrap: wrap; justify-content: space-between;
 }
 .foot-links { display: flex; gap: 24px; flex-wrap: wrap; }
-.foot-links a { text-decoration: none; opacity: 0.85; }
-.foot-links a:hover { opacity: 1; }
+.foot-links a {
+  text-decoration: none; opacity: 0.85;
+  transition: opacity 180ms ease, color 180ms ease;
+}
+.foot-links a:hover { opacity: 1; color: var(--ink); }
 
 /* ─── Reveal (scroll-in) ─── */
 .reveal { opacity: 0; transform: translateY(10px); transition: opacity 600ms ease, transform 600ms cubic-bezier(.2,.7,.2,1); }

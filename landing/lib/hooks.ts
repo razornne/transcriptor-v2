@@ -69,6 +69,36 @@ export function useReveal() {
   }, []);
 }
 
+// ─── useTween ───────────────────────────────────────────────────
+// Плавная интерполяция числового значения когда `target` меняется.
+// requestAnimationFrame + cubic-out easing. При reduced-motion — snap.
+export function useTween(target: number, duration = 280): number {
+  const [val, setVal] = useState(target);
+  const fromRef = useRef(target);
+  const startRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (REDUCED || duration <= 0) { setVal(target); return; }
+    fromRef.current = val;
+    startRef.current = performance.now();
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3);
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - startRef.current) / duration);
+      const v = fromRef.current + (target - fromRef.current) * ease(t);
+      setVal(v);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    // val intentionally NOT in deps — captured as `from` at trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, duration]);
+
+  return val;
+}
+
 // ─── useParallax ────────────────────────────────────────────────
 // Параллакс light-blobs за курсором. Селектор + массив коэффициентов
 // (по одному на каждый matched элемент). Знак коэффициента = направление.

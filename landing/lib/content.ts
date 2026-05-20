@@ -23,7 +23,8 @@ export type PricingPlan = {
   name: string;
   featured?: boolean;
   badge?: string;
-  price: number;        // в долларах, целое
+  monthly: number;      // долл/мес (при monthly billing)
+  annual: number;       // долл/мес при annual billing (умножается на 12 при оплате)
   per: string;          // "/month", "/user / month", "/forever"
   tagline: string;
   features: string[];
@@ -61,6 +62,9 @@ export type Copy = {
     eyebrow: string;
     title: string;
     sub: string;
+    monthly: string;
+    annual: string;
+    save: string;
     plans: PricingPlan[];
   };
   final: { title: string[]; ctaPrimary: string; ctaSecondary: string; fine: string };
@@ -77,11 +81,13 @@ export type Copy = {
   };
 };
 
-// Новые цены: Free $0 / Pro $15 / Max $29 / Team $14 per user
+// Цены — monthly/annual.
+// Free $0 · Pro $15→$12 annual · Max $29→$23 annual · Team $14→$11 annual / user
+// Дисконт ~20% (плейсхолдер до уточнения от owner)
 const PLANS_EN: PricingPlan[] = [
   {
     name: "Free",
-    price: 0, per: "/forever",
+    monthly: 0, annual: 0, per: "/forever",
     tagline: "For trying it out",
     features: ["60 minutes / month", "Ukrainian + English", "Speaker separation", "Markdown export"],
     cta: "Start free",
@@ -89,7 +95,7 @@ const PLANS_EN: PricingPlan[] = [
   },
   {
     name: "Pro", featured: true, badge: "Most popular",
-    price: 15, per: "/month",
+    monthly: 15, annual: 12, per: "/month",
     tagline: "For one professional",
     features: ["600 minutes / month", "Summary + action items", "Full-text search", "Keyboard shortcuts", "Priority processing"],
     cta: "Start 14-day trial",
@@ -98,7 +104,7 @@ const PLANS_EN: PricingPlan[] = [
   },
   {
     name: "Max",
-    price: 29, per: "/month",
+    monthly: 29, annual: 23, per: "/month",
     tagline: "For power users",
     features: ["2 000 minutes / month", "Everything in Pro", "Higher concurrency", "Extended history", "Early access to new models"],
     cta: "Go Max",
@@ -106,7 +112,7 @@ const PLANS_EN: PricingPlan[] = [
   },
   {
     name: "Team",
-    price: 14, per: "/user / month",
+    monthly: 14, annual: 11, per: "/user / month",
     tagline: "For small teams",
     features: ["600 minutes / user", "Shared workspace", "Per-user search", "Billing in one invoice", "Priority support"],
     cta: "Start team trial",
@@ -117,7 +123,7 @@ const PLANS_EN: PricingPlan[] = [
 const PLANS_UA: PricingPlan[] = [
   {
     name: "Free",
-    price: 0, per: "/назавжди",
+    monthly: 0, annual: 0, per: "/назавжди",
     tagline: "Спробувати",
     features: ["60 хвилин / місяць", "Українська + англійська", "Розділення спікерів", "Експорт у Markdown"],
     cta: "Спробувати безкоштовно",
@@ -125,7 +131,7 @@ const PLANS_UA: PricingPlan[] = [
   },
   {
     name: "Pro", featured: true, badge: "Найпопулярніший",
-    price: 15, per: "/місяць",
+    monthly: 15, annual: 12, per: "/місяць",
     tagline: "Для однієї людини",
     features: ["600 хвилин / місяць", "Підсумок + дії", "Повнотекстовий пошук", "Гарячі клавіші", "Пріоритетна обробка"],
     cta: "14 днів безкоштовно",
@@ -134,7 +140,7 @@ const PLANS_UA: PricingPlan[] = [
   },
   {
     name: "Max",
-    price: 29, per: "/місяць",
+    monthly: 29, annual: 23, per: "/місяць",
     tagline: "Для активних користувачів",
     features: ["2 000 хвилин / місяць", "Все з Pro", "Більше паралельних обробок", "Розширена історія", "Ранній доступ до нових моделей"],
     cta: "Обрати Max",
@@ -142,7 +148,7 @@ const PLANS_UA: PricingPlan[] = [
   },
   {
     name: "Team",
-    price: 14, per: "/користувач / міс.",
+    monthly: 14, annual: 11, per: "/користувач / міс.",
     tagline: "Для малих команд",
     features: ["600 хвилин на користувача", "Спільний робочий простір", "Пошук по користувачах", "Один рахунок", "Пріоритетна підтримка"],
     cta: "Спробувати для команди",
@@ -216,6 +222,9 @@ export const COPY: Record<Lang, Copy> = {
       eyebrow: "Pricing",
       title: "Honest pricing. No seats minimum.",
       sub: "Start on Free. Upgrade when you outgrow it. Cancel from the app in two clicks.",
+      monthly: "Monthly",
+      annual: "Annual",
+      save: "Save ~20%",
       plans: PLANS_EN,
     },
     final: {
@@ -313,6 +322,9 @@ export const COPY: Record<Lang, Copy> = {
       eyebrow: "Тарифи",
       title: "Чесні тарифи. Без мінімальних місць.",
       sub: "Почни з Free. Перейди далі, коли переростеш. Скасування — у два кліки із застосунку.",
+      monthly: "Помісячно",
+      annual: "Річно",
+      save: "Економія ~20%",
       plans: PLANS_UA,
     },
     final: {
