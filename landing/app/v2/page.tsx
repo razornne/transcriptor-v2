@@ -7,6 +7,7 @@ import { SpeakerChips } from "@/components/studio/SpeakerChips";
 import { TranscriptTabs, type TabKey } from "@/components/studio/TranscriptTabs";
 import { TranscriptView } from "@/components/studio/TranscriptView";
 import { Footer } from "@/components/studio/Footer";
+import { CommandPalette } from "@/components/studio/CommandPalette";
 import {
   MOCK_HISTORY,
   MOCK_TRANSCRIPT,
@@ -19,24 +20,27 @@ import {
 
 export default function StudioPage() {
   const [activeTab, setActiveTab] = useState<TabKey>("transcript");
-  const [recording, setRecording] = useState(true); // показываем live state по дефолту
-  const [language, setLanguage] = useState("");      // auto-detect
+  const [recording, setRecording] = useState(true);
+  const [language, setLanguage] = useState("");
   const [activeHistory, setActiveHistory] = useState(MOCK_HISTORY[0].id);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
-  // Global keyboard shortcuts: ⌘K / Ctrl+K — focus search в sidebar
+  // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const isModK = (e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K");
-      if (isModK) {
+      // ⌘K / Ctrl+K — открыть/закрыть command palette
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
         e.preventDefault();
-        const input = document.getElementById("studio-search") as HTMLInputElement | null;
-        input?.focus();
-        input?.select();
+        setPaletteOpen((v) => !v);
+        return;
       }
-      // Esc — снимает фокус с любых input в studio
-      if (e.key === "Escape" && document.activeElement instanceof HTMLElement) {
-        if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") {
-          (document.activeElement as HTMLElement).blur();
+      // ⌘R / Ctrl+R — toggle recording
+      if ((e.metaKey || e.ctrlKey) && (e.key === "r" || e.key === "R")) {
+        // Не перехватываем дефолтный F5/reload
+        if (!e.shiftKey) {
+          e.preventDefault();
+          setRecording((r) => !r);
+          return;
         }
       }
     };
@@ -73,26 +77,25 @@ export default function StudioPage() {
           meta="May 20"
         />
 
-        <StudioPanel
-          state={recording ? "recording" : "transcript"}
-          timer={recording ? "00:04:21" : "00:24:31"}
-          detectedSpeakers={3}
-          language={language}
-          onLanguageChange={setLanguage}
-          onToggleRecord={() => setRecording((r) => !r)}
-        />
+        {/* Всё между topbar и footer скроллится одной плоскостью */}
+        <div className="s-scroll">
+          <StudioPanel
+            state={recording ? "recording" : "transcript"}
+            timer={recording ? "00:04:21" : "00:24:31"}
+            detectedSpeakers={3}
+            language={language}
+            onLanguageChange={setLanguage}
+            onToggleRecord={() => setRecording((r) => !r)}
+          />
 
-        <SpeakerChips
-          segments={MOCK_TRANSCRIPT}
-          speakerNames={MOCK_SPEAKER_NAMES}
-          activeRaw={recording ? "SPEAKER_00" : undefined}
-        />
+          <SpeakerChips
+            segments={MOCK_TRANSCRIPT}
+            speakerNames={MOCK_SPEAKER_NAMES}
+            activeRaw={recording ? "SPEAKER_00" : undefined}
+          />
 
-        <TranscriptTabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
+          <TranscriptTabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
-        {/* min-height: 0 КРИТИЧНО — без этого flex item не уважает overflow
-            и transcript внутри не скроллится, просто обрезается за пределами */}
-        <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           {activeTab === "transcript" && (
             <TranscriptView
               segments={MOCK_TRANSCRIPT}
@@ -125,13 +128,22 @@ export default function StudioPage() {
           )}
         </div>
 
-        <Footer status={recording ? "● Auto-saving" : "✓ Saved locally"} />
+        <Footer status={recording ? "Auto-saving" : "Saved locally"} />
       </main>
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        history={MOCK_HISTORY}
+        isRecording={recording}
+        onToggleRecord={() => setRecording((r) => !r)}
+        onSelectRecording={(id) => setActiveHistory(id)}
+        onOpenSettings={() => { /* TODO Phase 5 */ }}
+      />
     </div>
   );
 }
 
-// Простое empty state для пустых табов (summary / actions / notes)
 function EmptyTabState({
   icon,
   title,
@@ -146,14 +158,15 @@ function EmptyTabState({
   return (
     <div
       style={{
-        flex: 1,
+        flex: "0 0 auto",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
         gap: 14,
-        padding: 40,
+        padding: 60,
         textAlign: "center",
+        minHeight: 320,
       }}
     >
       <div
