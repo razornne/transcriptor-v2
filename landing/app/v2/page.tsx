@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Sidebar } from "@/components/studio/Sidebar";
 import { Topbar } from "@/components/studio/Topbar";
 import { StudioPanel } from "@/components/studio/StudioPanel";
@@ -22,6 +22,27 @@ export default function StudioPage() {
   const [recording, setRecording] = useState(true); // показываем live state по дефолту
   const [language, setLanguage] = useState("");      // auto-detect
   const [activeHistory, setActiveHistory] = useState(MOCK_HISTORY[0].id);
+
+  // Global keyboard shortcuts: ⌘K / Ctrl+K — focus search в sidebar
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isModK = (e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K");
+      if (isModK) {
+        e.preventDefault();
+        const input = document.getElementById("studio-search") as HTMLInputElement | null;
+        input?.focus();
+        input?.select();
+      }
+      // Esc — снимает фокус с любых input в studio
+      if (e.key === "Escape" && document.activeElement instanceof HTMLElement) {
+        if (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA") {
+          (document.activeElement as HTMLElement).blur();
+        }
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
 
   const tabs = [
     { key: "transcript" as TabKey, label: "Transcript", count: MOCK_TRANSCRIPT.length },
@@ -69,7 +90,9 @@ export default function StudioPage() {
 
         <TranscriptTabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
 
-        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        {/* min-height: 0 КРИТИЧНО — без этого flex item не уважает overflow
+            и transcript внутри не скроллится, просто обрезается за пределами */}
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           {activeTab === "transcript" && (
             <TranscriptView
               segments={MOCK_TRANSCRIPT}

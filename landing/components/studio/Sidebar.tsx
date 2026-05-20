@@ -56,7 +56,7 @@ export function Sidebar({
           <circle cx="6.2" cy="6.2" r="4.2" />
           <path d="M9.5 9.5l3 3" />
         </svg>
-        <input type="text" placeholder="Search transcripts…" />
+        <input id="studio-search" type="text" placeholder="Search transcripts…" />
         <span className="s-search-kbd">⌘K</span>
       </div>
 
