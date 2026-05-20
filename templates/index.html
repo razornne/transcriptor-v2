@@ -1134,7 +1134,16 @@
 </div>
 
 <script>
-const API_BASE = '';
+// API_BASE: всегда прямой Modal URL.
+// Когда фронт грузится через Vercel proxy (skriptly.io/app), относительный путь
+// шёл бы через Vercel Edge — он имеет ~4MB лимит на body size, аудио его легко
+// превышает (502 ROUTER_EXTERNAL_TARGET_ERROR на загрузке записи).
+// Абсолютный Modal URL обходит Vercel: браузер делает CORS-preflight, Modal
+// разрешает (origins=*), запрос летит напрямую без ограничений Vercel Edge.
+// При локальной разработке (USE_MODAL=false) — пустой base = same-origin.
+const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? ''
+  : 'https://razornne--transcriptor-v2-flask-app.modal.run';
 
 // ── Supabase client ───────────────────────────────────────────
 // URL и anon key публичны (anon — клиентский, защита через RLS).
