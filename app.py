@@ -139,6 +139,34 @@ LANG_HINTS = {
 }
 LANG_HINT_DEFAULT = "Write the entire response in the same language as the transcript."
 
+
+def _detect_transcript_language(segments_or_text) -> str | None:
+    """Эвристика по содержимому: 'uk' / 'ru' / 'en' / None.
+
+    Нужна когда фронт прислал autodetect (пустой language). Без явного
+    указания LLM (Qwen2.5) часто скатывается в английский, даже если в
+    промпте сказано «отвечай на языке транскрипта». Так что детектим сами
+    и подкладываем конкретный LANG_HINT.
+    """
+    if isinstance(segments_or_text, list):
+        text = " ".join((s.get("text") or "") for s in segments_or_text[:40])
+    else:
+        text = segments_or_text or ""
+    text = text[:2000]
+    if not text.strip():
+        return None
+
+    cyrillic = sum(1 for c in text if 'Ѐ' <= c <= 'ӿ' or 'А' <= c <= 'я')
+    # Украинские буквы, которых нет в русском
+    uk_specific = sum(1 for c in text if c in 'іїєґІЇЄҐ')
+    latin = sum(1 for c in text if 'a' <= c.lower() <= 'z')
+
+    if cyrillic == 0 and latin == 0:
+        return None
+    if cyrillic > latin:
+        return 'uk' if uk_specific > 0 else 'ru'
+    return 'en'
+
 GENERATE_TEMPLATES = {
     "summary": (
         "You are summarizing a meeting transcript. {lang_hint} "
@@ -443,6 +471,9 @@ def title_endpoint():
         return jsonify({"error": "text required"}), 400
 
     language = (data.get("language") or "").lower()
+    # Autodetect: пытаемся понять язык по содержимому, чтобы LLM не сваливалась в EN
+    if not language:
+        language = _detect_transcript_language(text) or ""
     lang_hint = {
         "ru": "Напиши заголовок на русском.",
         "uk": "Напиши заголовок українською.",
@@ -560,6 +591,8 @@ def chat_endpoint():
     speaker_names = data.get("speakerNames") or {}
     messages = data.get("messages") or []
     language = (data.get("language") or "").lower()
+    if not language:
+        language = _detect_transcript_language(segments) or ""
     lang_hint = LANG_HINTS.get(language, "Reply in the same language as the user's question.")
 
     transcript = _format_segments_for_llm(segments, speaker_names)[:12000]
@@ -629,6 +662,8 @@ def generate_endpoint():
                         "available": sorted(GENERATE_TEMPLATES.keys())}), 400
 
     language = (data.get("language") or "").lower()
+    if not language:
+        language = _detect_transcript_language(segments) or ""
     lang_hint = LANG_HINTS.get(language, LANG_HINT_DEFAULT)
 
     speaker_names = data.get("speakerNames") or {}

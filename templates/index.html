@@ -27,6 +27,12 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* Custom text selection — браузерный дефолт на dark теме чёрный/инверсный
+       и выглядит уродливо. Используем CTA-цвет с прозрачностью — читается
+       и на светлой, и на тёмной теме. */
+    ::selection      { background: rgba(79, 70, 229, 0.32); color: inherit; }
+    ::-moz-selection { background: rgba(79, 70, 229, 0.32); color: inherit; }
+
     /* ── DARK (default) ── */
     :root, :root[data-theme="dark"] {
       --bg:       #0a0f1f;
