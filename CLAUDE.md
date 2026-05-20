@@ -15,17 +15,17 @@ Browser
    │
    │ load skriptly.io
    ▼
-Vercel (Next.js landing)
+Vercel (Next.js landing + Studio v2 redesign)
    │
-   ├─ skriptly.io/              → React landing (next.config.mjs rewrites: none)
-   ├─ skriptly.io/app           → rewrite to Modal flask_app `/` (serves templates/index.html)
-   └─ skriptly.io/api/*         → rewrite to Modal flask_app /api/* (fallback;
-                                  фронт сейчас идёт ПРЯМО на Modal — см. ниже)
+   ├─ skriptly.io/              → Next.js landing
+   ├─ skriptly.io/app           → rewrite to Modal flask_app `/` (текущий transcriptor)
+   ├─ skriptly.io/v2            → НОВЫЙ Studio redesign (Next.js, в разработке)
+   └─ skriptly.io/api/*         → rewrite to Modal flask_app /api/* (fallback)
 
 Browser JS (on skriptly.io/app)
    │
    │ Supabase JS: auth (Google OAuth / magic link)
-   │ window.fetch (direct, NOT через Vercel) — обходит Vercel Edge body-size limit
+   │ window.fetch напрямую на Modal (обходит Vercel Edge 4MB body limit)
    ▼
 Modal flask_app (CPU, scale-to-zero)
    │
@@ -43,8 +43,9 @@ Supabase Postgres
 
 **Production URLs:**
 - **skriptly.io** — landing (Vercel)
-- **skriptly.io/app** — приложение (HTML с Modal через Vercel rewrite, API напрямую на Modal)
-- **razornne--transcriptor-v2-flask-app.modal.run** — Modal endpoint (тоже работает, тестовый)
+- **skriptly.io/app** — текущее приложение (HTML с Modal через Vercel rewrite, API напрямую на Modal). РАБОТАЕТ, не трогать пока v2 не готов.
+- **skriptly.io/v2** — новый Studio редизайн (Next.js, статичный каркас сделан, ML-логика не подключена)
+- **razornne--transcriptor-v2-flask-app.modal.run** — Modal endpoint напрямую
 
 **Стек:**
 - **Modal** — serverless GPU. Два контейнера в одном app (`transcriptor-v2`):
@@ -93,24 +94,50 @@ Supabase Postgres
 ### Frontend — приложение
 - **`templates/index.html`** — single-file (CSS+JS inline). ~3000 строк. Это сам transcriptor (запись, транскрипт, AI tools).
 
-### Frontend — landing (Next.js)
-- **`landing/`** — отдельный Next.js 15 проект, деплоится на Vercel как `skriptly.io`.
-  - `app/layout.tsx` — root layout, шрифты (Bricolage Grotesque + Onest для UA + Manrope + JetBrains Mono), theme bootstrap, viewport
-  - `app/page.tsx` — точка входа, монтирует LandingClient
-  - `app/globals.css` — все стили (Direction C + светлая/тёмная темы + mobile breakpoints)
-  - `components/` — Nav, Hero, Social, HowItWorks, Features, Breakout, Pricing, FinalCTA, Footer + SegToggle, ThemeToggle, AppMock, Logo
-  - `lib/content.ts` — EN/UA копирайтинг + 4 тарифа (Free $0 / Pro $15 / Max $29 / Team $14, с annual ~20% off)
-  - `lib/hooks.ts` — useTypewriter, useReveal, useParallax, useTween
-  - `next.config.mjs` — rewrites `/app` и `/api/*` на Modal endpoint (API сейчас обходится напрямую с фронта, см. ниже)
+### Frontend — landing + Studio v2 (Next.js)
+- **`landing/`** — Next.js 15 проект, деплоится на Vercel как `skriptly.io`.
+  Сейчас держит ДВЕ независимые поверхности:
 
-  Production deploy: Vercel автодеплоит при push в `main`. Root Directory: `landing/`.
+  **Landing (`/`):**
+  - `app/layout.tsx` — root layout, шрифты (Bricolage Grotesque + Onest для UA + Manrope + JetBrains Mono), theme bootstrap, viewport
+  - `app/page.tsx` → монтирует `LandingClient`
+  - `app/globals.css` — стили лендинга (Direction C + светлая/тёмная темы + mobile breakpoints)
+  - `components/` — Nav, Hero, Social, HowItWorks, Features, Breakout, Pricing, FinalCTA, Footer + SegToggle, ThemeToggle, AppMock, Logo
+  - `lib/content.ts` — EN/UA копирайтинг + 4 тарифа (Free $0 / Pro $15 / Max $29 / Team $14)
+  - `lib/hooks.ts` — useTypewriter, useReveal, useParallax, useTween
+
+  **Studio v2 redesign (`/v2`)** — см. отдельную секцию ниже:
+  - `app/v2/{layout,page,v2.css}.tsx`
+  - `components/studio/` — Studio компоненты
+  - `lib/studio/mock-data.ts` — mock-данные
+
+  **Общие настройки:**
+  - `next.config.mjs` — rewrites `/app` и `/api/*` на Modal endpoint (API сейчас обходится напрямую с фронта, см. ниже)
+  - Production deploy: Vercel автодеплоит при push в `main`. Root Directory: `landing/`.
 
 ## Common commands
 
 ```powershell
+# ── Landing + Studio v2 dev (Next.js) ─────────────────────────
+cd landing
+npm install               # один раз
+npm run dev               # → http://localhost:3000 (landing)
+                          #   http://localhost:3000/v2 (Studio redesign)
+
+# Производственный билд (НЕ запускать пока dev сервер крутится —
+# затрёт .next кеш и dev упадёт с "Cannot find module './833.js'")
+npm run build             # сначала pkill node, потом rm -rf .next, потом build
+
+# Восстановление после порчи .next:
+Stop-Process -Name node -Force
+Remove-Item -Recurse -Force .next
+npm run dev
+
 # ── Production деплой ─────────────────────────────────────────
 # Modal CLI должен быть установлен (pip install modal в venv) и авторизован (modal setup)
 modal deploy modal_app.py
+
+# Frontend (Vercel) автоматом при git push в main
 
 # Modal Secret c HF_TOKEN и SUPABASE_URL
 modal secret create transcriptor-secrets HF_TOKEN=hf_... SUPABASE_URL=https://bmonakhktbaliwgobrxv.supabase.co --force
@@ -258,6 +285,197 @@ python app.py
 - **`CORS(app, ..., origins="*")`** — открыто для dev. При переезде на `skriptly.io` через Vercel rewrites CORS не нужен (single origin), но оставить.
 - **`recordings/` ephemeral** в local mode. На Modal вообще не пишем — bytes в память → ffmpeg → wav в /tmp → удаляется.
 - **History в Postgres** хранит `segments` JSONB целиком. Не ломать формат без миграции схемы.
+
+## Studio v2 Redesign (в разработке — Phase 1 done)
+
+Полная переделка `/app` UI под Studio direction из Claude Design прототипа.
+Старый `templates/index.html` работает в проде на `/app`, новый строится
+параллельно на `/v2`. **Не удалять старый пока новый не одобрен.**
+
+### Текущий статус — Phase 1 ✅ (статический каркас)
+
+Доступен на `skriptly.io/v2` (Vercel автоматом) или `localhost:3000/v2` (dev).
+Полностью рабочий визуально, но **БЕЗ ML / API / Auth**:
+- Mock-данные из `lib/studio/mock-data.ts`
+- Кнопки REC / language picker / tab переключение работают только локально
+- Command palette ⌘K открывается, действия — stubs
+
+### Дизайн-направление
+
+**Studio — audio-first cinematic** (выбрано из 3 вариантов в Claude Design):
+- **Шрифт display:** `Bricolage Grotesque` (wide axis 100, opsz 96, вес 700)
+- **Шрифт UI:** `Manrope` 400-700
+- **Шрифт mono:** `JetBrains Mono` для таймстемпов, ярлыков, цифр
+- **Accent:** Phosphor mint `#3FBFA3` / hi `#5EEAD4` / on-accent `#0A1612`
+  - **НЕ brand blue лендинга** — юзер выбрал mint по мокапу.
+- **Light theme:** тёплый parchment cream (`#EDE8E0`) + мягкий accent glow в фоне
+- **Dark theme:** тёплый графит (`#1A1613` → `#0F0C0A`) + accent radial glow
+- **Speakers palette:** mint / amber / lavender / clay (4 цвета чередуются)
+
+### URL и роутинг
+
+- `/v2` — основной экран (recording / live state по дефолту)
+- В будущем (Phase 4+): `/v2/login`, `/v2/settings`, `/v2/r/[id]` (просмотр прошлой записи)
+- Когда v2 одобрен → меняем rewrite в `next.config.mjs`: `/app` ведёт сюда вместо Modal, старый `templates/index.html` удаляется или архивируется в `legacy/`.
+
+### File structure
+
+```
+landing/
+├── app/
+│   └── v2/
+│       ├── layout.tsx          ← тонкая обёртка, импорт v2.css
+│       ├── page.tsx            ← композер: Sidebar + Topbar + scroll + Footer
+│       │                         + CommandPalette + global keyboard handlers
+│       └── v2.css              ← все стили Studio под .studio-root scope
+│                                  (не пересекается с landing globals.css)
+├── components/
+│   └── studio/
+│       ├── Sidebar.tsx         ← header (mic + Studio) + Search + grouped
+│       │                         history (Today/Yesterday/This week) с
+│       │                         mini-waveform thumbnails + user pill внизу
+│       ├── Topbar.tsx          ← eyebrow + Bricolage title +
+│       │                         History/Theme buttons. Содержит
+│       │                         StudioThemeToggle (light/dark).
+│       ├── StudioPanel.tsx     ← Glass card: LIVE indicator + timer +
+│       │                         waveform + REC button + LanguagePicker
+│       │                         + speakers detected chip + ? hint
+│       ├── Waveform.tsx        ← Phase 1: статичные псевдослучайные бары.
+│       │                         Phase 2: AnalyserNode из AudioContext.
+│       ├── LanguagePicker.tsx  ← Inline pills "Lang | EN | RU | UK | AUTO▾"
+│       ├── SpeakerChips.tsx    ← Большие чипы 01/02/03 + speaker names +
+│       │                         Rename. Цвета из --s-spk-1..4
+│       ├── TranscriptTabs.tsx  ← Tab bar: Transcript / Summary / Actions / Notes
+│       ├── TranscriptView.tsx  ← Chat-bubble cards: avatar 40px + name +
+│       │                         time + text card (surface bg, border)
+│       ├── Footer.tsx          ← Auto-saving indicator + Copy / Download.md
+│       └── CommandPalette.tsx  ← ⌘K overlay: Actions / Recent / Settings
+│                                  с keyboard nav (↑↓ Enter Esc) + query filter
+└── lib/
+    └── studio/
+        └── mock-data.ts        ← MOCK_TRANSCRIPT, MOCK_HISTORY,
+                                  MOCK_SPEAKER_NAMES, MOCK_USER,
+                                  SUPPORTED_LANGUAGES, waveBars(n, seed)
+```
+
+### CSS архитектура
+
+**Всё под scope `.studio-root`** в `app/v2/v2.css` — не пересекается с
+лендингом. Переменные:
+- `--s-bg / --s-bg-deep / --s-surface / --s-surface-2` — слои поверхностей
+- `--s-border / --s-border-hi / --s-hairline*` — рамки/разделители
+- `--s-ink / --s-ink-soft / --s-mute / --s-faint` — текст по убыванию контраста
+- `--s-accent / --s-accent-hi / --s-accent-dim / --s-accent-soft / --s-on-accent`
+- `--s-spk-1..4` — палитра спикеров
+- `--s-display / --s-ui / --s-mono` — шрифты
+- `--s-r-sm/md/lg/xl` — радиусы (8/12/20/28)
+- `--s-body-bg` — финальный градиент фона
+- Light/dark — те же переменные, разные значения. Управляется `[data-theme="dark"]`
+  на `<html>` (тот же глобальный механизм что и landing).
+
+### Mock data (Phase 1)
+
+В `lib/studio/mock-data.ts`:
+- `MOCK_TRANSCRIPT` — 8 сегментов с тремя спикерами Eli/Sasha/Niko
+- `MOCK_HISTORY` — 7 записей с **explicit `group` полем** (Today / Yesterday
+  / This week / Earlier). Делает sidebar группировку без вычисления дат
+  на клиенте (избегаем SSR hydration mismatch).
+- `MOCK_SPEAKER_NAMES` — `{ SPEAKER_00: "Eli", SPEAKER_01: "Sasha", SPEAKER_02: "Niko" }`
+- `MOCK_USER` — email, initials (NB), plan (Free), hoursUsed/Limit
+- `SUPPORTED_LANGUAGES` — auto / en / ru / uk
+- `waveBars(n, seed)` — детерминированный pseudo-random для статичных
+  волн. **Важно**: на Phase 1 высоты `.toFixed(2)` чтобы избежать
+  hydration mismatch (SSR vs CSR разный float-to-string).
+
+### Phase plan
+
+- **Phase 1 ✅ Статичный каркас** — текущий состояние. Все экраны/компоненты
+  на mock-данных, тема, palette, scroll, keyboard shortcuts (⌘K, ⌘R), Esc.
+- **Phase 2 — Recording flow.** MediaRecorder + AudioContext mix, **live
+  waveform через AnalyserNode** (заменить статичную). Перенос tab keep-alive
+  (silent audio, wake lock, OS notifications, battery warning). Перенос
+  audio safety net (lastRecordingBlob, IndexedDB autosave, recovery).
+- **Phase 3 — Transcribe + Result.** POST на `/api/transcribe` через
+  authFetch helper. Polling `/api/jobs`. Processing экран с прогресс-баром.
+  Реальный transcript рендеринг. Inline edit, speaker rename. Auto-title
+  через `/api/title`.
+- **Phase 4 — Auth + History.** Supabase Auth (Google + magic link)
+  перенос. Login экран в Studio стиле (см. дизайн ниже). Sidebar history
+  из Supabase через raw fetch wrapper (тот же `_sbFetch` паттерн что в
+  старом index.html). Past recording экран.
+- **Phase 5 — AI + дополнительные экраны.** Summary / Action items /
+  templates через tabs внутри transcript view. Settings экран (account,
+  usage, defaults). Export modal (.md / .txt / .srt / .json). Empty state,
+  Permissions guide. Shortcuts modal в новом стиле. Notes — отдельный
+  tab + FAB во время записи.
+- **Phase 6 — Mobile + polish.** Mobile breakpoints, hamburger drawer
+  для sidebar. Финальная полировка.
+- **Phase 7 — Cutover.** Убрать Vercel rewrite `/app → Modal` (в
+  `next.config.mjs`). Старый `templates/index.html` в `legacy/` или
+  удалить. Обновить README / CLAUDE.md.
+
+**Итого:** ~30-40 часов работы, 5-7 рабочих сессий.
+
+### Открытые решения (приняты в обсуждениях, см. чат)
+
+1. **Studio + Bricolage** (НЕ Bodoni — юзер так захотел)
+2. **Accent = mint** (НЕ brand blue, по дизайн-мокапу)
+3. **Старое не трогаем** до явного "релиз" от юзера
+4. **Settings:** НЕ модели/GPU/CPU (всё в облаке). Внутри:
+   account email, plan, usage minutes, defaults (lang, num speakers, theme),
+   sign out, danger zone (delete data). Usage tracking нужно добавить в
+   backend (счётчик минут на user_id в Supabase) — **новая фича для Phase 5**.
+5. **AI tools placement:** табы внутри transcript view (Transcript /
+   Summary / Actions / Notes). Templates (sales_call/one_on_one/standup)
+   как dropdown рядом с Summary/Actions либо как command palette actions.
+6. **Notes:** отдельный таб + FAB "+ Note" во время записи с timestamp
+   (FAB → Phase 5, простой textarea таб → Phase 1+).
+7. **Login screen** — центрированная карточка на cream/graphite фоне,
+   "Welcome back. Sign in to continue.", Continue with Google primary,
+   divider "or magic link", email input + Send link button. Лого + theme
+   toggle в углу. Дизайн будет финализирован в Phase 4.
+
+### Studio v2 gotchas
+
+- **`min-height: 0` обязателен** на flex-children с `overflow:auto`.
+  Без этого flex-item не уважает overflow и контент вылазит за пределы
+  родителя без скроллбара. Сейчас стоит на `.s-scroll` (scroll-контейнер
+  между topbar и footer).
+- **`.toFixed(2)` на ВСЕХ float значениях** в JSX-style (`height`, `width`,
+  `transform`). Без него — hydration mismatch: SSR рендерит
+  `43.686723035074785%`, CSR — `43.6867%`. Особенно в `Waveform` и
+  `MiniWave` (sidebar thumbnails).
+- **NPM build кладёт HMR кеш dev сервера.** Если делаешь `npm run build`
+  пока `npm run dev` крутится — `.next/server/webpack-runtime.js` конфликтнёт
+  и dev упадёт с `Cannot find module './833.js'`. **Лечение:** kill node
+  processes → `rm -rf .next` → `npm run dev` снова.
+- **Keyboard shortcuts глобальные** — слушаются на `document.keydown` в
+  `app/v2/page.tsx`. ⌘K toggle palette, ⌘R toggle recording, Esc blur input.
+  CommandPalette имеет свой keyboard handler (↑↓ Enter Esc) активный
+  только когда open=true.
+- **`data-theme` на `<html>` управляется кодом из обоих мест** — landing
+  ThemeToggle и Studio Topbar StudioThemeToggle оба пишут в
+  `localStorage.skriptly-theme` + ставят атрибут. Тема одна для всего
+  сайта, не отдельная для /v2.
+- **Component scoping** — все Studio стили под `.studio-root` (root div
+  v2 страницы). Landing использует свои `:root` переменные. Они не
+  конфликтуют, но если редактируешь — следи где какие `--var`.
+- **CommandPalette overlay z-index 100** — выше всего остального на
+  странице. Backdrop с blur. Клик за пределами карточки → закрытие.
+
+### Что НЕ делать
+
+- **Не трогать `templates/index.html`** пока v2 не одобрен. Старый прод
+  работает на нём, пользователи активно используют.
+- **Не удалять Vercel rewrite `/app → Modal`** в `next.config.mjs` до Phase 7.
+- **Не перетаскивать landing components/ в studio/.** Они независимые.
+- **Не использовать Tailwind / styled-components** — кодовая база на чистом
+  CSS под `.studio-root` scope. Консистентность.
+- **Не делать `npm run build` пока `npm run dev` запущен.** Стандартный
+  workflow: одно или другое. Build для проверки компиляции — kill dev
+  сервер первым.
+
+---
 
 ## Deployment
 
