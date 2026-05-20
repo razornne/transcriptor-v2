@@ -35,7 +35,13 @@ export default function StudioPage() {
       <Sidebar
         history={MOCK_HISTORY}
         activeId={activeHistory}
-        user={{ email: MOCK_USER.email, plan: MOCK_USER.plan }}
+        user={{
+          displayName: MOCK_USER.displayName,
+          initials: MOCK_USER.initials,
+          plan: MOCK_USER.plan,
+          hoursUsed: MOCK_USER.hoursUsed,
+          hoursLimit: MOCK_USER.hoursLimit,
+        }}
         onSelect={setActiveHistory}
       />
 

@@ -14,6 +14,7 @@ export function Footer({
   return (
     <div className="s-footer">
       <div className="s-footer-status">
+        <span className="dot" />
         <span>{status}</span>
       </div>
       <div className="s-footer-actions">

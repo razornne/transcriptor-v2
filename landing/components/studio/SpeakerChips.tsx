@@ -27,7 +27,7 @@ export function SpeakerChips({
       {uniqueRaw.map((raw, i) => {
         const display = speakerNames[raw] ?? defaultSpeakerLabel(raw);
         const color = SPEAKER_COLORS[i % SPEAKER_COLORS.length];
-        const idx = i + 1;
+        const num = String(i + 1).padStart(2, "0");
         return (
           <button
             key={raw}
@@ -37,7 +37,7 @@ export function SpeakerChips({
             style={
               raw === activeRaw
                 ? {
-                    background: `color-mix(in srgb, ${color} 16%, transparent)`,
+                    background: `color-mix(in srgb, ${color} 14%, transparent)`,
                     borderColor: `color-mix(in srgb, ${color} 50%, transparent)`,
                     color: "var(--s-ink)",
                   }
@@ -45,7 +45,7 @@ export function SpeakerChips({
             }
           >
             <span className="s-spk-chip-dot" style={{ background: color }}>
-              {idx}
+              {num}
             </span>
             {display}
           </button>

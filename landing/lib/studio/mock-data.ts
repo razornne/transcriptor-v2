@@ -12,9 +12,10 @@ export type Segment = {
 export type HistoryEntry = {
   id: string;          // uuid из Supabase
   title: string;
-  date: string;        // ISO
+  group: string;       // "Today" / "Yesterday" / "This week" / "Earlier"
   duration: string;    // "24:31" / "1:12:04"
   speakers: number;
+  waveSeed: number;    // seed для mini-thumbnail waveform
 };
 
 export const MOCK_TRANSCRIPT: Segment[] = [
@@ -29,13 +30,13 @@ export const MOCK_TRANSCRIPT: Segment[] = [
 ];
 
 export const MOCK_HISTORY: HistoryEntry[] = [
-  { id: "h7", title: "Standup",            date: "2026-05-19", duration: "24:31",   speakers: 4 },
-  { id: "h6", title: "Design crit",        date: "2026-05-18", duration: "51:08",   speakers: 3 },
-  { id: "h5", title: "1:1 w/ Sasha",       date: "2026-05-17", duration: "32:47",   speakers: 2 },
-  { id: "h4", title: "Eng review",         date: "2026-05-15", duration: "1:12:04", speakers: 6 },
-  { id: "h3", title: "Product sync",       date: "2026-05-14", duration: "47:22",   speakers: 5 },
-  { id: "h2", title: "User research call", date: "2026-05-12", duration: "38:11",   speakers: 2 },
-  { id: "h1", title: "Kickoff",            date: "2026-05-09", duration: "1:04:18", speakers: 7 },
+  { id: "h7", title: "Standup",            group: "Today",     duration: "24:31",   speakers: 4, waveSeed: 13 },
+  { id: "h6", title: "Design crit",        group: "Yesterday", duration: "51:08",   speakers: 3, waveSeed: 27 },
+  { id: "h5", title: "1:1 w/ Sasha",       group: "Yesterday", duration: "32:47",   speakers: 2, waveSeed: 41 },
+  { id: "h4", title: "Eng review",         group: "This week", duration: "1:12:04", speakers: 6, waveSeed: 55 },
+  { id: "h3", title: "Product sync",       group: "This week", duration: "47:22",   speakers: 5, waveSeed: 69 },
+  { id: "h2", title: "User research call", group: "This week", duration: "38:11",   speakers: 2, waveSeed: 83 },
+  { id: "h1", title: "Kickoff",            group: "This week", duration: "1:04:18", speakers: 7, waveSeed: 97 },
 ];
 
 export const MOCK_SPEAKER_NAMES: Record<string, string> = {
@@ -46,9 +47,13 @@ export const MOCK_SPEAKER_NAMES: Record<string, string> = {
 
 export const MOCK_USER = {
   email: "nikitabulatnikov07@gmail.com",
+  // Имя для отображения в user-pill (берётся из email если нет real name)
+  displayName: "nikitabulatnikov07",
+  initials: "NB",
   plan: "Free",
-  minutesUsed: 23,
-  minutesLimit: 60,
+  // Hours для usage indicator. Free план — 60 мин = 1 час лимит.
+  hoursUsed: 0.4,
+  hoursLimit: 1,
 };
 
 export const SUPPORTED_LANGUAGES = [

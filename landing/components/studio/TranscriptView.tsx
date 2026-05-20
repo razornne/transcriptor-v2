@@ -26,16 +26,18 @@ export function TranscriptView({
         const idx = colorIdx(seg.speaker);
         const color = SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
 
+        // Zero-padded "01", "02", "03"
+        const num = String(idx + 1).padStart(2, "0");
         return (
           <div className="s-tx-line" key={i}>
             <span className="s-tx-avatar" style={{ background: color }}>
-              {idx + 1}
+              {num}
             </span>
             <div className="s-tx-content">
               <div className="s-tx-meta">
-                <b>{display}</b>
-                <span>{formatTime(seg.start)}</span>
-                {seg.edited && <span style={{ color: "var(--s-mute)" }}>edited</span>}
+                <b style={{ color }}>{display}</b>
+                <span className="time">{formatTime(seg.start)}</span>
+                {seg.edited && <span className="edited">edited</span>}
               </div>
               <div className={"s-tx-text" + (liveLast && isLast ? " live" : "")}>
                 {seg.text}
