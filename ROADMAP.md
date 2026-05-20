@@ -8,49 +8,40 @@
 
 Прямо следующие задачи, активно обсуждаемые.
 
-### Context prompt для Whisper
-**Зачем:** на жаргоне / именах / спецтерминах Whisper угадывает по фонетике и часто промахивается («Шепченка» вместо «Шевченка», «Заспірі на Чугліни Герпін» вместо чего-то осмысленного).
-
-**Как:** добавить поле «Тема/контекст» в UI до записи. Текст уходит в Whisper как `initial_prompt` — модель ориентируется на эти термины и в 2-3 раза точнее распознаёт их. Базовая версия glossary без БД.
-
-**Сложность:** ~1-2 часа.
-
-### LLM correction pass
-**Зачем:** даже с context prompt остаются явные galлюцинации и code-switching ошибки. LLM может их вычистить пост-фактум по контексту.
-
-**Как:** новая кнопка `Clean up transcript` в AI tools. qwen2.5:3b читает транскрипт и предлагает исправления для очевидно битых сегментов. Можно показать diff или просто заменить.
-
-**Сложность:** ~3-4 часа.
-
-### Modal-миграция (ML на cloud GPU)
-**Зачем:** ноут больше не нужно держать включённым. Pay-per-use ~$0.05-0.10 за созвон, idle = $0.
+### Stage 2C — Vercel landing + переезд на skriptly.io
+**Зачем:** красивый бренд и нормальный URL. Лендинг продаёт, `/app` — сервис.
 
 **Как:**
-- Упаковать `transcriber.py + diarizer.py + merger.py + LLM` в Modal app
-- Endpoints: `transcribe_full(audio_blob, language, num_speakers)`, `generate(template, segments, ...)`, `chat(question, ...)`, `title(text)`
-- Flask становится тонким прокси: получает запрос → шлёт в Modal → отдаёт ответ. Или прямой вызов Modal с фронта через JS SDK.
+- Vercel-проект, дизайн лендинга из Claude Design экспортируем как Next.js
+- `skriptly.io` — лендинг, `skriptly.io/app` — текущий transcriptor (через Vercel rewrites или отдельный subproject)
+- `vercel.json` rewrites: `/api/*` → `https://razornne--transcriptor-v2-flask-app.modal.run/api/*` (CORS не нужен, единый origin)
+- DNS в Porkbun → Vercel
+- Обновить Supabase Site URL + Google OAuth Authorized origins на `skriptly.io`
+- Publish OAuth consent screen в Google (выйти из testing mode для широкой аудитории)
 
-**Сложность:** ~2-3 дня. Зависимости (cuDNN, Ollama, ffmpeg) упаковываются в один контейнер.
+**Сложность:** ~1-2 дня (зависит от готовности лендинга).
 
-**После Modal:** ноут можно выключать. Брат и подруга получают стабильный URL.
+### Context prompt для Whisper (отложено)
+**Зачем:** на жаргоне / именах / спецтерминах Whisper угадывает по фонетике и часто промахивается.
+
+**Как:** поле «Тема/контекст» в UI до записи → уходит в Whisper как `initial_prompt`.
+
+**Сложность:** ~1-2 часа. Делаем после лендинга.
 
 ---
 
 ## 🚀 Medium term
 
-Структурные изменения после Modal.
+После Stage 2C.
 
-### Supabase Auth + Postgres
-- Регистрация и логин через Supabase Auth (Email / Google)
-- Таблицы: `users`, `workspaces`, `transcripts`, `workspace_members`
-- Row-Level Security: пользователь видит только свои / расшаренные транскрипты
-- Миграция с localStorage на Supabase (с экспортом старой истории)
+### Custom SMTP для Supabase (Resend / SendGrid)
+- Снимает лимит 4 magic-link письма в час
+- Свой `noreply@skriptly.io` адрес
+- 10 минут настройки
 
-### Vercel frontend
-- Выносим `index.html` на Vercel (или переписываем на Next.js если нужны проверенные React-паттерны)
-- Static + serverless routes для проксирования к Modal / Supabase
-- Custom domain (например `transcriptor.app`)
-- Login flow через Supabase Auth UI
+### Apple Sign-In
+- Требует Apple Developer Program ($99/год) — отложено до спроса
+- UI в Supabase уже готов, надо только заполнить Service ID + Key
 
 ### Workspace + sharing
 - Юзер создаёт workspace («Marketing agency»), приглашает по email
@@ -60,14 +51,10 @@
 ### Pre-recording template mode
 - До записи можно выбрать «Sales call mode» / «1-on-1» / «Stand-up»
 - После Stop **автоматически** запускается генерация Summary с правильным шаблоном
-- Сохраняется в настройках, можно сделать дефолтным
 
 ### Pricing model
 Когда будет понятен реальный паттерн использования. Варианты:
-- Per-seat subscription (B2B): $X / user / month
-- Per-minute pay-as-you-go (B2C)
-- Freemium: N часов в месяц бесплатно, дальше платно
-- Workspace plans: free / pro / business
+- Per-seat subscription (B2B), per-minute pay-as-you-go (B2C), Freemium, Workspace plans
 
 ---
 
@@ -164,22 +151,47 @@ LLM авто-генерит 2-4 тега категории (sales / hiring / br
 
 ## 📝 Done so far (changelog highlights)
 
-- ✅ Local pipeline: faster-whisper + pyannote + merge
+### Stage 2B — Auth + cloud history (just shipped)
+- ✅ Supabase Auth: Google OAuth + Email magic link
+- ✅ JWT validation на бэке через JWKS endpoint Supabase (HS256 + ES256/RS256)
+- ✅ История в Postgres + RLS (юзер видит только свои)
+- ✅ Raw fetch обёртка над Supabase REST (SDK PostgrestClient зависал в нашей среде)
+- ✅ Login overlay + sign out button
+
+### Stage 2A — Backend on Modal (ноут выключен)
+- ✅ Flask на Modal как `@modal.wsgi_app()` — лёгкий CPU контейнер, scale-to-zero
+- ✅ `FunctionCall.spawn()` + `from_id().get()` вместо in-memory JOBS dict
+- ✅ Job ID с префиксами `t_/g_/c_` чтобы знать тип на polling'е
+- ✅ Native Python типы в return (никаких numpy в payload — Flask контейнер их не парсит)
+- ✅ Cloudflare Tunnel больше не нужен
+
+### Stage 1 — ML миграция на Modal
+- ✅ Modal `@app.cls(gpu="A10G")` пайплайн: whisper + pyannote + LLM на одном GPU
+- ✅ CUDA 12.4 base image (libcublas.so.12 системно — без библиотечных конфликтов)
+- ✅ large-v3-turbo по дефолту (`WHISPER_MODEL` env override)
+- ✅ Qwen2.5-7B-Instruct 4-bit для LLM correction + title (`LLM_MODEL` env override)
+- ✅ Persistent Volume `transcriptor-models` (~12 GB моделей кэшируются)
+- ✅ Word-level speaker alignment в merger (правильно режет быстрый диалог)
+- ✅ Smoothing порог конфигурируемый (`SMOOTH_THRESHOLD_S`, default 0 = выключено)
+- ✅ Forward-fill для SPEAKER_UNKNOWN на первых словах сегмента
+
+### Quality improvements
+- ✅ Whisper параметры под качество UA/RU + переход на large-v3
+- ✅ Internal language prompts (priming алфавитом + лексикой)
+- ✅ LLM correction pass с safety checks (length ratio + Cyrillic→Latin injection)
+- ✅ Word timestamps (`word_timestamps=True`)
+
+### Frontend
 - ✅ Browser-side audio capture (mic + getDisplayMedia)
-- ✅ Live-text via chunking, diarization после Stop
-- ✅ Ollama LLM integration: title, summary, action items, templates, chat
-- ✅ Async job queue (обход 100s Cloudflare timeout)
-- ✅ Audio safety net: lastRecordingBlob + IndexedDB autosave + recovery
-- ✅ Tab keep-alive: silent audio, wake lock, OS notifications, battery warning
 - ✅ Inline edit транскрипта, переименование спикеров и заголовка
 - ✅ Auto-title с progressive UI («✨ thinking…»)
 - ✅ History с поиском, подсветкой и jump-to
 - ✅ Markdown renderer + export
 - ✅ Keyboard shortcuts + cheatsheet
 - ✅ Light/dark theme с persistence
-- ✅ Cloudflare Tunnel для шеринга
-- ✅ Whisper параметры под качество UA/RU + переход на large-v3
-- ✅ LLM language passthrough (ответы на UA/RU, не на английском)
-- ✅ Feature flags для отложенных фич
+- ✅ Notes + AI tools (Summary / Actions / Sales call / 1-on-1 / Standup)
+- ✅ Audio safety net: lastRecordingBlob + IndexedDB autosave + recovery
+- ✅ Tab keep-alive: silent audio, wake lock, OS notifications, battery warning
+- ✅ Feature flags для отложенных фич (Chat, Auto-tags)
 
 См. git history для детальной картины.
