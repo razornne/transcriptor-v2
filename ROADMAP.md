@@ -8,25 +8,36 @@
 
 Прямо следующие задачи, активно обсуждаемые.
 
-### Stage 2C — Vercel landing + переезд на skriptly.io
-**Зачем:** красивый бренд и нормальный URL. Лендинг продаёт, `/app` — сервис.
+### Context prompt для Whisper
+**Зачем:** на жаргоне / именах / спецтерминах Whisper угадывает по фонетике и часто промахивается. Самое заметное улучшение качества при минимуме работы.
 
-**Как:**
-- Vercel-проект, дизайн лендинга из Claude Design экспортируем как Next.js
-- `skriptly.io` — лендинг, `skriptly.io/app` — текущий transcriptor (через Vercel rewrites или отдельный subproject)
-- `vercel.json` rewrites: `/api/*` → `https://razornne--transcriptor-v2-flask-app.modal.run/api/*` (CORS не нужен, единый origin)
-- DNS в Porkbun → Vercel
-- Обновить Supabase Site URL + Google OAuth Authorized origins на `skriptly.io`
-- Publish OAuth consent screen в Google (выйти из testing mode для широкой аудитории)
+**Как:** поле «Тема/контекст» в UI до записи → уходит в Whisper как `initial_prompt`. Уже есть инфраструктура (`prompt` параметр прокидывается через весь стек).
 
-**Сложность:** ~1-2 дня (зависит от готовности лендинга).
+**Сложность:** ~1-2 часа.
 
-### Context prompt для Whisper (отложено)
-**Зачем:** на жаргоне / именах / спецтерминах Whisper угадывает по фонетике и часто промахивается.
+### Publish OAuth consent screen
+**Зачем:** сейчас Google login только для добавленных test users (max 100). Чтобы любой Google-юзер мог войти — нужно опубликовать app.
 
-**Как:** поле «Тема/контекст» в UI до записи → уходит в Whisper как `initial_prompt`.
+**Требования:**
+- Privacy Policy URL (страница в landing)
+- Terms of Service URL (страница в landing)
+- Возможно verification от Google (sensitive scopes у нас нет — должно пройти автоматом)
 
-**Сложность:** ~1-2 часа. Делаем после лендинга.
+**Сложность:** ~1-2 часа (большая часть — написать копи для Privacy/Terms).
+
+### Mobile responsive polish
+**Зачем:** базовый mobile sweep сделан, но визуально не идеально. Юзеры на iPhone/Android должны получить нормальный экспириенс.
+
+**Как:** реальное тестирование на телефоне, точечные фиксы CSS под виды боли. Особенно — hero, app mockup, pricing на узких экранах.
+
+**Сложность:** ~2-4 часа.
+
+### Cache headers на Modal HTML
+**Зачем:** Vercel может кэшировать `/app` HTML с Modal на edge. Когда деплою Modal — юзеры видят старую версию.
+
+**Как:** `Cache-Control: no-cache, max-age=0` на Flask response для HTML.
+
+**Сложность:** 5 минут.
 
 ---
 
@@ -151,7 +162,19 @@ LLM авто-генерит 2-4 тега категории (sales / hiring / br
 
 ## 📝 Done so far (changelog highlights)
 
-### Stage 2B — Auth + cloud history (just shipped)
+### Stage 2C — Landing + production domain (just shipped)
+- ✅ Next.js 15 лендинг на `skriptly.io` (Vercel), порт из Claude Design прототипа
+- ✅ Direction C (immersive glass hero) + светлая/тёмная темы, переключатель в nav
+- ✅ EN/UA локализация с автосвапом шрифта на Onest для кириллицы
+- ✅ Все 9 секций: Nav, Hero (typewriter + parallax blobs), Social, How it works, Features, Breakout, Pricing (4 плана + monthly/annual toggle с tweened price), Final CTA, Footer
+- ✅ Vercel rewrites: `/app` → Modal, `/api/*` → Modal (fallback)
+- ✅ Frontend на `/app` ходит на API **напрямую** в Modal (обходит Vercel 4MB body limit)
+- ✅ DNS skriptly.io → Vercel (Porkbun A + CNAME для www)
+- ✅ Mobile responsive sweep (базовый — точечная полировка ещё впереди)
+- ✅ Кастомное text selection (CTA-цвет с прозрачностью вместо чёрного дефолта)
+- ✅ Server-side language detection (Cyrillic vs Latin + UA-specific) — фикс "summary на английском при autodetect"
+
+### Stage 2B — Auth + cloud history
 - ✅ Supabase Auth: Google OAuth + Email magic link
 - ✅ JWT validation на бэке через JWKS endpoint Supabase (HS256 + ES256/RS256)
 - ✅ История в Postgres + RLS (юзер видит только свои)

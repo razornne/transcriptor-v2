@@ -8,39 +8,51 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 v1 (`C:\projects\transcriptor\`) — старая Railway-версия на OpenAI API. **Продолжает работать параллельно, намеренно. Не сливать.**
 
-## Архитектура (Stage 2 — текущая)
+## Архитектура (Stage 2 — production)
 
 ```
-Browser (index.html)
-       │
-       │ Supabase JS auth (Google OAuth / magic link)
-       ▼
-   skriptly.io  (TODO — пока razornne--transcriptor-v2-flask-app.modal.run)
-       │
-       ├──→ Vercel → static index.html  (TODO — пока Flask serves /)
-       │
-       └──→ Vercel rewrite /api/* → Modal flask_app  (TODO — пока тот же Modal URL)
-                                           │
-                                           ▼
-                              ┌─────────────────────┐
-                              │  Modal Cls          │
-                              │  Transcriptor (A10G)│
-                              │  - whisper turbo    │
-                              │  - pyannote-3.1     │
-                              │  - Qwen2.5-7B-Instr │
-                              └─────────────────────┘
+Browser
+   │
+   │ load skriptly.io
+   ▼
+Vercel (Next.js landing)
+   │
+   ├─ skriptly.io/              → React landing (next.config.mjs rewrites: none)
+   ├─ skriptly.io/app           → rewrite to Modal flask_app `/` (serves templates/index.html)
+   └─ skriptly.io/api/*         → rewrite to Modal flask_app /api/* (fallback;
+                                  фронт сейчас идёт ПРЯМО на Modal — см. ниже)
 
-                              Supabase Postgres
-                              ├─ auth.users
-                              └─ public.transcripts (RLS, owner-only)
+Browser JS (on skriptly.io/app)
+   │
+   │ Supabase JS: auth (Google OAuth / magic link)
+   │ window.fetch (direct, NOT через Vercel) — обходит Vercel Edge body-size limit
+   ▼
+Modal flask_app (CPU, scale-to-zero)
+   │
+   │ JWT verify (Supabase JWKS) + .spawn() в GPU класс
+   ▼
+Modal Transcriptor (A10G GPU, scaledown_window=300)
+   - faster-whisper large-v3-turbo
+   - pyannote-3.1
+   - Qwen2.5-7B-Instruct (4-bit)
+
+Supabase Postgres
+   - auth.users (Google OAuth / Email magic link)
+   - public.transcripts (RLS — owner-only)
 ```
+
+**Production URLs:**
+- **skriptly.io** — landing (Vercel)
+- **skriptly.io/app** — приложение (HTML с Modal через Vercel rewrite, API напрямую на Modal)
+- **razornne--transcriptor-v2-flask-app.modal.run** — Modal endpoint (тоже работает, тестовый)
 
 **Стек:**
 - **Modal** — serverless GPU. Два контейнера в одном app (`transcriptor-v2`):
   - `Transcriptor` cls — A10G GPU, whisper large-v3-turbo + pyannote-3.1 + Qwen2.5-7B-Instruct (4-bit)
   - `flask_app` wsgi — лёгкий CPU контейнер, тонкий прокси
 - **Supabase** — Auth (Google + magic link) + Postgres (история транскриптов, RLS)
-- **Frontend** — `templates/index.html` сейчас отдаётся Flask, скоро переедет на Vercel
+- **Vercel** — Next.js landing на `skriptly.io`, rewrites для `/app` и `/api/*` (fallback)
+- **Frontend приложения** — `templates/index.html` отдаётся Modal Flask, проксируется через Vercel на `/app`
 
 **Поток обработки:**
 1. Юзер логинится через Supabase Auth (Google или magic link)
@@ -78,8 +90,20 @@ Browser (index.html)
 - **`diarizer.py`** — local mode only. pyannote wrapper.
 - **`merger.py`** — общий для Modal и local. Word-level speaker alignment. Конфигурируемый smoothing через `SMOOTH_THRESHOLD_S` (default 0 = выключено). Forward-fill для SPEAKER_UNKNOWN на первых словах сегмента.
 
-### Frontend
-- **`templates/index.html`** — single-file (CSS+JS inline). ~3000 строк.
+### Frontend — приложение
+- **`templates/index.html`** — single-file (CSS+JS inline). ~3000 строк. Это сам transcriptor (запись, транскрипт, AI tools).
+
+### Frontend — landing (Next.js)
+- **`landing/`** — отдельный Next.js 15 проект, деплоится на Vercel как `skriptly.io`.
+  - `app/layout.tsx` — root layout, шрифты (Bricolage Grotesque + Onest для UA + Manrope + JetBrains Mono), theme bootstrap, viewport
+  - `app/page.tsx` — точка входа, монтирует LandingClient
+  - `app/globals.css` — все стили (Direction C + светлая/тёмная темы + mobile breakpoints)
+  - `components/` — Nav, Hero, Social, HowItWorks, Features, Breakout, Pricing, FinalCTA, Footer + SegToggle, ThemeToggle, AppMock, Logo
+  - `lib/content.ts` — EN/UA копирайтинг + 4 тарифа (Free $0 / Pro $15 / Max $29 / Team $14, с annual ~20% off)
+  - `lib/hooks.ts` — useTypewriter, useReveal, useParallax, useTween
+  - `next.config.mjs` — rewrites `/app` и `/api/*` на Modal endpoint (API сейчас обходится напрямую с фронта, см. ниже)
+
+  Production deploy: Vercel автодеплоит при push в `main`. Root Directory: `landing/`.
 
 ## Common commands
 
@@ -207,10 +231,15 @@ python app.py
 - **`add_local_python_source("merger")` / `("app")`** — Modal должен знать о локальных модулях чтобы упаковать. Без этого `from merger import merge` и `from app import app` упадут.
 
 ### Frontend
+- **API_BASE на проде = абсолютный Modal URL, обходит Vercel.** На `skriptly.io/app` фронт грузится через Vercel-proxy → Modal, но XHR-запросы к `/api/*` идут НАПРЯМУЮ на `razornne--transcriptor-v2-flask-app.modal.run` (см. `const API_BASE` в templates/index.html). Причина: Vercel Edge Network имеет body-size ~4MB на проксированных запросах, аудио легко превышает → 502 `ROUTER_EXTERNAL_TARGET_ERROR`. Cross-origin работает потому что Flask настроен `CORS(..., origins="*")`. На `localhost` API_BASE остаётся пустым (same-origin для dev).
+
 - **Supabase JS PostgrestClient зависает на `.then()` в нашей среде.** Auth работает, но `sb.from('transcripts').select()` никогда не резолвится. Поэтому raw fetch к `/rest/v1`. Если будут вопросы "почему не SDK" — это причина. Может починится в будущей версии Supabase JS.
 - **`?error=...` в URL после неудачного Google OAuth** — Supabase JS не очищает URL, остаётся как параметр. Не критично, но user видит. Идея для cleanup: `history.replaceState({}, '', window.location.pathname)` после успешного `SIGNED_IN`.
 - **OAuth consent screen в testing mode** — только добавленные test users могут логиниться через Google. Для широкой аудитории — Publish app в Google Cloud Console.
 - **Supabase magic link rate limit** — 4 в час на default SMTP. Custom SMTP (Resend / SendGrid) снимает лимит.
+
+### LLM language hints
+- **При autodetect фронт прислал пустую строку — бэк сам детектит язык.** `_detect_transcript_language()` в app.py считает кириллицу vs латиницу + украинские специфичные буквы (`іїєґ`) → возвращает `uk`/`ru`/`en`. Используется в `/api/title`, `/api/chat`, `/api/generate`. Без этого Qwen2.5 регулярно сваливался в английский, даже когда транскрипт был украинский. Тэги (`/api/tags`) ВСЕГДА на английском намеренно — для надёжной фильтрации across languages.
 
 ### Whisper / Diarization
 - **Word-level alignment в merger** — режет Whisper-сегменты в местах смены спикера. Требует `word_timestamps=True` в whisper.transcribe.
@@ -232,13 +261,23 @@ python app.py
 
 ## Deployment
 
-**Текущее состояние:** Modal app deployed at `https://razornne--transcriptor-v2-flask-app.modal.run/`. Custom domain `skriptly.io` куплен, ждёт Vercel-фронт (Stage 2C).
+**Production live:** https://skriptly.io
 
-**Stack по нашей оси прогресса:**
-- Modal: `transcriptor-v2` app (Transcriptor + flask_app)
-- Supabase: project `bmonakhktbaliwgobrxv` (Auth + Postgres)
-- Domain: `skriptly.io` (Porkbun, Vercel pending)
-- Google OAuth: Skriptly project, Skriptly Web client, in testing mode
+**Стек:**
+- **Modal** app `transcriptor-v2` — Transcriptor (A10G) + flask_app (wsgi)
+- **Supabase** project `bmonakhktbaliwgobrxv` — Auth (Google + magic link) + Postgres (`public.transcripts` с RLS)
+- **Vercel** project `transcriptor-v2` — landing (Next.js, root `landing/`), автодеплой из `main` ветки GitHub
+- **DNS** — Porkbun: A `216.198.79.1` для apex, CNAME для www, оба на Vercel
+- **Google OAuth** — project Skriptly, client Skriptly Web. **Testing mode** (max 100 test users). Чтобы пустить любого Google-юзера — Publish app в OAuth consent screen.
+
+**Команды деплоя:**
+```powershell
+# Backend (Modal)
+modal deploy modal_app.py
+
+# Frontend landing — автоматом из GitHub push в main
+git push origin main  # Vercel сразу собирает и катит на skriptly.io
+```
 
 См. `ROADMAP.md` для дальнейших шагов.
 

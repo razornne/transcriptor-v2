@@ -1,15 +1,16 @@
 # Skriptly (transcriptor-v2)
 
-Облачный сервис транскрипции созвонов со **спикер-разделением** и **AI-инструментами**. Работает на serverless GPU (Modal), аутентификация и хранение — Supabase. Ноут юзера не нужен.
+Облачный сервис транскрипции созвонов со **спикер-разделением** и **AI-инструментами**. Работает на serverless GPU (Modal), аутентификация и хранение — Supabase, лендинг — Vercel/Next.js.
 
 **Стек:**
 - **Modal** A10G GPU: faster-whisper (large-v3-turbo) + pyannote-3.1 + Qwen2.5-7B-Instruct (4-bit)
 - **Supabase** Auth (Google OAuth + magic link) + Postgres с Row-Level Security
-- **Flask** на Modal как `@modal.wsgi_app()` — тонкий прокси
-- **Frontend** — single-file HTML/JS (на пути к Vercel + Next.js лендинг)
+- **Flask** на Modal как `@modal.wsgi_app()` — тонкий прокси с JWT валидацией
+- **Vercel** Next.js 15 landing на `skriptly.io`, проксирует `/app` на Modal
+- **Frontend приложения** — single-file HTML/JS, отдаётся Flask, доступен на `skriptly.io/app`
 
-🔗 **Текущий URL:** https://razornne--transcriptor-v2-flask-app.modal.run
-🎯 **Будет:** https://skriptly.io
+🔗 **Production:** https://skriptly.io
+🛠 **Direct Modal endpoint:** https://razornne--transcriptor-v2-flask-app.modal.run
 
 ---
 
@@ -37,15 +38,24 @@
 
 ```
 Browser
-  │ JWT (Supabase Auth)
+  │ load skriptly.io
+  ▼
+Vercel (Next.js landing)
+  ├─ /        → static landing (EN/UA, light/dark, glass design)
+  ├─ /app     → rewrite to Modal Flask `/` (serves templates/index.html)
+  └─ /api/*   → rewrite to Modal Flask (fallback; frontend bypasses)
+
+Browser JS on /app
+  │ JWT в Authorization header
+  │ fetch напрямую на Modal (CORS, обходит Vercel 4MB body limit)
   ▼
 Flask @modal.wsgi_app()  ←→  Supabase JWKS (validate JWT)
   │ Modal.spawn()
   ▼
-Transcriptor @modal.cls (A10G)
+Transcriptor @modal.cls (A10G GPU, scale-to-zero после 5 мин idle)
   ├── whisper large-v3-turbo
   ├── pyannote-3.1
-  └── Qwen2.5-7B-Instruct (4-bit)
+  └── Qwen2.5-7B-Instruct (4-bit, для title / summary / correction)
 
 Supabase Postgres
   └── public.transcripts (RLS, owner-only)
@@ -179,11 +189,19 @@ python app.py
 
 ```
 modal_app.py         — Modal app: Transcriptor cls (A10G GPU) + flask_app wsgi
-app.py               — Flask backend: эндпоинты, JWT validation, async jobs
+app.py               — Flask backend: эндпоинты, JWT validation, async jobs,
+                       language detection для autodetect режима
 transcriber.py       — local mode: faster-whisper wrapper
 diarizer.py          — local mode: pyannote wrapper
 merger.py            — word-level speaker alignment (общий)
-templates/index.html — UI (single-file, ~3000 строк)
+templates/index.html — UI приложения (single-file, ~3000 строк)
+
+landing/             — Next.js лендинг на skriptly.io (Vercel)
+├── app/             — App Router (layout, page, globals.css)
+├── components/      — Nav, Hero, Features, Pricing, и т.д.
+├── lib/             — content.ts (EN/UA), hooks.ts
+└── next.config.mjs  — Vercel rewrites на Modal
+
 requirements.txt
 .env.example
 ROADMAP.md           — план следующих шагов
