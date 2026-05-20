@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,6 +14,18 @@ export const metadata: Metadata = {
     siteName: "Skriptly",
     type: "website",
   },
+};
+
+// Explicit viewport — mobile-friendly + respects user zoom.
+// theme-color адаптируется к выбранной теме для status bar мобильных браузеров.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#EDE8E0" },
+    { media: "(prefers-color-scheme: dark)",  color: "#0E1226" },
+  ],
 };
 
 // Inline скрипт применяет сохранённую тему ДО первого рендера,

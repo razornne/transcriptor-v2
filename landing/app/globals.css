@@ -375,9 +375,22 @@ button { font: inherit; cursor: pointer; }
 .nav-links a:hover::after { transform: scaleX(1); }
 .nav-right { display: flex; align-items: center; gap: 14px; }
 
-/* Hide some nav items on small screens to free up space */
+/* Прогрессивно прячем nav-элементы как экран уменьшается:
+   - <700px: убираем горизонтальные ссылки Features/Pricing
+   - <520px: убираем тоггл EN/UA (его дублирует футер)
+   - <420px: сжимаем кнопку Open app (меньше padding) */
 @media (max-width: 700px) {
   .nav-links { display: none; }
+  .nav { padding: 0 8px 0 16px; height: 56px; }
+  .nav-wrap { top: 8px; margin-top: 10px; padding: 0 12px; }
+}
+@media (max-width: 520px) {
+  .nav .seg { display: none; }
+  .nav-right { gap: 8px; }
+}
+@media (max-width: 420px) {
+  .nav .btn { padding: 0 12px; height: 38px; font-size: 13.5px; }
+  .theme-btn { width: 32px; height: 32px; }
 }
 
 /* ─── Segmented toggle ─── */
@@ -497,6 +510,21 @@ button { font: inherit; cursor: pointer; }
     grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.15fr);
     align-items: center;
   }
+}
+
+/* Mobile hero: меньше padding на shell, чтобы текст и mockup не упирались */
+@media (max-width: 640px) {
+  .hero {
+    padding: clamp(36px, 12vw, 60px) 0 clamp(28px, 8vw, 48px);
+  }
+  .hero-shell {
+    padding: clamp(18px, 5vw, 24px);
+    border-radius: var(--r-4);
+  }
+  .hero-meta { gap: 14px; }
+  .hero-ctas { gap: 10px; }
+  .hero-ctas .btn { flex: 1 1 0; min-width: 0; }
+  .hero-visual { margin-top: 4px; }
 }
 
 /* Hero light blobs — Direction C */
@@ -650,7 +678,27 @@ button { font: inherit; cursor: pointer; }
 .mock-urlbar .field .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mock-urlbar .menu { color: var(--faint); font-family: var(--mono); font-size: 14px; }
 
+/* Mock на mobile — упрощённый chrome чтобы не переполнял узкий экран */
+@media (max-width: 640px) {
+  .mock-tabs { padding: 6px 8px 0; }
+  .mock-tab { padding: 6px 10px 7px 8px; font-size: 11px; max-width: 160px; }
+  /* Прячем второй неактивный таб и кнопку + */
+  .mock-tab:nth-of-type(2) { display: none; }
+  .mock-tab-new { display: none; }
+  .mock-urlbar { padding: 6px 10px; gap: 8px; }
+  .mock-urlbar .navs { display: none; }
+  .mock-urlbar .field { height: 24px; padding: 0 10px; font-size: 11px; }
+  .mock-urlbar .menu { display: none; }
+}
+
 .mock-body { padding: 22px 24px 24px; }
+@media (max-width: 640px) {
+  .mock-body { padding: 16px 14px 18px; }
+  .tx { gap: 12px; }
+  .tx-text { font-size: 13.5px; }
+  .mock-summary { margin-top: 14px; padding: 12px 14px; }
+  .mock-summary li { font-size: 12.5px; }
+}
 .mock-head {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 18px;
@@ -711,6 +759,15 @@ button { font: inherit; cursor: pointer; }
   box-shadow: var(--glass-shadow);
   z-index: 3;
 }
+/* На mobile mock-chip с right: -18px вылетает за viewport — прижимаем к карточке */
+@media (max-width: 640px) {
+  .mock-chip {
+    right: 8px; bottom: 8px;
+    padding: 8px 10px;
+    font-size: 11.5px;
+  }
+  .mock-chip .ico { width: 22px; height: 22px; font-size: 11px; }
+}
 .mock-chip .ico {
   width: 28px; height: 28px; border-radius: 8px;
   background: var(--ink); color: var(--ground);
@@ -746,6 +803,11 @@ button { font: inherit; cursor: pointer; }
   font-style: normal; font-family: var(--mono);
   font-size: 12px; letter-spacing: 0.06em;
   color: var(--muted); text-transform: uppercase;
+}
+@media (max-width: 640px) {
+  .social { padding: 28px 0; }
+  .social-inner { gap: 20px; }
+  .social blockquote { font-size: 16px; }
 }
 
 /* ─── Section ─── */
@@ -910,7 +972,7 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
   padding-top: 14px;
 }
 @media (max-width: 1100px) { .pricing-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 600px)  { .pricing-grid { grid-template-columns: 1fr; } }
+@media (max-width: 560px)  { .pricing-grid { grid-template-columns: 1fr; } }
 
 .pricing-card {
   padding: clamp(22px, 2.2vw, 28px);
@@ -997,6 +1059,11 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
 .final .display { margin: 0 auto; }
 .final .ctas { display: inline-flex; gap: 12px; margin-top: 28px; flex-wrap: wrap; justify-content: center; }
 .final .fine { margin-top: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); letter-spacing: 0.06em; }
+@media (max-width: 520px) {
+  .final { padding: clamp(50px, 14vw, 80px) 0; }
+  .final .ctas { display: flex; flex-direction: column; align-items: stretch; }
+  .final .ctas .btn { width: 100%; justify-content: center; }
+}
 
 /* ─── Footer ─── */
 .foot {
@@ -1010,6 +1077,11 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
   flex-wrap: wrap; justify-content: space-between;
 }
 .foot-links { display: flex; gap: 24px; flex-wrap: wrap; }
+@media (max-width: 520px) {
+  .foot { padding: 32px 0 40px; }
+  .foot-inner { gap: 18px; }
+  .foot-links { gap: 18px; }
+}
 .foot-links a {
   text-decoration: none; opacity: 0.85;
   transition: opacity 180ms ease, color 180ms ease;
