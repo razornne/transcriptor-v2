@@ -20,23 +20,28 @@ export function SegToggle<T extends string>({
     return v === value;
   });
 
+  // Меряем размер активной кнопки. ResizeObserver ловит изменения
+  // после загрузки шрифтов (Bricolage / Onest догружаются после первого
+  // рендера → ширина кнопки меняется → индикатор должен поспеть).
   useEffect(() => {
     const btn = btnRefs.current[idx];
     if (!btn) return;
-    setInd({ x: btn.offsetLeft, w: btn.offsetWidth, ready: true });
-  }, [idx, options.length, value]);
-
-  useEffect(() => {
-    const onResize = () => {
-      const btn = btnRefs.current[idx];
-      if (btn) setInd({ x: btn.offsetLeft, w: btn.offsetWidth, ready: true });
+    const remeasure = () => {
+      const b = btnRefs.current[idx];
+      if (b) setInd({ x: b.offsetLeft, w: b.offsetWidth, ready: true });
     };
-    window.addEventListener("resize", onResize);
+    remeasure();
+    const ro = new ResizeObserver(remeasure);
+    btnRefs.current.forEach((b) => b && ro.observe(b));
+    window.addEventListener("resize", remeasure);
     if (typeof document !== "undefined" && (document as any).fonts?.ready) {
-      (document as any).fonts.ready.then(onResize).catch(() => {});
+      (document as any).fonts.ready.then(remeasure).catch(() => {});
     }
-    return () => window.removeEventListener("resize", onResize);
-  }, [idx]);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", remeasure);
+    };
+  }, [idx, options.length, value]);
 
   return (
     <div className={`seg seg-${size}`} role="group" aria-label={ariaLabel}>

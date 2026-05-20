@@ -423,22 +423,33 @@ button { font: inherit; cursor: pointer; }
 .seg-sm .seg-btn { padding: 4px 10px; }
 .seg-md { font-size: 12px; }
 .seg-md .seg-btn { padding: 8px 16px; text-transform: uppercase; }
-.seg .save {
-  margin-left: 4px;
-  font-size: 10px;
-  color: var(--speaker-2);
+/* Save badge — отдельный элемент рядом с toggle, не внутри.
+   Внутри SegToggle он ломал measurement ширины кнопки. */
+.save-badge {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  transition: color 240ms ease;
+  color: var(--speaker-2);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(79, 122, 74, 0.12);
+  opacity: 0.55;
+  transition: opacity 240ms ease, transform 240ms ease;
+  transform: scale(0.95);
 }
-.seg .seg-btn.on .save { color: rgba(255,255,255,0.78); }
+.save-badge.on {
+  opacity: 1;
+  transform: scale(1);
+}
 @media (prefers-reduced-motion: reduce) {
   .seg-ind { transition: none; }
 }
 
-/* Billing toggle row */
+/* Billing toggle row — SegToggle + save badge рядом */
 .pricing-billing {
-  display: flex; justify-content: center;
+  display: flex; justify-content: center; align-items: center;
+  gap: 12px;
   margin-bottom: 32px;
 }
 
@@ -1008,6 +1019,20 @@ section.s { padding: clamp(80px, 10vw, 140px) 0; }
 /* ─── Reveal (scroll-in) ─── */
 .reveal { opacity: 0; transform: translateY(10px); transition: opacity 600ms ease, transform 600ms cubic-bezier(.2,.7,.2,1); }
 .reveal.in { opacity: 1; transform: none; }
+
+/* Cards управляют transform для hover-lift, поэтому переопределяем .reveal
+   на opacity-only — иначе `.reveal.in { transform: none }` перебивает hover. */
+.feature-card.reveal,
+.pricing-card.reveal {
+  opacity: 0;
+  transform: none;
+  transition: opacity 600ms ease, transform 280ms cubic-bezier(.2,.7,.2,1),
+              box-shadow 280ms ease, border-color 280ms ease;
+}
+.feature-card.reveal.in,
+.pricing-card.reveal.in { opacity: 1; transform: none; }
+.feature-card.reveal.in:hover { transform: translateY(-6px); }
+.pricing-card.reveal.in:hover { transform: translateY(-6px); }
 
 /* ─── Hero entrance (page load stagger) ─── */
 @keyframes heroFadeUp {

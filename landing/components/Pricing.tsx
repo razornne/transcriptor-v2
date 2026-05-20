@@ -35,17 +35,10 @@ export function Pricing({ t }: { t: Copy }) {
             onChange={setBilling}
             options={[
               { value: "monthly", label: t.pricing.monthly },
-              {
-                value: "annual",
-                label: (
-                  <>
-                    {t.pricing.annual}
-                    <span className="save">{t.pricing.save}</span>
-                  </>
-                ),
-              },
+              { value: "annual",  label: t.pricing.annual },
             ]}
           />
+          <span className={"save-badge" + (annual ? " on" : "")}>{t.pricing.save}</span>
         </div>
 
         <div className="pricing-grid">
