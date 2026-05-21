@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Transcriptor</title>
+  <title>Skriptly</title>
 
-  <link rel="icon" type="image/svg+xml" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%234f46e5"><path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-7 10.25a.75.75 0 0 1 .75.75 6.25 6.25 0 0 0 12.5 0 .75.75 0 0 1 1.5 0 7.75 7.75 0 0 1-7 7.717V22h3a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 8 22h3v-2.283A7.75 7.75 0 0 1 4.25 12a.75.75 0 0 1 .75-.75z"/></svg>'>
+  <link rel="icon" type="image/svg+xml" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="%231a1a1a"/><text x="16" y="23" font-family="system-ui,sans-serif" font-size="21" font-weight="700" fill="white" text-anchor="middle">S</text></svg>'>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet"
@@ -189,6 +189,28 @@
     select { cursor: pointer; }
     select:hover, input:hover { border-color: var(--dim); }
     select:focus, input:focus { border-color: var(--accent); }
+
+    .context-field { margin-bottom: 20px; }
+    .context-field label { display: flex; align-items: center; gap: 6px; }
+    .context-field label .opt {
+      font-weight: 400; text-transform: none; letter-spacing: 0;
+      font-size: 10px; color: var(--dim); font-style: italic;
+    }
+    .context-input {
+      width: 100%;
+      padding: 11px 14px;
+      font: inherit; font-size: 14px;
+      font-variation-settings: 'wdth' 92;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .context-input:hover { border-color: var(--dim); }
+    .context-input:focus { border-color: var(--accent); }
+    .context-input::placeholder { color: var(--dim); }
 
     /* ── CONTROLS ── */
     .controls {
@@ -977,14 +999,13 @@
 
   <div class="hero">
     <div class="hero-meta">
-      <span>local · whisper + pyannote</span>
       <span class="meta-line"></span>
       <span id="userEmail" class="meta-user" style="display:none"></span>
       <button id="signOutBtn" class="meta-toggle" title="Sign out" style="display:none">sign out</button>
       <button id="themeToggle" class="meta-toggle" title="Toggle theme">light</button>
     </div>
-    <h1 class="hero-title">Transcriptor</h1>
-    <p class="hero-sub">Call transcription with speaker separation. Everything runs locally — your audio never leaves this device.</p>
+    <h1 class="hero-title">Skriptly</h1>
+    <p class="hero-sub">AI transcription with speaker separation. Processed on GPU in the cloud — no setup required.</p>
   </div>
 
   <div class="grid-2">
@@ -1001,6 +1022,12 @@
       <label for="numSpeakers">Speakers</label>
       <input id="numSpeakers" type="number" min="1" max="20" placeholder="auto">
     </div>
+  </div>
+
+  <div class="context-field">
+    <label for="contextPrompt">Context <span class="opt">optional</span></label>
+    <input id="contextPrompt" class="context-input" type="text"
+           placeholder="Topic, names, terms — helps Whisper get them right">
   </div>
 
   <div class="controls">
@@ -1029,7 +1056,7 @@
   </div>
   <div class="tags-row" id="tagsRow" style="display:none"></div>
   <div id="transcript" class="transcript">
-    <div class="transcript-empty">No recording yet.</div>
+    <div class="transcript-empty">Start a recording — your transcript will appear here.</div>
   </div>
   <div class="transcript-footer">
     <button id="copyBtn" class="btn-ghost">Copy</button>
@@ -2188,8 +2215,10 @@ async function transcribeBlob(blob) {
   try {
     const fd = new FormData();
     fd.append('audio', blob, 'recording.webm');
-    if (langSel.value)       fd.append('language', langSel.value);
-    if (numSpeakersEl.value) fd.append('num_speakers', numSpeakersEl.value);
+    if (langSel.value)                        fd.append('language', langSel.value);
+    if (numSpeakersEl.value)                  fd.append('num_speakers', numSpeakersEl.value);
+    const ctx = document.getElementById('contextPrompt').value.trim();
+    if (ctx)                                  fd.append('prompt', ctx);
 
     const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd, true);
     setStatus('queued…', 'working');
