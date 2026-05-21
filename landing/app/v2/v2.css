@@ -356,14 +356,15 @@
 
 .s-btn {
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 10px 16px;
-  border-radius: var(--s-r-sm);
+  padding: 9px 16px;
+  border-radius: 999px;
   background: var(--s-surface);
   border: 1px solid var(--s-border);
   color: var(--s-ink-soft);
   font-family: var(--s-ui);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
+  letter-spacing: -0.005em;
   transition: background 140ms ease, color 140ms ease, border-color 140ms ease, transform 140ms ease;
 }
 .s-btn:hover {
@@ -376,10 +377,10 @@
   background: linear-gradient(135deg, var(--s-accent), var(--s-accent-hi));
   color: var(--s-on-accent);
   border: none;
-  box-shadow: 0 4px 12px -2px rgba(63, 101, 221, 0.35);
+  box-shadow: 0 4px 12px -2px var(--s-accent-dim);
 }
 .s-btn-primary:hover {
-  box-shadow: 0 6px 18px -2px rgba(63, 101, 221, 0.45);
+  box-shadow: 0 6px 18px -2px var(--s-accent-dim);
 }
 
 /* ─── Studio panel (glass card with REC + waveform) ─── */
@@ -453,13 +454,6 @@
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.5px;
 }
-.s-studio-meta {
-  font-family: var(--s-mono);
-  font-size: 11px;
-  color: var(--s-mute);
-  letter-spacing: 0.08em;
-}
-
 /* Waveform — static for Phase 1, replaced with live AnalyserNode in Phase 2 */
 .s-wave {
   position: relative;
@@ -476,13 +470,15 @@
 }
 .s-wave-bar {
   flex: 1 1 0;
-  min-height: 2px;
+  min-height: 3px;
   border-radius: 1px;
-  background: var(--s-faint);
+  background: var(--s-border-hi);
+  opacity: 0.75;
   transition: background 200ms ease, box-shadow 200ms ease;
 }
 .s-wave-bar.played {
   background: linear-gradient(to bottom, var(--s-accent-hi), var(--s-accent));
+  opacity: 1;
   box-shadow: 0 0 8px var(--s-accent-dim);
 }
 .s-wave-playhead {

@@ -8,11 +8,9 @@ const SPEAKER_COLORS = ["var(--s-spk-1)", "var(--s-spk-2)", "var(--s-spk-3)", "v
 export function TranscriptView({
   segments,
   speakerNames,
-  liveLast = false,
 }: {
   segments: Segment[];
   speakerNames: Record<string, string>;
-  liveLast?: boolean;          // последняя строка с мигающим курсором (Live)
 }) {
   // Уникальные raw-метки → индекс цвета (стабильный по очерёдности)
   const uniqueRaw = Array.from(new Set(segments.map((s) => s.speaker)));
@@ -21,7 +19,6 @@ export function TranscriptView({
   return (
     <div className="s-transcript">
       {segments.map((seg, i) => {
-        const isLast = i === segments.length - 1;
         const display = speakerNames[seg.speaker] ?? defaultSpeakerLabel(seg.speaker);
         const idx = colorIdx(seg.speaker);
         const color = SPEAKER_COLORS[idx % SPEAKER_COLORS.length];
@@ -39,9 +36,7 @@ export function TranscriptView({
                 <span className="time">{formatTime(seg.start)}</span>
                 {seg.edited && <span className="edited">edited</span>}
               </div>
-              <div className={"s-tx-text" + (liveLast && isLast ? " live" : "")}>
-                {seg.text}
-              </div>
+              <div className="s-tx-text">{seg.text}</div>
             </div>
           </div>
         );

@@ -91,7 +91,6 @@ export default function StudioPage() {
           <SpeakerChips
             segments={MOCK_TRANSCRIPT}
             speakerNames={MOCK_SPEAKER_NAMES}
-            activeRaw={recording ? "SPEAKER_00" : undefined}
           />
 
           <TranscriptTabs tabs={tabs} active={activeTab} onChange={setActiveTab} />
@@ -100,7 +99,6 @@ export default function StudioPage() {
             <TranscriptView
               segments={MOCK_TRANSCRIPT}
               speakerNames={MOCK_SPEAKER_NAMES}
-              liveLast={recording}
             />
           )}
           {activeTab === "summary" && (

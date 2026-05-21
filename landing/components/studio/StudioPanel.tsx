@@ -32,12 +32,11 @@ export function StudioPanel({
             className="s-live-label"
             style={{ color: recording ? "var(--s-accent)" : "var(--s-mute)" }}
           >
-            {recording ? "Live" : "Standby"}
+            {recording ? "LIVE" : "STANDBY"}
           </span>
           <span className="s-divider" />
           <span className="s-timer">{timer}</span>
         </div>
-        <div className="s-studio-meta">16 kHz · stereo · whisper-large-v3</div>
       </div>
 
       <Waveform active={recording} />
