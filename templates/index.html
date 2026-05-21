@@ -1950,13 +1950,13 @@ const T = {
     procEtaSecs: 'ETA · {s}s',
     procDone: 'Done',
     procHeadUpload: 'Uploading audio…',
-    procHeadDecode: 'Reading the audio…',
+    procHeadWarmup: 'Loading AI models…',
     procHeadDiarize: 'Identifying speakers…',
     procHeadTranscribe: 'Transcribing…',
     procHeadCorrect: 'Refining transcript…',
     procHeadAssemble: 'Assembling…',
     procStageUpload: 'Upload audio',
-    procStageDecode: 'Decode audio',
+    procStageWarmup: 'Load AI models',
     procStageDiarize: 'Speaker diarization',
     procStageTranscribe: 'Transcription',
     procStageCorrect: 'Punctuation + align',
@@ -2094,13 +2094,13 @@ const T = {
     procEtaSecs: 'Залишилось · {s}с',
     procDone: 'Готово',
     procHeadUpload: 'Завантаження аудіо…',
-    procHeadDecode: 'Читаємо аудіо…',
+    procHeadWarmup: 'Завантажуємо AI-моделі…',
     procHeadDiarize: 'Визначаємо спікерів…',
     procHeadTranscribe: 'Транскрибуємо…',
     procHeadCorrect: 'Уточнюємо текст…',
     procHeadAssemble: 'Збираємо результат…',
     procStageUpload: 'Завантаження',
-    procStageDecode: 'Декодування',
+    procStageWarmup: 'Завантаження AI-моделей',
     procStageDiarize: 'Діаризація спікерів',
     procStageTranscribe: 'Транскрипція',
     procStageCorrect: 'Пунктуація + вирівнювання',
@@ -3159,13 +3159,21 @@ let recordingDurationSec = 0;
 
 const RING_CIRCUMFERENCE = 2 * Math.PI * 68; // ≈ 427.26
 
+// Timing rationale (A10G GPU, warm container):
+//   upload:     ~4s (network + FormData parse)
+//   warmup:     ~70s cold start (models load) — 0s if container already warm,
+//               but we budget for it so the ring doesn't stall visually
+//   diarize:    pyannote 3.1 ≈ d/10  (10x real-time on A10G)
+//   transcribe: whisper large-v3-turbo ≈ d/15 (15x real-time on A10G)
+//   correct:    Qwen LLM correction — ~8s flat (1 batch for most calls)
+//   assemble:   merge + return — ~1s
 const PIPELINE_DEF = [
-  { id: 'upload',     headKey: 'procHeadUpload',     labelKey: 'procStageUpload',     est: () => 3 },
-  { id: 'decode',     headKey: 'procHeadDecode',     labelKey: 'procStageDecode',     est: () => 0.5 },
-  { id: 'diarize',    headKey: 'procHeadDiarize',    labelKey: 'procStageDiarize',    est: d => Math.max(5, d * 0.45) },
-  { id: 'transcribe', headKey: 'procHeadTranscribe', labelKey: 'procStageTranscribe', est: d => Math.max(8, d * 5) },
-  { id: 'correct',    headKey: 'procHeadCorrect',    labelKey: 'procStageCorrect',    est: () => 12 },
-  { id: 'assemble',   headKey: 'procHeadAssemble',   labelKey: 'procStageAssemble',   est: () => 0.5 },
+  { id: 'upload',     headKey: 'procHeadUpload',     labelKey: 'procStageUpload',     est: () => 4 },
+  { id: 'warmup',     headKey: 'procHeadWarmup',     labelKey: 'procStageWarmup',     est: () => 70 },
+  { id: 'diarize',    headKey: 'procHeadDiarize',    labelKey: 'procStageDiarize',    est: d => Math.max(5, d / 10) },
+  { id: 'transcribe', headKey: 'procHeadTranscribe', labelKey: 'procStageTranscribe', est: d => Math.max(5, d / 15) },
+  { id: 'correct',    headKey: 'procHeadCorrect',    labelKey: 'procStageCorrect',    est: () => 8 },
+  { id: 'assemble',   headKey: 'procHeadAssemble',   labelKey: 'procStageAssemble',   est: () => 1 },
 ];
 
 let _procTimer = null;
