@@ -11,6 +11,9 @@
   <link rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,400..800&family=Onest:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
 
+  <!-- Vercel Web Analytics — works on /app served via Vercel rewrite -->
+  <script defer src="/_vercel/insights/script.js"></script>
+
   <!-- Supabase JS client v2: auth + database queries.
        Anon key и URL зашиты — оба публичны, защита через RLS. -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -1731,6 +1734,13 @@
         <span class="settings-row-label" data-i18n="settingsUsageLabel">Usage this month</span>
         <span class="settings-row-value" id="settingsUsage">—</span>
       </div>
+
+      <!-- Manage subscription — shown only for paid users (set by JS) -->
+      <div id="manageSubRow" class="settings-row" style="display:none;margin-top:8px">
+        <span class="settings-row-label" data-i18n="settingsManageSub">Subscription</span>
+        <button id="manageSubBtn" class="btn-ghost" style="font-size:12px;padding:6px 14px"
+                data-i18n="settingsManageSubBtn">Manage billing →</button>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -1895,6 +1905,8 @@ const T = {
     settingsLang: 'Interface language',
     settingsActions: 'Actions',
     settingsSignOut: 'Sign out',
+    settingsManageSub: 'Subscription',
+    settingsManageSubBtn: 'Manage billing →',
     settingsEscHint: `Press ${_KBD('Esc')} to close`,
     settingsThemeLight: 'Light',
     settingsThemeDark: 'Dark',
@@ -1962,6 +1974,9 @@ const T = {
     procStageTranscribe: 'Transcription',
     procStageCorrect: 'Punctuation + align',
     procStageAssemble: 'Assemble session',
+    procSubAudio: '{dur} of audio',
+    procDurMin: '{m}m {s}s',
+    procDurSec: '{s}s',
   },
   ua: {
     // Login
@@ -2039,6 +2054,8 @@ const T = {
     settingsLang: 'Мова інтерфейсу',
     settingsActions: 'Дії',
     settingsSignOut: 'Вийти',
+    settingsManageSub: 'Підписка',
+    settingsManageSubBtn: 'Керувати білінгом →',
     settingsEscHint: `Натисніть ${_KBD('Esc')} щоб закрити`,
     settingsThemeLight: 'Світла',
     settingsThemeDark: 'Темна',
@@ -2106,6 +2123,9 @@ const T = {
     procStageTranscribe: 'Транскрипція',
     procStageCorrect: 'Пунктуація + вирівнювання',
     procStageAssemble: 'Збирання сесії',
+    procSubAudio: '{dur} аудіо',
+    procDurMin: '{m} хв {s} с',
+    procDurSec: '{s} с',
   }
 };
 
@@ -2257,6 +2277,10 @@ function _updatePlanUI() {
   const aiToolsSection  = document.getElementById('aiToolsSection');
   if (numSpeakersWrap) numSpeakersWrap.style.display = isFree ? 'none' : '';
   if (aiToolsSection)  aiToolsSection.style.display  = isFree ? 'none' : '';
+
+  // Show "Manage billing" row only for paid users (they have a Stripe subscription)
+  const manageSubRow = document.getElementById('manageSubRow');
+  if (manageSubRow) manageSubRow.style.display = isFree ? 'none' : '';
 }
 
 // ── Feature flags ─────────────────────────────────────────────
@@ -3249,11 +3273,12 @@ function showProcessingScreen(audioDurSec) {
   document.getElementById('pipelineTitle').textContent =
     tFmt('procPipelineTitle', { n: PIPELINE_DEF.length });
 
-  // Sub text: audio info
+  // Sub text: audio duration only (locale-aware, no model/GPU details)
   const mins = Math.floor(_procAudioDur / 60), secs = Math.floor(_procAudioDur % 60);
-  const durStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-  document.getElementById('processingSub').textContent =
-    `${durStr} of audio · whisper-large-v3-turbo · GPU`;
+  const durStr = mins > 0
+    ? tFmt('procDurMin', { m: mins, s: String(secs).padStart(2, '0') })
+    : tFmt('procDurSec', { s: secs });
+  document.getElementById('processingSub').textContent = tFmt('procSubAudio', { dur: durStr });
 
   _renderPipelineStages(0, 0);
   _updateRing(0, 0);
@@ -4685,9 +4710,44 @@ document.getElementById('planCards').addEventListener('click', e => {
   if (plan) startCheckout(plan, btn);
 });
 
+// ── Stripe Customer Portal ─────────────────────────────────────
+async function openCustomerPortal() {
+  const btn = document.getElementById('manageSubBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = uiLang === 'ua' ? 'Перехід…' : 'Redirecting…';
+  try {
+    const res = await authFetch(`${API_BASE}/api/stripe/portal`, { method: 'POST' });
+    const data = await res.json();
+    if (data.url) {
+      window.location.href = data.url;
+    } else if (data.no_subscription) {
+      alert(uiLang === 'ua'
+        ? 'Активної підписки не знайдено. Оберіть план вище.'
+        : 'No active subscription found. Please subscribe first.');
+      btn.disabled = false;
+      btn.textContent = orig;
+    } else {
+      alert(data.error || 'Could not open billing portal.');
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+document.getElementById('manageSubBtn').addEventListener('click', openCustomerPortal);
+
 // Handle return from Stripe Checkout
 (function() {
   const params = new URLSearchParams(window.location.search);
+  if (params.get('portal') === 'return') {
+    history.replaceState({}, '', window.location.pathname);
+    setTimeout(() => fetchProfile(), 800); // refresh plan after portal changes
+  }
   if (params.get('checkout') === 'success') {
     history.replaceState({}, '', window.location.pathname);
     // Show a brief success message after login loads
