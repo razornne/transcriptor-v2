@@ -1278,7 +1278,7 @@
         <option value="uk">Ukrainian</option>
       </select>
     </div>
-    <div>
+    <div id="numSpeakersWrap">
       <label for="numSpeakers">Speakers</label>
       <input id="numSpeakers" type="number" min="1" max="20" placeholder="auto">
     </div>
@@ -1345,15 +1345,17 @@
   </div>
 
   <div class="ai-section" id="aiSection" style="display:none">
-    <div class="section-title">
-      <span>AI tools</span>
-      <span class="line"></span>
+    <div id="aiToolsSection">
+      <div class="section-title">
+        <span>AI tools</span>
+        <span class="line"></span>
+      </div>
+      <div class="ai-toolbar">
+        <button class="ai-btn" data-template="summary">Summary</button>
+        <button class="ai-btn" data-template="actions">Action items</button>
+      </div>
+      <div id="aiResults"></div>
     </div>
-    <div class="ai-toolbar">
-      <button class="ai-btn" data-template="summary">Summary</button>
-      <button class="ai-btn" data-template="actions">Action items</button>
-    </div>
-    <div id="aiResults"></div>
   </div>
 
   <div class="chat-section" id="chatSection" style="display:none">
@@ -1527,6 +1529,8 @@ async function fetchProfile() {
 }
 
 function _updatePlanUI() {
+  const isFree = currentPlan === 'free';
+
   // Sidebar badge
   const badge = document.getElementById('sidebarPlan');
   if (badge) badge.textContent = PLAN_LABELS[currentPlan] || currentPlan;
@@ -1539,7 +1543,13 @@ function _updatePlanUI() {
   if (planNameEl) planNameEl.textContent = PLAN_LABELS[currentPlan] || currentPlan;
   if (planDescEl) planDescEl.textContent = PLAN_DESCS[currentPlan]  || '';
   if (usageEl)    usageEl.textContent    = `${currentMinutesUsed} / ${currentMinutesLimit} min`;
-  if (upgradeBtn) upgradeBtn.style.display = currentPlan === 'free' ? '' : 'none';
+  if (upgradeBtn) upgradeBtn.style.display = isFree ? '' : 'none';
+
+  // Hide speaker selector and AI tools for Free users
+  const numSpeakersWrap = document.getElementById('numSpeakersWrap');
+  const aiToolsSection  = document.getElementById('aiToolsSection');
+  if (numSpeakersWrap) numSpeakersWrap.style.display = isFree ? 'none' : '';
+  if (aiToolsSection)  aiToolsSection.style.display  = isFree ? 'none' : '';
 }
 
 // ── Feature flags ─────────────────────────────────────────────

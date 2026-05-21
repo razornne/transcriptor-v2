@@ -696,10 +696,11 @@ def stripe_webhook():
                       params={"id": f"eq.{user_id}"},
                       data={
                           "plan": "pro",
+                          "minutes_used": 0,
                           "stripe_customer_id": _g(obj, "customer"),
                           "stripe_subscription_id": _g(obj, "subscription"),
                       })
-            print(f"[webhook] plan updated to pro for {user_id}", flush=True)
+            print(f"[webhook] plan updated to pro + minutes reset for {user_id}", flush=True)
 
     elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
         customer_id = _g(obj, "customer")
