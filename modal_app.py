@@ -77,6 +77,7 @@ web_image = (
         "python-dotenv",
         "requests",
         "pyjwt[crypto]",  # для валидации Supabase JWT (включая asymmetric ES256/RS256)
+        "stripe",
     )
     .add_local_python_source("app")
     # Шаблон index.html и статика подгружаются как файлы (Flask их ищет рядом с app.py)

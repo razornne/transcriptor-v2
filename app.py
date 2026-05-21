@@ -348,7 +348,67 @@ ALLOWED_LANGUAGES = {"ru", "uk", "en"}
 #   https://<project>.supabase.co/auth/v1/.well-known/jwks.json
 # PyJWKClient кэширует ключи. Работает с HS256 (legacy) и ES256/RS256 (новый
 # JWT Signing Keys), без необходимости хранить секрет на нашей стороне.
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_URL              = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+STRIPE_SECRET_KEY         = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET     = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_PRO_MONTHLY_PRICE  = os.environ.get("STRIPE_PRO_MONTHLY_PRICE", "")
+STRIPE_PRO_ANNUAL_PRICE   = os.environ.get("STRIPE_PRO_ANNUAL_PRICE", "")
+
+PLAN_LIMITS = {
+    "free": {"minutes": 60,   "diarization": False, "ai": False, "history": 5},
+    "pro":  {"minutes": 600,  "diarization": True,  "ai": True,  "history": None},
+    "max":  {"minutes": 2000, "diarization": True,  "ai": True,  "history": None},
+}
+
+_tracked_jobs: set = set()  # job_ids уже учтённые в minutes_used (in-memory, ок для MVP)
+
+
+def _sb_admin(path: str, method: str = "GET", data: dict = None, params: dict = None) -> list:
+    """Supabase REST с service role key — обходит RLS. Только бэкенд."""
+    if not SUPABASE_SERVICE_ROLE_KEY or not SUPABASE_URL:
+        return []
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    r = requests.request(method, url, headers=headers, json=data, params=params, timeout=5)
+    r.raise_for_status()
+    return r.json() if r.content else []
+
+
+def _get_user_profile(user_id: str) -> dict:
+    """Читает профиль, сбрасывает счётчик если новый месяц, создаёт если нет."""
+    from datetime import timezone
+    rows = _sb_admin("user_profiles", params={"id": f"eq.{user_id}", "select": "*"})
+    if rows:
+        profile = rows[0]
+        try:
+            reset_at = datetime.fromisoformat(
+                profile.get("minutes_reset_at", "").replace("Z", "+00:00")
+            )
+            now = datetime.now(timezone.utc)
+            if now.year != reset_at.year or now.month != reset_at.month:
+                new_reset = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+                _sb_admin("user_profiles", method="PATCH",
+                          params={"id": f"eq.{user_id}"},
+                          data={"minutes_used": 0, "minutes_reset_at": new_reset})
+                profile["minutes_used"] = 0
+        except Exception:
+            pass
+        return profile
+    # Создаём профиль если не существует
+    rows = _sb_admin("user_profiles", method="POST", data={"id": user_id})
+    return rows[0] if rows else {"plan": "free", "minutes_used": 0}
+
+
+def _add_minutes(user_id: str, minutes: float):
+    """Добавляет минуты через Postgres RPC (атомарно, без race condition)."""
+    _sb_admin("rpc/add_minutes", method="POST",
+              data={"user_id": user_id, "mins": max(1, int(minutes + 0.5))})
 
 _jwks_client = None
 def _get_jwks_client():
@@ -362,7 +422,7 @@ def _get_jwks_client():
     return _jwks_client
 
 # Эндпоинты которые работают без auth (служебные, открытые)
-_PUBLIC_API_PATHS = {"/api/health"}
+_PUBLIC_API_PATHS = {"/api/health", "/api/stripe/webhook"}
 
 
 @app.before_request
@@ -431,7 +491,22 @@ def job_status_endpoint(job_id):
     """
     # Modal: префикс кодирует тип
     if USE_MODAL and len(job_id) > 2 and job_id[1] == "_":
-        return jsonify(_modal_job_status(job_id))
+        result = _modal_job_status(job_id)
+        # Трекаем минуты ровно один раз когда транскрипция завершилась
+        if (result.get("status") == "done"
+                and job_id.startswith(JOB_PREFIX_TRANSCRIBE)
+                and job_id not in _tracked_jobs
+                and SUPABASE_SERVICE_ROLE_KEY
+                and g.user_id):
+            segments = result.get("segments") or []
+            if segments:
+                duration_mins = max(s.get("end", 0) for s in segments) / 60
+                try:
+                    _add_minutes(g.user_id, duration_mins)
+                    _tracked_jobs.add(job_id)
+                except Exception as e:
+                    print(f"[usage] tracking failed: {e}")
+        return jsonify(result)
 
     # Local: обычный uuid hex
     _cleanup_local_jobs()
@@ -537,6 +612,100 @@ def _llm_correct_segments(segments: list[dict], language: str | None) -> list[di
             print(f"[llm-correct] batch {batch_start // batch_size} failed: {e}", flush=True)
 
     return corrected
+
+
+@app.route("/api/profile", methods=["GET"])
+def profile_endpoint():
+    """Возвращает план и использованные минуты для текущего пользователя."""
+    if not g.user_id or not SUPABASE_SERVICE_ROLE_KEY:
+        return jsonify({"plan": "free", "minutes_used": 0, "minutes_limit": 60})
+    try:
+        profile = _get_user_profile(g.user_id)
+        plan = profile.get("plan", "free")
+        limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+        return jsonify({
+            "plan": plan,
+            "minutes_used": profile.get("minutes_used", 0),
+            "minutes_limit": limits["minutes"],
+        })
+    except Exception as e:
+        print(f"[profile] error: {e}")
+        return jsonify({"plan": "free", "minutes_used": 0, "minutes_limit": 60})
+
+
+@app.route("/api/stripe/checkout", methods=["POST"])
+def stripe_checkout():
+    """Создаёт Stripe Checkout Session и возвращает URL для редиректа."""
+    import stripe as _stripe
+    _stripe.api_key = STRIPE_SECRET_KEY
+    if not STRIPE_SECRET_KEY:
+        return jsonify({"error": "Stripe not configured"}), 503
+
+    data = request.get_json() or {}
+    price_id = data.get("price_id") or STRIPE_PRO_MONTHLY_PRICE
+    if not price_id:
+        return jsonify({"error": "price_id required — add STRIPE_PRO_MONTHLY_PRICE to secrets"}), 400
+
+    origin = request.headers.get("Origin", "https://skriptly.io")
+    base = origin + "/app"
+    try:
+        session = _stripe.checkout.Session.create(
+            mode="subscription",
+            payment_method_types=["card"],
+            line_items=[{"price": price_id, "quantity": 1}],
+            success_url=base + "?checkout=success",
+            cancel_url=base + "?checkout=cancelled",
+            client_reference_id=g.user_id,
+            customer_email=g.user_email or "",
+        )
+        return jsonify({"url": session.url})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/stripe/webhook", methods=["POST"])
+def stripe_webhook():
+    """Stripe отправляет сюда события подписок. Обновляем план в Supabase."""
+    import stripe as _stripe
+    _stripe.api_key = STRIPE_SECRET_KEY
+    if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
+        return jsonify({"error": "Stripe not configured"}), 503
+
+    payload = request.get_data()
+    sig = request.headers.get("Stripe-Signature", "")
+    try:
+        event = _stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+    etype = event["type"]
+    obj = event["data"]["object"]
+
+    if etype == "checkout.session.completed":
+        user_id = obj.get("client_reference_id")
+        if user_id:
+            _sb_admin("user_profiles", method="PATCH",
+                      params={"id": f"eq.{user_id}"},
+                      data={
+                          "plan": "pro",
+                          "stripe_customer_id": obj.get("customer"),
+                          "stripe_subscription_id": obj.get("subscription"),
+                      })
+
+    elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
+        customer_id = obj.get("customer")
+        rows = _sb_admin("user_profiles",
+                         params={"stripe_customer_id": f"eq.{customer_id}", "select": "id"})
+        if rows:
+            uid = rows[0]["id"]
+            if etype == "customer.subscription.deleted":
+                plan = "free"
+            else:
+                plan = "pro" if obj.get("status") in ("active", "trialing") else "free"
+            _sb_admin("user_profiles", method="PATCH",
+                      params={"id": f"eq.{uid}"}, data={"plan": plan})
+
+    return jsonify({"ok": True})
 
 
 @app.route("/api/title", methods=["POST"])
@@ -735,6 +904,18 @@ def generate_endpoint():
     Returns: {"job_id": "...", "status": "queued"}
     Poll: GET /api/jobs/<job_id> → {"status": "done", "result": "..."}
     """
+    # Plan check: AI tools only for Pro+
+    if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
+        try:
+            profile = _get_user_profile(g.user_id)
+            if PLAN_LIMITS.get(profile.get("plan", "free"), {}).get("ai") is False:
+                return jsonify({
+                    "error": "AI analysis requires Pro plan.",
+                    "upgrade_required": True,
+                }), 402
+        except Exception as e:
+            print(f"[plan check] failed: {e}")
+
     data = request.get_json(silent=True) or {}
     segments = data.get("segments") or []
     if not segments:
@@ -857,6 +1038,22 @@ def transcribe_endpoint():
     prompt = request.form.get("prompt") or None
     num_speakers_raw = request.form.get("num_speakers")
     num_speakers = int(num_speakers_raw) if num_speakers_raw and num_speakers_raw.isdigit() else None
+
+    # Plan limits check
+    if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
+        try:
+            profile = _get_user_profile(g.user_id)
+            plan = profile.get("plan", "free")
+            limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+            if profile.get("minutes_used", 0) >= limits["minutes"]:
+                return jsonify({
+                    "error": f"Monthly limit reached ({limits['minutes']} min). Upgrade to continue.",
+                    "upgrade_required": True,
+                }), 402
+            if not limits["diarization"]:
+                num_speakers = 1  # Free: транскрипция без разделения по спикерам
+        except Exception as e:
+            print(f"[limits] check failed: {e}")
 
     # ── Modal path: spawn() возвращает FunctionCall сразу, обработка идёт в облаке
     if USE_MODAL:
