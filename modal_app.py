@@ -22,12 +22,18 @@ import re
 import subprocess
 import tempfile
 import os
+import time
 
 import modal
 
 # ── App + infrastructure ─────────────────────────────────────────
 
 app = modal.App("transcriptor-v2")
+
+# Shared Dict для real-time прогресса транскрипции.
+# transcribe_full пишет сюда по мере прохождения этапов;
+# flask_app читает при polling и включает в ответ фронту.
+progress_store = modal.Dict.from_name("transcription-progress", create_if_missing=True)
 
 # Persistent Volume — модели кэшируются между запусками.
 # Первый запуск скачает всё (~12 GB), последующие грузят за секунды.
@@ -133,6 +139,7 @@ _CORRECTION_INSTRUCTIONS: dict[str, str] = {
     secrets=[hf_secret],
     timeout=1200,                 # 20 мин макс (длинные созвоны)
     scaledown_window=300,         # держать тёплым 5 мин после последнего вызова
+    retries=modal.Retries(max_retries=2, backoff_coefficient=1),  # retry on code-level exceptions
 )
 class Transcriptor:
 
@@ -200,16 +207,29 @@ class Transcriptor:
         language: str | None,
         num_speakers: int | None,
         prompt: str | None,
+        progress_key: str | None = None,
     ) -> list[dict]:
         """Полный пайплайн: webm → whisper → pyannote → merge → LLM correction.
 
         Принимает сырой WebM/Opus blob, конвертирует через ffmpeg внутри.
         Возвращает [{speaker, start, end, text}, ...].
+
+        progress_key: если задан, пишем этапы в modal.Dict progress_store
+        чтобы фронт видел реальный прогресс (не估计ку).
+        Этапы: "convert" → "transcribe" → "diarize" → "merge" → "correct"
         """
         import soundfile as sf
         import numpy as np
         import torch
         from merger import merge
+
+        def _report(stage: str):
+            if progress_key:
+                try:
+                    progress_store[progress_key] = {"stage": stage, "ts": time.time()}
+                    print(f"[modal] progress → {stage}", flush=True)
+                except Exception as _e:
+                    print(f"[modal] progress report failed: {_e}", flush=True)
 
         # WebM → WAV (16kHz mono)
         webm_fd, webm_path = tempfile.mkstemp(suffix=".webm")
@@ -224,6 +244,7 @@ class Transcriptor:
                 ["ffmpeg", "-y", "-i", webm_path, "-ar", "16000", "-ac", "1", wav_path],
                 check=True, capture_output=True,
             )
+            _report("convert")  # ffmpeg done — warmup + decode complete
 
             # --- Whisper ---
             lang_hint = _LANG_PROMPTS.get(language or "")
@@ -267,6 +288,7 @@ class Transcriptor:
                 for s in segments_iter
                 if s.text.strip()
             ]
+            _report("transcribe")  # whisper done
 
             if not segments:
                 return []
@@ -288,6 +310,7 @@ class Transcriptor:
                 {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
                 for turn, _, speaker in annotation.itertracks(yield_label=True)
             ]
+            _report("diarize")  # pyannote done
 
             # --- Merge ---
             merged = merge(segments, speaker_turns)
@@ -296,9 +319,11 @@ class Transcriptor:
                 m["start"]   = float(m["start"])
                 m["end"]     = float(m["end"])
                 m["speaker"] = str(m["speaker"])
+            _report("merge")  # merge done
 
             # --- LLM correction ---
             merged = self._correct_segments(merged, language)
+            _report("correct")  # LLM correction done
 
             return merged
 

@@ -50,6 +50,27 @@ JOBS: dict[str, dict] = {}     # только для local mode
 JOBS_LOCK = threading.Lock()
 JOB_TTL_MINUTES = 30
 
+# job_id → progress_key: in-memory mapping для чтения real-time прогресса из modal.Dict.
+# Best-effort: если Flask контейнер рестартует, mapping теряется и фронт
+# фоллбэкает на estimation-based прогресс — это нормально, транскрипция продолжается.
+_job_progress_keys: dict[str, str] = {}
+
+# Ленивая ссылка на modal.Dict для прогресса — инициализируется при первом use.
+_progress_dict = None
+
+
+def _get_progress_dict():
+    """Возвращает modal.Dict progress_store. Ленивая инициализация."""
+    global _progress_dict
+    if _progress_dict is None and USE_MODAL:
+        try:
+            _progress_dict = _modal.Dict.from_name(
+                "transcription-progress", create_if_missing=True
+            )
+        except Exception as e:
+            print(f"[progress] dict init failed: {e}", flush=True)
+    return _progress_dict
+
 
 def _create_local_job(kind: str) -> str:
     job_id = uuid.uuid4().hex
@@ -111,7 +132,20 @@ def _modal_job_status(job_id: str) -> dict:
         call = _modal.FunctionCall.from_id(call_id)
         result = call.get(timeout=0)  # 0 = не ждать
     except TimeoutError:
-        return {"status": "processing"}
+        # Job still running — enrich with real backend progress if available
+        resp: dict = {"status": "processing"}
+        if kind == "transcribe":
+            pk = _job_progress_keys.get(job_id)
+            if pk:
+                try:
+                    pdict = _get_progress_dict()
+                    if pdict is not None:
+                        prog = pdict.get(pk)
+                        if prog:
+                            resp["progress"] = prog
+                except Exception:
+                    pass
+        return resp
     except _modal.exception.OutputExpiredError:
         return {"status": "error", "error": "result expired"}
     except Exception as e:
@@ -1089,13 +1123,16 @@ def transcribe_endpoint():
     # ── Modal path: spawn() возвращает FunctionCall сразу, обработка идёт в облаке
     if USE_MODAL:
         audio_bytes = audio_file.read()
+        progress_key = uuid.uuid4().hex  # уникальный ключ для modal.Dict прогресса
         try:
             call = _transcriptor.transcribe_full.spawn(
-                audio_bytes, language, num_speakers, prompt
+                audio_bytes, language, num_speakers, prompt, progress_key
             )
         except Exception as e:
             return jsonify({"error": f"modal spawn failed: {e}"}), 502
-        return jsonify({"job_id": JOB_PREFIX_TRANSCRIBE + call.object_id, "status": "queued"})
+        job_id = JOB_PREFIX_TRANSCRIBE + call.object_id
+        _job_progress_keys[job_id] = progress_key  # сохраняем для polling
+        return jsonify({"job_id": job_id, "status": "queued"})
 
     # ── Local path: пишем на диск, обрабатываем в фоновом потоке
     filename = datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".webm"
