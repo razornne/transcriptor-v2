@@ -764,10 +764,24 @@
       backdrop-filter: blur(4px);
       display: flex; align-items: center; justify-content: center;
       z-index: 100;
-      animation: fade-in .12s ease-out;
+      opacity: 1;
+      visibility: visible;
+      transition: opacity .18s ease, visibility .18s;
     }
-    .modal-backdrop.hidden { display: none; }
-    @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+    .modal-backdrop.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    /* Плавное переключение темы */
+    .theme-transitioning,
+    .theme-transitioning * {
+      transition:
+        background-color .3s ease,
+        color .3s ease,
+        border-color .3s ease,
+        box-shadow .3s ease !important;
+    }
 
     .modal-card {
       background: var(--surface);
@@ -776,7 +790,10 @@
       box-shadow: var(--shadow);
       padding: 26px 28px;
       min-width: 360px; max-width: 480px;
+      transform: translateY(0);
+      transition: transform .18s ease;
     }
+    .modal-backdrop.hidden .modal-card { transform: translateY(6px); }
     .modal-title {
       font-family: 'Bricolage Grotesque', sans-serif;
       font-variation-settings: 'wdth' 100, 'wght' 700;
@@ -1509,7 +1526,7 @@ const PLAN_LABELS = { free: 'Free', pro: 'Pro', max: 'Max', team: 'Team' };
 const PLAN_DESCS  = {
   free: '60 min/month · transcription only',
   pro:  '600 min/month · diarization + AI tools',
-  max:  '2000 min/month · sharing + Notion',
+  max:  '2000 min/month · sharing + priority processing',
   team: '600 min/user/month · workspace',
 };
 
@@ -1590,14 +1607,18 @@ const TEMPLATE_LABELS = {
 };
 
 // ── Theme toggle ───────────────────────────────────────────────
-function applyTheme(theme) {
+function applyTheme(theme, animate = false) {
+  if (animate) {
+    document.documentElement.classList.add('theme-transitioning');
+    setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 350);
+  }
   document.documentElement.dataset.theme = theme;
   themeToggle.textContent = theme === 'dark' ? 'light' : 'dark';
   localStorage.setItem('theme', theme);
 }
 applyTheme(document.documentElement.dataset.theme || 'dark');
 themeToggle.addEventListener('click', () => {
-  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
 });
 
 // ── Settings persistence ──────────────────────────────────────
@@ -2254,19 +2275,20 @@ async function ensureNotifPermission() {
   return result === 'granted';
 }
 function notify(title, body, tag = 'transcriptor') {
-  if (!('Notification' in window)) {
-    console.warn('[notify] skipped — Notification API not available');
-    return;
+  // Уведомления только когда вкладка в фоне — иначе они раздражают
+  if (!document.hidden) return;
+  if (!('Notification' in window)) return;
+
+  const send = () => {
+    try { return new Notification(title, { body, tag, silent: true }); } catch (e) {}
+  };
+
+  if (Notification.permission === 'granted') {
+    send();
+  } else if (Notification.permission === 'default') {
+    // Запрашиваем разрешение лениво — только когда реально нужно и таб уже в фоне
+    Notification.requestPermission().then(r => { if (r === 'granted') send(); });
   }
-  if (Notification.permission !== 'granted') {
-    console.warn(`[notify] skipped — permission is "${Notification.permission}". Tried to send:`, title);
-    return;
-  }
-  try {
-    const n = new Notification(title, { body, tag, silent: false });
-    console.log('[notify] fired:', title, '—', body);
-    return n;
-  } catch (e) { console.warn('[notify] fire failed:', e); }
 }
 
 // Battery check: предупреждаем если ноут не на зарядке.
@@ -2512,11 +2534,9 @@ startBtn.addEventListener('click', async () => {
   fullRecorder.onstop = handleFullStop;
   fullRecorder.start(5000);
 
-  // Keep-alive трюки: silent audio + wake lock + notification
+  // Keep-alive трюки: silent audio + wake lock
   startSilentAudio(audioCtx);
   await acquireWakeLock();
-  await ensureNotifPermission();
-  notify('Recording started', 'Transcriptor is capturing audio. You can switch tabs safely.');
 
   // Auto-stop если пользователь отозвал шеринг
   displayStream.getAudioTracks()[0].addEventListener('ended', () => {
@@ -3620,7 +3640,7 @@ function syncSettingsThemeBtn() {
   settingsThemeBtn.textContent = isDark ? 'Light' : 'Dark';
 }
 settingsThemeBtn.addEventListener('click', () => {
-  themeToggle.click();
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
   syncSettingsThemeBtn();
 });
 syncSettingsThemeBtn();
@@ -3637,10 +3657,11 @@ document.getElementById('settingsUpgradeBtn').addEventListener('click', async ()
   btn.disabled = true;
   btn.textContent = 'Redirecting…';
   try {
+    const targetPlan = btn.dataset.plan || 'pro';
     const res = await authFetch(`${API_BASE}/api/stripe/checkout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ plan: targetPlan }),
     });
     const data = await res.json();
     if (data.url) {

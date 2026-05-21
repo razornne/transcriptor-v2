@@ -354,6 +354,15 @@ STRIPE_SECRET_KEY         = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET     = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_PRO_MONTHLY_PRICE  = os.environ.get("STRIPE_PRO_MONTHLY_PRICE", "")
 STRIPE_PRO_ANNUAL_PRICE   = os.environ.get("STRIPE_PRO_ANNUAL_PRICE", "")
+STRIPE_MAX_MONTHLY_PRICE  = os.environ.get("STRIPE_MAX_MONTHLY_PRICE", "")
+STRIPE_MAX_ANNUAL_PRICE   = os.environ.get("STRIPE_MAX_ANNUAL_PRICE", "")
+
+STRIPE_PRICE_MAP = {
+    ("pro",  "monthly"): lambda: STRIPE_PRO_MONTHLY_PRICE,
+    ("pro",  "annual"):  lambda: STRIPE_PRO_ANNUAL_PRICE,
+    ("max",  "monthly"): lambda: STRIPE_MAX_MONTHLY_PRICE,
+    ("max",  "annual"):  lambda: STRIPE_MAX_ANNUAL_PRICE,
+}
 
 PLAN_LIMITS = {
     "free": {"minutes": 60,   "diarization": False, "ai": False, "history": 5},
@@ -642,9 +651,14 @@ def stripe_checkout():
         return jsonify({"error": "Stripe not configured"}), 503
 
     data = request.get_json() or {}
-    price_id = data.get("price_id") or STRIPE_PRO_MONTHLY_PRICE
+    plan    = data.get("plan", "pro").lower()
+    billing = data.get("billing", "monthly").lower()
+    if plan not in ("pro", "max"):
+        plan = "pro"
+
+    price_id = data.get("price_id") or (STRIPE_PRICE_MAP.get((plan, billing), lambda: "")() )
     if not price_id:
-        return jsonify({"error": "price_id required — add STRIPE_PRO_MONTHLY_PRICE to secrets"}), 400
+        return jsonify({"error": f"price_id for {plan}/{billing} not configured in secrets"}), 400
 
     origin = request.headers.get("Origin", "https://skriptly.io")
     base = origin + "/app"
@@ -657,6 +671,7 @@ def stripe_checkout():
             cancel_url=base + "?checkout=cancelled",
             client_reference_id=g.user_id,
             customer_email=g.user_email or "",
+            metadata={"plan": plan, "user_id": g.user_id or ""},
         )
         return jsonify({"url": session.url})
     except Exception as e:
@@ -690,17 +705,22 @@ def stripe_webhook():
 
     if etype == "checkout.session.completed":
         user_id = _g(obj, "client_reference_id")
-        print(f"[webhook] checkout.session.completed user_id={user_id}", flush=True)
+        # Read plan from metadata (set at checkout creation), default pro
+        meta = _g(obj, "metadata") or {}
+        plan_name = (meta.get("plan") if isinstance(meta, dict) else getattr(meta, "plan", "pro")) or "pro"
+        if plan_name not in ("pro", "max"):
+            plan_name = "pro"
+        print(f"[webhook] checkout.session.completed user_id={user_id} plan={plan_name}", flush=True)
         if user_id:
             _sb_admin("user_profiles", method="PATCH",
                       params={"id": f"eq.{user_id}"},
                       data={
-                          "plan": "pro",
+                          "plan": plan_name,
                           "minutes_used": 0,
                           "stripe_customer_id": _g(obj, "customer"),
                           "stripe_subscription_id": _g(obj, "subscription"),
                       })
-            print(f"[webhook] plan updated to pro + minutes reset for {user_id}", flush=True)
+            print(f"[webhook] plan updated to {plan_name} + minutes reset for {user_id}", flush=True)
 
     elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
         customer_id = _g(obj, "customer")
