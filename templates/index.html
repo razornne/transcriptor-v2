@@ -1217,13 +1217,14 @@
     .sidebar-settings-btn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 
     /* ── SETTINGS MODAL ── */
-    .settings-modal .modal-card { min-width: 400px; max-width: 460px; }
-    .settings-section { margin-bottom: 20px; }
+    .settings-modal .modal-card { min-width: 580px; max-width: 660px; }
+    .settings-section { margin-bottom: 22px; }
     .settings-section:last-child { margin-bottom: 0; }
     .settings-section-title {
       font-size: 10px; font-weight: 700;
       letter-spacing: .14em; text-transform: uppercase;
-      color: var(--muted); margin-bottom: 10px;
+      color: var(--muted); margin-bottom: 12px;
+      display: flex; align-items: center; justify-content: space-between;
     }
     .settings-row {
       display: flex; align-items: center; justify-content: space-between;
@@ -1233,25 +1234,111 @@
     .settings-row:last-child { border-bottom: none; }
     .settings-row-label { color: var(--text); }
     .settings-row-value { color: var(--muted); font-size: 13px; }
-    .settings-plan-card {
-      padding: 14px 16px;
-      background: color-mix(in srgb, var(--accent) 7%, transparent);
-      border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-      border-radius: 10px; margin-bottom: 10px;
-      display: flex; align-items: center; justify-content: space-between;
+
+    /* ── Billing toggle ── */
+    .billing-toggle {
+      display: flex; align-items: center;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px; padding: 2px; gap: 2px;
     }
-    .settings-plan-name {
-      font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 2px;
+    .billing-opt {
+      padding: 4px 11px;
+      font: inherit; font-size: 11px; font-weight: 600;
+      border: none; border-radius: 6px; cursor: pointer;
+      color: var(--muted); background: transparent;
+      transition: background .15s, color .15s;
+      white-space: nowrap;
     }
-    .settings-plan-desc { font-size: 12.5px; color: var(--muted); }
-    .settings-upgrade-btn {
-      padding: 8px 16px;
+    .billing-opt.active { background: var(--surface-2); color: var(--text); }
+    .billing-save {
+      color: #4caf82; font-size: 10px; margin-left: 3px;
+    }
+
+    /* ── Plan cards grid ── */
+    .plan-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 2px;
+    }
+    .plan-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 14px;
+      display: flex; flex-direction: column; gap: 0;
+      position: relative;
+      transition: border-color .15s;
+      background: var(--bg);
+    }
+    .plan-card.current-plan {
+      border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+      background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+    }
+    .plan-card.featured {
+      border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+    }
+    .plan-card-badge {
+      position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
       background: var(--accent); color: var(--bg);
-      border: none; border-radius: 7px;
-      font: inherit; font-size: 12.5px; font-weight: 600;
-      cursor: pointer; transition: background .15s; white-space: nowrap;
+      font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+      padding: 2px 9px; border-radius: 0 0 6px 6px;
+      white-space: nowrap;
     }
-    .settings-upgrade-btn:hover { background: var(--accent-h); }
+    .plan-card-name {
+      font-size: 13px; font-weight: 700; color: var(--text);
+      margin-bottom: 6px; margin-top: 8px;
+    }
+    .plan-card.featured .plan-card-name { color: var(--accent-h); }
+    .plan-price {
+      display: flex; align-items: baseline; gap: 2px;
+      margin-bottom: 12px;
+    }
+    .plan-price-amt {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-variation-settings: 'wdth' 100, 'wght' 700;
+      font-size: 26px; color: var(--text); line-height: 1;
+    }
+    .plan-price-per { font-size: 12px; color: var(--muted); }
+    .plan-features {
+      list-style: none; padding: 0; margin: 0 0 14px;
+      display: flex; flex-direction: column; gap: 5px;
+      flex: 1;
+    }
+    .plan-features li {
+      font-size: 12px; color: var(--muted);
+      padding-left: 14px; position: relative;
+    }
+    .plan-features li::before {
+      content: '✓';
+      position: absolute; left: 0;
+      color: var(--accent); font-size: 11px;
+    }
+    .plan-card-btn {
+      width: 100%; padding: 8px 0;
+      font: inherit; font-size: 12.5px; font-weight: 600;
+      border-radius: 8px; cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s;
+      border: 1px solid transparent;
+    }
+    .plan-card-btn.btn-current {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--muted);
+      cursor: default;
+    }
+    .plan-card-btn.btn-upgrade {
+      background: var(--accent); color: var(--bg);
+      border-color: transparent;
+    }
+    .plan-card-btn.btn-upgrade:hover { background: var(--accent-h); }
+    .plan-card-btn.btn-upgrade:disabled { opacity: .5; cursor: not-allowed; }
+    .plan-card-btn.btn-downgrade {
+      background: transparent;
+      border-color: var(--border);
+      color: var(--dim);
+      cursor: default;
+    }
     .settings-danger-btn {
       width: 100%; padding: 10px 14px;
       background: transparent; color: var(--danger);
@@ -1453,15 +1540,68 @@
     </div>
 
     <div class="settings-section">
-      <div class="settings-section-title">Plan</div>
-      <div class="settings-plan-card">
-        <div>
-          <div class="settings-plan-name" id="settingsPlanName">Free</div>
-          <div class="settings-plan-desc" id="settingsPlanDesc">60 min/month · transcription only</div>
+      <div class="settings-section-title">
+        Subscription
+        <div class="billing-toggle" id="billingToggle">
+          <button class="billing-opt active" data-billing="monthly">Monthly</button>
+          <button class="billing-opt" data-billing="annual">Annual <span class="billing-save">−20%</span></button>
         </div>
-        <button class="settings-upgrade-btn" id="settingsUpgradeBtn">Upgrade →</button>
       </div>
-      <div class="settings-row" id="settingsUsageRow" style="margin-top:10px">
+
+      <div class="plan-cards" id="planCards">
+        <!-- Free -->
+        <div class="plan-card" id="planCardFree" data-plan="free">
+          <div class="plan-card-name">Free</div>
+          <div class="plan-price">
+            <span class="plan-price-amt">$0</span>
+            <span class="plan-price-per">/mo</span>
+          </div>
+          <ul class="plan-features">
+            <li>60 min/month</li>
+            <li>Transcription only</li>
+            <li>Last 5 recordings</li>
+            <li>Export .md</li>
+          </ul>
+          <button class="plan-card-btn btn-current" disabled>Current plan</button>
+        </div>
+
+        <!-- Pro -->
+        <div class="plan-card" id="planCardPro" data-plan="pro">
+          <div class="plan-card-name">Pro</div>
+          <div class="plan-price">
+            <span class="plan-price-amt" id="proPriceAmt">$15</span>
+            <span class="plan-price-per" id="proPricePer">/mo</span>
+          </div>
+          <ul class="plan-features">
+            <li>600 min/month</li>
+            <li>Speaker diarization</li>
+            <li>Summary + Action items</li>
+            <li>Unlimited history</li>
+            <li>Speaker rename</li>
+          </ul>
+          <button class="plan-card-btn btn-upgrade" id="proUpgradeBtn" data-plan="pro">Upgrade to Pro</button>
+        </div>
+
+        <!-- Max -->
+        <div class="plan-card featured" id="planCardMax" data-plan="max">
+          <div class="plan-card-badge">Best value</div>
+          <div class="plan-card-name">Max</div>
+          <div class="plan-price">
+            <span class="plan-price-amt" id="maxPriceAmt">$29</span>
+            <span class="plan-price-per" id="maxPricePer">/mo</span>
+          </div>
+          <ul class="plan-features">
+            <li>2000 min/month</li>
+            <li>Everything in Pro</li>
+            <li>Share by link</li>
+            <li>Notion integration</li>
+            <li>Priority processing</li>
+          </ul>
+          <button class="plan-card-btn btn-upgrade" id="maxUpgradeBtn" data-plan="max">Upgrade to Max</button>
+        </div>
+      </div>
+
+      <div class="settings-row" id="settingsUsageRow" style="margin-top:12px">
         <span class="settings-row-label">Usage this month</span>
         <span class="settings-row-value" id="settingsUsage">—</span>
       </div>
@@ -1587,22 +1727,42 @@ async function fetchProfile() {
   }
 }
 
+const PLAN_RANK = { free: 0, pro: 1, max: 2 };
+
 function _updatePlanUI() {
   const isFree = currentPlan === 'free';
+  const rank   = PLAN_RANK[currentPlan] ?? 0;
 
   // Sidebar badge
   const badge = document.getElementById('sidebarPlan');
   if (badge) badge.textContent = PLAN_LABELS[currentPlan] || currentPlan;
 
-  // Settings modal
-  const planNameEl = document.getElementById('settingsPlanName');
-  const planDescEl = document.getElementById('settingsPlanDesc');
-  const usageEl    = document.getElementById('settingsUsage');
-  const upgradeBtn = document.getElementById('settingsUpgradeBtn');
-  if (planNameEl) planNameEl.textContent = PLAN_LABELS[currentPlan] || currentPlan;
-  if (planDescEl) planDescEl.textContent = PLAN_DESCS[currentPlan]  || '';
-  if (usageEl)    usageEl.textContent    = `${currentMinutesUsed} / ${currentMinutesLimit} min`;
-  if (upgradeBtn) upgradeBtn.style.display = isFree ? '' : 'none';
+  // Usage row
+  const usageEl = document.getElementById('settingsUsage');
+  if (usageEl) usageEl.textContent = `${currentMinutesUsed} / ${currentMinutesLimit} min`;
+
+  // Plan card highlights + button states
+  ['free', 'pro', 'max'].forEach(plan => {
+    const card = document.getElementById('planCard' + plan.charAt(0).toUpperCase() + plan.slice(1));
+    if (!card) return;
+    const btn = card.querySelector('.plan-card-btn');
+    const planRank = PLAN_RANK[plan] ?? 0;
+    card.classList.toggle('current-plan', plan === currentPlan);
+    if (!btn) return;
+    if (plan === currentPlan) {
+      btn.textContent = 'Current plan';
+      btn.className = 'plan-card-btn btn-current';
+      btn.disabled = true;
+    } else if (planRank < rank) {
+      btn.textContent = plan.charAt(0).toUpperCase() + plan.slice(1);
+      btn.className = 'plan-card-btn btn-downgrade';
+      btn.disabled = true;
+    } else {
+      btn.textContent = `Upgrade to ${plan.charAt(0).toUpperCase() + plan.slice(1)}`;
+      btn.className = 'plan-card-btn btn-upgrade';
+      btn.disabled = false;
+    }
+  });
 
   // Hide speaker selector and AI tools for Free users
   const numSpeakersWrap = document.getElementById('numSpeakersWrap');
@@ -3717,17 +3877,45 @@ document.getElementById('settingsSignOutBtn').addEventListener('click', async ()
   await sb.auth.signOut();
 });
 
-// Upgrade button — Stripe Checkout
-document.getElementById('settingsUpgradeBtn').addEventListener('click', async () => {
-  const btn = document.getElementById('settingsUpgradeBtn');
+// ── Billing toggle ────────────────────────────────────────────
+let currentBilling = 'monthly';
+
+const PLAN_PRICES = {
+  monthly: { pro: '$15', max: '$29' },
+  annual:  { pro: '$12', max: '$23' },
+};
+
+function applyBilling(billing) {
+  currentBilling = billing;
+  document.querySelectorAll('.billing-opt').forEach(b => {
+    b.classList.toggle('active', b.dataset.billing === billing);
+  });
+  const prices = PLAN_PRICES[billing];
+  const perText = billing === 'annual' ? '/mo · billed annually' : '/mo';
+  const proAmt = document.getElementById('proPriceAmt');
+  const maxAmt = document.getElementById('maxPriceAmt');
+  const proPer = document.getElementById('proPricePer');
+  const maxPer = document.getElementById('maxPricePer');
+  if (proAmt) proAmt.textContent = prices.pro;
+  if (maxAmt) maxAmt.textContent = prices.max;
+  if (proPer) proPer.textContent = perText;
+  if (maxPer) maxPer.textContent = perText;
+}
+
+document.querySelectorAll('.billing-opt').forEach(b => {
+  b.addEventListener('click', () => applyBilling(b.dataset.billing));
+});
+
+// ── Plan upgrade buttons ───────────────────────────────────────
+async function startCheckout(plan, btn) {
+  const origText = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Redirecting…';
   try {
-    const targetPlan = btn.dataset.plan || 'pro';
     const res = await authFetch(`${API_BASE}/api/stripe/checkout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan: targetPlan }),
+      body: JSON.stringify({ plan, billing: currentBilling }),
     });
     const data = await res.json();
     if (data.url) {
@@ -3735,13 +3923,20 @@ document.getElementById('settingsUpgradeBtn').addEventListener('click', async ()
     } else {
       alert(data.error || 'Could not start checkout. Try again.');
       btn.disabled = false;
-      btn.textContent = 'Upgrade →';
+      btn.textContent = origText;
     }
   } catch (e) {
     alert('Could not start checkout: ' + e.message);
     btn.disabled = false;
-    btn.textContent = 'Upgrade →';
+    btn.textContent = origText;
   }
+}
+
+document.getElementById('planCards').addEventListener('click', e => {
+  const btn = e.target.closest('.btn-upgrade');
+  if (!btn || btn.disabled) return;
+  const plan = btn.closest('.plan-card')?.dataset.plan;
+  if (plan) startCheckout(plan, btn);
 });
 
 // Handle return from Stripe Checkout
@@ -3754,7 +3949,7 @@ document.getElementById('settingsUpgradeBtn').addEventListener('click', async ()
       setError('');
       const msg = document.createElement('div');
       msg.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--accent);color:var(--bg);padding:12px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.3)';
-      msg.textContent = '🎉 Welcome to Pro!';
+      msg.textContent = `🎉 Welcome to ${PLAN_LABELS[currentPlan] || 'Pro'}!`;
       document.body.appendChild(msg);
       setTimeout(() => msg.remove(), 4000);
       fetchProfile();
