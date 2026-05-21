@@ -1356,6 +1356,86 @@
       cursor: pointer; transition: background .15s, border-color .15s;
     }
     .settings-danger-btn:hover { background: color-mix(in srgb, var(--danger) 8%, transparent); border-color: var(--danger); }
+
+    /* ══ PROCESSING SCREEN ══════════════════════════════════════ */
+    .processing-state { padding: 0; }
+
+    .processing-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: 20px;
+    }
+    .processing-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+
+    .processing-headline {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-variation-settings: 'wdth' 100;
+      font-size: clamp(26px, 5vw, 40px);
+      font-weight: 700; color: var(--text); line-height: 1.15;
+      margin-bottom: 8px;
+    }
+    .processing-sub { font-size: 13px; color: var(--muted); margin-bottom: 32px; line-height: 1.6; max-width: 520px; }
+
+    .processing-body { display: flex; gap: 40px; align-items: flex-start; flex-wrap: wrap; }
+
+    /* ── Ring ── */
+    .ring-wrap { position: relative; width: 160px; height: 160px; flex-shrink: 0; }
+    .progress-ring { width: 160px; height: 160px; transform: rotate(-90deg); overflow: visible; }
+    .ring-bg { fill: none; stroke: var(--surface-2); stroke-width: 10; }
+    .ring-fg {
+      fill: none; stroke: var(--accent); stroke-width: 10; stroke-linecap: round;
+      stroke-dasharray: 427.26; stroke-dashoffset: 427.26;
+      transition: stroke-dashoffset .55s ease;
+      filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent) 55%, transparent));
+    }
+    .ring-center {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; pointer-events: none;
+    }
+    .ring-pct {
+      font-family: 'Bricolage Grotesque', sans-serif; font-variation-settings: 'wdth' 100;
+      font-size: 30px; font-weight: 700; color: var(--text); line-height: 1;
+    }
+    .ring-time { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; margin-top: 4px; }
+
+    /* ── Pipeline stages ── */
+    .pipeline-wrap { flex: 1; min-width: 240px; }
+    .pipeline-title {
+      font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+      color: var(--dim); margin-bottom: 10px;
+    }
+    .pipeline-stage {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+    }
+    .pipeline-stage:last-child { border-bottom: none; }
+    .stage-icon {
+      width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .stage-icon.done    { background: var(--accent); color: var(--bg); }
+    .stage-icon.active  { background: transparent; border: 2px solid var(--accent); }
+    .stage-icon.pending { background: transparent; border: 1.5px solid var(--dim); }
+    .stage-label { flex: 1; color: var(--muted); }
+    .stage-label.active  { color: var(--accent); font-weight: 600; }
+    .stage-label.done    { color: var(--dim); }
+    .stage-time { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--dim); white-space: nowrap; }
+    .stage-time.active   { color: var(--accent); }
+    .stage-spinner {
+      width: 8px; height: 8px; border: 1.5px solid var(--accent);
+      border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    @keyframes ring-pulse {
+      0%,100% { filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent) 55%, transparent)); }
+      50%      { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--accent) 80%, transparent)); }
+    }
+    .ring-fg.active { animation: ring-pulse 2s ease infinite; }
+
+    .processing-footer {
+      margin-top: 28px; font-size: 12px; color: var(--dim);
+      display: flex; gap: 5px; align-items: center;
+    }
+    .processing-footer-dot { opacity: .5; }
   </style>
 </head>
 <body>
@@ -1464,7 +1544,38 @@
     <br><span style="opacity:.7">Tip: press <kbd style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--surface);border:1px solid var(--border)">?</kbd> for keyboard shortcuts.</span>
   </div>
 
-  <div class="section-title">
+  <!-- Processing screen: animated ring + pipeline stages -->
+  <div id="processingState" class="processing-state" style="display:none">
+    <div class="processing-pill">
+      <span class="dot"></span>
+      <span id="processingPillText">PROCESSING</span>
+    </div>
+    <h2 class="processing-headline" id="processingHeadline">Uploading audio…</h2>
+    <p class="processing-sub" id="processingSub"></p>
+    <div class="processing-body">
+      <div class="ring-wrap">
+        <svg class="progress-ring" viewBox="0 0 160 160">
+          <circle class="ring-bg" cx="80" cy="80" r="68"/>
+          <circle class="ring-fg" id="ringFg" cx="80" cy="80" r="68"/>
+        </svg>
+        <div class="ring-center">
+          <div class="ring-pct" id="ringPct">0%</div>
+          <div class="ring-time" id="ringTime">—</div>
+        </div>
+      </div>
+      <div class="pipeline-wrap">
+        <div class="pipeline-title" id="pipelineTitle">PIPELINE · 6 STAGES</div>
+        <div id="pipelineStages"></div>
+      </div>
+    </div>
+    <div class="processing-footer">
+      <span id="processingEta">Estimating time…</span>
+      <span class="processing-footer-dot">·</span>
+      <span id="processingTabHint">safe to leave this tab</span>
+    </div>
+  </div>
+
+  <div class="section-title" id="transcriptSectionTitle">
     <span data-i18n="sectionTranscript">Transcript</span>
     <span class="line"></span>
   </div>
@@ -1798,9 +1909,9 @@ const T = {
     planProF5: 'Speaker rename',
     planMaxF1: '2000 min/month',
     planMaxF2: 'Everything in Pro',
-    planMaxF3: 'Share by link',
-    planMaxF4: 'Notion integration',
-    planMaxF5: 'Priority processing',
+    planMaxF3: 'Share by link — soon',
+    planMaxF4: 'Notion integration — soon',
+    planMaxF5: 'Priority processing ⚡',
     planCurrentBtn: 'Current plan',
     planUpgradePro: 'Upgrade to Pro',
     planUpgradeMax: 'Upgrade to Max',
@@ -1831,6 +1942,25 @@ const T = {
     upgradeSeePlans: 'See plans →',
     upgradeLimitMsg: 'You\'ve reached your {limit} min/month limit.',
     upgradeAIMsg: 'AI tools (Summary, Actions) require a Pro plan.',
+    // Processing screen
+    procPill: 'PROCESSING',
+    procFooterTab: 'safe to leave this tab',
+    procPipelineTitle: 'PIPELINE · {n} STAGES',
+    procEtaEst: 'Estimating time…',
+    procEtaSecs: 'ETA · {s}s',
+    procDone: 'Done',
+    procHeadUpload: 'Uploading audio…',
+    procHeadDecode: 'Reading the audio…',
+    procHeadDiarize: 'Identifying speakers…',
+    procHeadTranscribe: 'Transcribing…',
+    procHeadCorrect: 'Refining transcript…',
+    procHeadAssemble: 'Assembling…',
+    procStageUpload: 'Upload audio',
+    procStageDecode: 'Decode audio',
+    procStageDiarize: 'Speaker diarization',
+    procStageTranscribe: 'Transcription',
+    procStageCorrect: 'Punctuation + align',
+    procStageAssemble: 'Assemble session',
   },
   ua: {
     // Login
@@ -1923,9 +2053,9 @@ const T = {
     planProF5: 'Перейменування спікерів',
     planMaxF1: '2000 хв/місяць',
     planMaxF2: 'Все з Pro',
-    planMaxF3: 'Поділитись посиланням',
-    planMaxF4: 'Інтеграція Notion',
-    planMaxF5: 'Пріоритетна обробка',
+    planMaxF3: 'Поділитись посиланням — скоро',
+    planMaxF4: 'Інтеграція Notion — скоро',
+    planMaxF5: 'Пріоритетна обробка ⚡',
     planCurrentBtn: 'Поточний план',
     planUpgradePro: 'Перейти на Pro',
     planUpgradeMax: 'Перейти на Max',
@@ -1956,6 +2086,25 @@ const T = {
     upgradeSeePlans: 'Дивитись плани →',
     upgradeLimitMsg: 'Ви досягли ліміту {limit} хв/місяць.',
     upgradeAIMsg: 'ШІ-інструменти (Резюме, Завдання) потребують плану Pro.',
+    // Processing screen
+    procPill: 'ОБРОБКА',
+    procFooterTab: 'можна закрити цю вкладку',
+    procPipelineTitle: 'ЕТАПИ · {n}',
+    procEtaEst: 'Оцінка часу…',
+    procEtaSecs: 'Залишилось · {s}с',
+    procDone: 'Готово',
+    procHeadUpload: 'Завантаження аудіо…',
+    procHeadDecode: 'Читаємо аудіо…',
+    procHeadDiarize: 'Визначаємо спікерів…',
+    procHeadTranscribe: 'Транскрибуємо…',
+    procHeadCorrect: 'Уточнюємо текст…',
+    procHeadAssemble: 'Збираємо результат…',
+    procStageUpload: 'Завантаження',
+    procStageDecode: 'Декодування',
+    procStageDiarize: 'Діаризація спікерів',
+    procStageTranscribe: 'Транскрипція',
+    procStageCorrect: 'Пунктуація + вирівнювання',
+    procStageAssemble: 'Збирання сесії',
   }
 };
 
@@ -2976,10 +3125,12 @@ async function submitJob(url, body, isFormData = false) {
   return data.job_id;
 }
 
-async function pollJob(jobId, onProgress) {
+async function pollJob(jobId, onProgress, maxWaitMs = 22 * 60 * 1000) {
   let waitMs = 0;
+  const deadline = Date.now() + maxWaitMs;
   while (true) {
     if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+    if (Date.now() > deadline) throw new Error('Transcription timed out after 22 minutes. Try a shorter recording.');
     const res = await authFetch(`${API_BASE}/api/jobs/${jobId}`);
     const data = await safeJson(res);
     if (!res.ok) throw new Error(data.error || 'poll failed');
@@ -2997,6 +3148,159 @@ function getMimeType() {
 }
 
 let waitingForFull = false;
+let recordingStartMs   = 0;
+let recordingDurationSec = 0;
+
+// ══════════════════════════════════════════════════════════════
+// ── Processing screen ─────────────────────────────────────────
+// Animated ring + pipeline stages shown during transcription.
+// Uses estimation-based progress (no backend polling needed).
+// ══════════════════════════════════════════════════════════════
+
+const RING_CIRCUMFERENCE = 2 * Math.PI * 68; // ≈ 427.26
+
+const PIPELINE_DEF = [
+  { id: 'upload',     headKey: 'procHeadUpload',     labelKey: 'procStageUpload',     est: () => 3 },
+  { id: 'decode',     headKey: 'procHeadDecode',     labelKey: 'procStageDecode',     est: () => 0.5 },
+  { id: 'diarize',    headKey: 'procHeadDiarize',    labelKey: 'procStageDiarize',    est: d => Math.max(5, d * 0.45) },
+  { id: 'transcribe', headKey: 'procHeadTranscribe', labelKey: 'procStageTranscribe', est: d => Math.max(8, d * 5) },
+  { id: 'correct',    headKey: 'procHeadCorrect',    labelKey: 'procStageCorrect',    est: () => 12 },
+  { id: 'assemble',   headKey: 'procHeadAssemble',   labelKey: 'procStageAssemble',   est: () => 0.5 },
+];
+
+let _procTimer = null;
+let _procStartMs = 0;
+let _procAudioDur = 0; // audio duration in seconds
+
+function _fmtSecs(s) {
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+}
+
+function _stageTimings(audioDur) {
+  return PIPELINE_DEF.map(s => s.est(audioDur));
+}
+
+function showProcessingScreen(audioDurSec) {
+  _procAudioDur = audioDurSec || 60; // fallback 60s if unknown
+  _procStartMs  = Date.now();
+
+  const ps = document.getElementById('processingState');
+  const ts = document.getElementById('transcriptSectionTitle');
+  ps.style.display = '';
+  if (ts) ts.style.display = 'none';
+  transcriptEl.style.display = 'none';
+  document.querySelector('.transcript-footer').style.display = 'none';
+  hintEl.style.display = 'none';
+
+  // Pill / footer text
+  document.getElementById('processingPillText').textContent = t('procPill');
+  document.getElementById('processingTabHint').textContent  = t('procFooterTab');
+  document.getElementById('pipelineTitle').textContent =
+    tFmt('procPipelineTitle', { n: PIPELINE_DEF.length });
+
+  // Sub text: audio info
+  const mins = Math.floor(_procAudioDur / 60), secs = Math.floor(_procAudioDur % 60);
+  const durStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  document.getElementById('processingSub').textContent =
+    `${durStr} of audio · whisper-large-v3-turbo · GPU`;
+
+  _renderPipelineStages(0, 0);
+  _updateRing(0, 0);
+
+  if (_procTimer) clearInterval(_procTimer);
+  _procTimer = setInterval(_tickProcessing, 400);
+}
+
+function hideProcessingScreen() {
+  if (_procTimer) { clearInterval(_procTimer); _procTimer = null; }
+  document.getElementById('processingState').style.display = 'none';
+  const ts = document.getElementById('transcriptSectionTitle');
+  if (ts) ts.style.display = '';
+  transcriptEl.style.display = '';
+  document.querySelector('.transcript-footer').style.display = '';
+}
+
+function _tickProcessing() {
+  const elapsed = (Date.now() - _procStartMs) / 1000;
+  const timings = _stageTimings(_procAudioDur);
+  const total   = timings.reduce((a, b) => a + b, 0);
+
+  // Determine current stage
+  let cumul = 0, stageIdx = 0, stageElapsed = elapsed;
+  for (let i = 0; i < timings.length; i++) {
+    if (elapsed >= cumul + timings[i]) { cumul += timings[i]; stageIdx = i + 1; }
+    else { stageElapsed = elapsed - cumul; break; }
+  }
+  stageIdx = Math.min(stageIdx, PIPELINE_DEF.length - 1);
+
+  const pct = Math.min(97, (elapsed / total) * 100);
+  _updateRing(pct, elapsed, stageIdx, stageElapsed, timings);
+  _renderPipelineStages(stageIdx, elapsed);
+
+  // Headline
+  document.getElementById('processingHeadline').textContent =
+    t(PIPELINE_DEF[stageIdx].headKey);
+
+  // ETA
+  const remaining = Math.max(0, total - elapsed);
+  const etaEl = document.getElementById('processingEta');
+  etaEl.textContent = remaining > 5
+    ? tFmt('procEtaSecs', { s: Math.round(remaining) })
+    : t('procEtaEst');
+}
+
+function _updateRing(pct, elapsed, stageIdx, stageElapsed, timings) {
+  const offset = RING_CIRCUMFERENCE * (1 - pct / 100);
+  const fg = document.getElementById('ringFg');
+  fg.style.strokeDashoffset = offset;
+  fg.classList.toggle('active', pct > 0 && pct < 97);
+
+  document.getElementById('ringPct').textContent = Math.round(pct) + '%';
+
+  // Center time: show mm:ss / mm:ss during transcription stage
+  const timeEl = document.getElementById('ringTime');
+  if (stageIdx !== undefined && PIPELINE_DEF[stageIdx] &&
+      PIPELINE_DEF[stageIdx].id === 'transcribe' && timings) {
+    timeEl.textContent = `${_fmtSecs(stageElapsed)} / ${_fmtSecs(timings[stageIdx])}`;
+  } else {
+    timeEl.textContent = _fmtSecs(Math.round(elapsed || 0));
+  }
+}
+
+function _renderPipelineStages(currentIdx, elapsed) {
+  const el = document.getElementById('pipelineStages');
+  const timings = _stageTimings(_procAudioDur);
+  let cumul = 0;
+
+  el.innerHTML = PIPELINE_DEF.map((stage, i) => {
+    const isDone   = i < currentIdx;
+    const isActive = i === currentIdx;
+    const t_sec    = timings[i];
+
+    const icon = isDone
+      ? `<div class="stage-icon done"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,6 5,9 10,3"/></svg></div>`
+      : isActive
+        ? `<div class="stage-icon active"><div class="stage-spinner"></div></div>`
+        : `<div class="stage-icon pending"></div>`;
+
+    let timeHtml = '';
+    if (isDone) {
+      const shown = t_sec < 1 ? t_sec.toFixed(1) + 's' : Math.round(t_sec) + 's';
+      timeHtml = `<span class="stage-time">${shown}</span>`;
+    } else if (isActive && stage.id === 'transcribe') {
+      const se = Math.max(0, elapsed - cumul);
+      timeHtml = `<span class="stage-time active">${_fmtSecs(se)} / ${_fmtSecs(t_sec)}</span>`;
+    } else {
+      timeHtml = `<span class="stage-time">—</span>`;
+    }
+
+    const labelClass = isDone ? 'stage-label done' : isActive ? 'stage-label active' : 'stage-label';
+    cumul += t_sec;
+
+    return `<div class="pipeline-stage">${icon}<span class="${labelClass}">${t(stage.labelKey)}</span>${timeHtml}</div>`;
+  }).join('');
+}
 
 startBtn.addEventListener('click', async () => {
   setError('');
@@ -3086,6 +3390,7 @@ startBtn.addEventListener('click', async () => {
   };
   fullRecorder.onstop = handleFullStop;
   fullRecorder.start(5000);
+  recordingStartMs = Date.now();
 
   // Keep-alive трюки: silent audio + wake lock
   startSilentAudio(audioCtx);
@@ -3127,6 +3432,10 @@ function stopRecording() {
 async function handleFullStop() {
   const blob = new Blob(fullChunks, { type: 'audio/webm' });
   fullChunks = [];
+  // Compute actual recording duration
+  recordingDurationSec = recordingStartMs
+    ? Math.round((Date.now() - recordingStartMs) / 1000)
+    : Math.round(blob.size * 8 / 32000); // fallback: estimate from filesize at 32kbps
 
   // Сохраняем в safety net — освободим только после успешной транскрипции
   lastRecordingBlob = blob;
@@ -3145,6 +3454,13 @@ async function transcribeBlob(blob) {
   hideRecoveryBox();
   setError('');
 
+  // Estimate audio duration: use tracked recording time, fallback to file size
+  const audioDur = recordingDurationSec > 0
+    ? recordingDurationSec
+    : Math.round(blob.size * 8 / 32000);
+
+  showProcessingScreen(audioDur);
+
   try {
     const fd = new FormData();
     fd.append('audio', blob, 'recording.webm');
@@ -3154,16 +3470,13 @@ async function transcribeBlob(blob) {
     if (ctx)                                  fd.append('prompt', ctx);
 
     const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd, true);
-    setStatus(t('statusQueued'), 'working');
 
-    const result = await pollJob(jobId, (progress) => {
-      // progress: "converting" | "transcribing" | "diarizing" | "merging"
-      setStatus(progress + '…', 'working');
-    });
+    const result = await pollJob(jobId);
     const segments = result.segments || [];
 
     // Успех — можем отпустить blob и почистить IDB-сессию
     lastRecordingBlob = null;
+    recordingDurationSec = 0;
     if (currentSessionId) {
       idbDeleteSession(currentSessionId).catch(() => {});
       currentSessionId = null;
@@ -3179,6 +3492,7 @@ async function transcribeBlob(blob) {
     currentAIResults = {};
     currentChatHistory = [];
     currentTags = [];
+    hideProcessingScreen();
     renderTranscript(segments);
     renderChatMessages();
     renderTags();
@@ -3189,8 +3503,8 @@ async function transcribeBlob(blob) {
       requestLLMTags(segments, currentHistoryId);
     }
     setStatus(t('statusReady'));
-    hintEl.style.display = '';
   } catch (e) {
+    hideProcessingScreen();
     if (e.upgradeRequired) {
       setError('');
       setStatus(t('statusReady'));
