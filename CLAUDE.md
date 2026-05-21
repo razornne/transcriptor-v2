@@ -307,19 +307,91 @@ python app.py
 - **`recordings/` ephemeral** в local mode. На Modal вообще не пишем — bytes в память → ffmpeg → wav в /tmp → удаляется.
 - **History в Postgres** хранит `segments` JSONB целиком. Не ломать формат без миграции схемы.
 
-## Studio v2 Redesign (в разработке — Phase 1 done)
+## Studio v2 Redesign (в разработке — Phase 1.5 in progress)
 
 Полная переделка `/app` UI под Studio direction из Claude Design прототипа.
 Старый `templates/index.html` работает в проде на `/app`, новый строится
 параллельно на `/v2`. **Не удалять старый пока новый не одобрен.**
 
-### Текущий статус — Phase 1 ✅ (статический каркас)
+### Мокапы
+
+Лежат в `redesign v2/` в корне проекта (9 PNG): `Main _ recording (2).png`,
+`Empty _ first run.png`, `Processing.png`, `Past recording.png`,
+`Command palette (1).png`, `Export modal.png`, `Permissions _ setup.png`,
+`Settings _ Models.png`, `Shortcuts overlay.png`. Это эталон pixel pass.
+
+### Текущий статус
+
+**Phase 1 ✅** — статический каркас main-экрана с моками.
+**Phase 1.5 in progress** — pixel-точный проход по всем 9 мокапам + сборка
+каркасов экранов которых ещё нет. Главный экран (Main / recording)
+доведён до близкого соответствия мокапу. Остальные экраны ещё не
+сделаны (Empty / Processing / Past recording / Settings / Permissions
+/ Export modal / Shortcuts overlay) + Command palette нуждается в
+pixel pass.
 
 Доступен на `skriptly.io/v2` (Vercel автоматом) или `localhost:3000/v2` (dev).
 Полностью рабочий визуально, но **БЕЗ ML / API / Auth**:
 - Mock-данные из `lib/studio/mock-data.ts`
 - Кнопки REC / language picker / tab переключение работают только локально
 - Command palette ⌘K открывается, действия — stubs
+
+### Workflow для следующей сессии (важно)
+
+Юзер запускает dev сервер **из основного worktree** (`C:\projects\transcriptor-v2\landing`),
+а Claude работает **в своём worktree** (`.claude/worktrees/...`). Это
+разные физические файлы → правки Claude не видны юзеру без merge.
+
+Принятая модель (**вариант A**): Claude после каждой логической пачки
+правок коммитит на свою ветку и мержит в `main` через primary worktree.
+Только тогда HMR на юзерском dev-сервере подхватывает изменения.
+
+```powershell
+# (в Claude worktree) после правок
+git add -A
+git commit -m "..."
+git push origin claude/<branch>
+
+# Затем из ОСНОВНОГО worktree (нельзя checkout main в воркtree, где
+# уже checked out другой бранч):
+cd C:\projects\transcriptor-v2
+git pull --ff-only
+git merge --no-ff claude/<branch> -m "Merge: ..."
+git push origin main      # опционально, чтобы Vercel обновил /v2 на проде
+```
+
+Альтернатива (вариант B): юзер запускает dev из Claude worktree —
+без коммитов, мгновенно видит правки. Но решено пока не делать —
+юзеру удобнее держать dev в основном worktree.
+
+### Preview tool для самопроверки
+
+Claude может сам смотреть как выглядит /v2 через `mcp__Claude_Preview`.
+Конфиг — `.claude/launch.json` в Claude worktree:
+
+```json
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "studio-v2",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "C:\\projects\\transcriptor-v2\\landing"],
+      "port": 3000
+    }
+  ]
+}
+```
+
+Запуск: `preview_start({ name: "studio-v2" })` → `preview_screenshot` /
+`preview_eval` / `preview_resize`. **Важно:** preview tool управляет
+порт 3000 сам — нельзя одновременно держать ручной `npm run dev` и
+preview-server. Сначала kill node, потом preview_start.
+
+Также preview-server рендерит файлы из основного worktree (потому что
+`--prefix` указан на `C:\projects\transcriptor-v2\landing`) — значит
+для self-check после правок надо **сначала смерджить в main**, потом
+делать `preview_screenshot`. Иначе увидим старое.
 
 ### Дизайн-направление
 
@@ -410,8 +482,15 @@ landing/
 
 ### Phase plan
 
-- **Phase 1 ✅ Статичный каркас** — текущий состояние. Все экраны/компоненты
-  на mock-данных, тема, palette, scroll, keyboard shortcuts (⌘K, ⌘R), Esc.
+- **Phase 1 ✅ Статичный каркас main-экрана** — все компоненты на mock-данных,
+  тема, palette, scroll, keyboard shortcuts (⌘K, ⌘R), Esc.
+- **Phase 1.5 (in progress) — Pixel pass + остальные экраны.**
+  - ✅ Main / recording — pixel pass round 1 (см. что сделано ниже).
+  - ⬜ Empty / first run, Processing, Past recording, Settings,
+    Permissions, Export modal, Shortcuts overlay — каркасы ещё не
+    собраны. Command palette нуждается в pixel pass.
+  - Юзер сказал «можем идти дальше, какие-то моменты сможем потом
+    доделать» — мелкие nit'ы на main можно вернуть позже.
 - **Phase 2 — Recording flow.** MediaRecorder + AudioContext mix, **live
   waveform через AnalyserNode** (заменить статичную). Перенос tab keep-alive
   (silent audio, wake lock, OS notifications, battery warning). Перенос
@@ -456,8 +535,40 @@ landing/
    divider "or magic link", email input + Send link button. Лого + theme
    toggle в углу. Дизайн будет финализирован в Phase 4.
 
+### Studio v2 — что сделано в Phase 1.5 на main-экране
+
+Pixel pass round 1 (коммиты `97c2b72` и `478210e`):
+- Убран `16 kHz · stereo · whisper-large-v3` meta из StudioPanel header
+- `LIVE` / `STANDBY` теперь uppercase
+- Waveform бары используют `--s-border-hi` вместо `--s-faint` (видны
+  в dark theme; `--s-faint` был почти невидимый)
+- `.s-btn` стал pill-shaped (border-radius 999px) — это распространилось
+  на History / Light / Copy / Download .md кнопки, теперь матчат мокап
+- Убрана `liveLast` подсветка последнего сегмента (real-time транскрипт
+  не показываем — финальный придёт после обработки)
+- Убран `activeRaw` highlight на speaker chips
+- **Критичный фикс:** `.s-studio-panel`, `.s-speakers`, `.s-tabs`,
+  `.s-transcript` получили `flex: 0 0 auto` — без этого панель
+  схлопывалась с 195px до 37.6px (см. gotcha ниже).
+
+### Studio v2 — известные открытые нит'ы на main-экране
+
+- Avatars в TranscriptView — solid круглые с номерами; в мокапе они
+  выглядят чуть текстурнее, с буквами вместо цифр. Юзер сказал
+  «не важно», но если будет полировка — это сюда.
+- Live cursor / real-time подсветка убраны полностью. Когда будем делать
+  Phase 2/3 — будет показ транскрипта только после `/api/transcribe` done,
+  не в процессе записи.
+
 ### Studio v2 gotchas
 
+- **`flex: 0 0 auto` обязателен** на крупных секциях внутри `.s-scroll`
+  (panel / speakers / tabs / transcript). `.s-scroll` это flex column;
+  по умолчанию дети `flex-shrink: 1` и сжимаются чтобы влезть в viewport.
+  Это съело studio panel до высоты header'а (37px вместо 195px) и
+  `overflow: hidden` скрыло waveform + controls — выглядело как будто
+  компонент не отрендерился. Лечение: `flex: 0 0 auto` на каждом
+  крупном блоке. Если добавляешь новый блок в `.s-scroll` — не забудь.
 - **`min-height: 0` обязателен** на flex-children с `overflow:auto`.
   Без этого flex-item не уважает overflow и контент вылазит за пределы
   родителя без скроллбара. Сейчас стоит на `.s-scroll` (scroll-контейнер
