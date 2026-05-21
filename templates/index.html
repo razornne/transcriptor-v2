@@ -1217,7 +1217,12 @@
     .sidebar-settings-btn:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 
     /* ── SETTINGS MODAL ── */
-    .settings-modal .modal-card { min-width: 580px; max-width: 660px; }
+    .settings-modal .modal-card {
+      width: 650px;
+      max-width: 96vw;
+      max-height: 92vh;
+      overflow-y: auto;
+    }
     .settings-section { margin-bottom: 22px; }
     .settings-section:last-child { margin-bottom: 0; }
     .settings-section-title {
@@ -1292,14 +1297,18 @@
     .plan-card.featured .plan-card-name { color: var(--accent-h); }
     .plan-price {
       display: flex; align-items: baseline; gap: 2px;
-      margin-bottom: 12px;
+      margin-bottom: 2px;
     }
     .plan-price-amt {
       font-family: 'Bricolage Grotesque', sans-serif;
       font-variation-settings: 'wdth' 100, 'wght' 700;
       font-size: 26px; color: var(--text); line-height: 1;
     }
-    .plan-price-per { font-size: 12px; color: var(--muted); }
+    .plan-price-per { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .plan-billed-note {
+      font-size: 11px; color: var(--accent); min-height: 16px;
+      margin-bottom: 10px; letter-spacing: .01em;
+    }
     .plan-features {
       list-style: none; padding: 0; margin: 0 0 14px;
       display: flex; flex-direction: column; gap: 5px;
@@ -1556,6 +1565,7 @@
             <span class="plan-price-amt">$0</span>
             <span class="plan-price-per">/mo</span>
           </div>
+          <div class="plan-billed-note"></div>
           <ul class="plan-features">
             <li>60 min/month</li>
             <li>Transcription only</li>
@@ -1570,8 +1580,9 @@
           <div class="plan-card-name">Pro</div>
           <div class="plan-price">
             <span class="plan-price-amt" id="proPriceAmt">$15</span>
-            <span class="plan-price-per" id="proPricePer">/mo</span>
+            <span class="plan-price-per">/mo</span>
           </div>
+          <div class="plan-billed-note" id="proBilledNote"></div>
           <ul class="plan-features">
             <li>600 min/month</li>
             <li>Speaker diarization</li>
@@ -1588,8 +1599,9 @@
           <div class="plan-card-name">Max</div>
           <div class="plan-price">
             <span class="plan-price-amt" id="maxPriceAmt">$29</span>
-            <span class="plan-price-per" id="maxPricePer">/mo</span>
+            <span class="plan-price-per">/mo</span>
           </div>
+          <div class="plan-billed-note" id="maxBilledNote"></div>
           <ul class="plan-features">
             <li>2000 min/month</li>
             <li>Everything in Pro</li>
@@ -3891,15 +3903,15 @@ function applyBilling(billing) {
     b.classList.toggle('active', b.dataset.billing === billing);
   });
   const prices = PLAN_PRICES[billing];
-  const perText = billing === 'annual' ? '/mo · billed annually' : '/mo';
+  const noteText = billing === 'annual' ? 'billed annually' : '';
   const proAmt = document.getElementById('proPriceAmt');
   const maxAmt = document.getElementById('maxPriceAmt');
-  const proPer = document.getElementById('proPricePer');
-  const maxPer = document.getElementById('maxPricePer');
+  const proNote = document.getElementById('proBilledNote');
+  const maxNote = document.getElementById('maxBilledNote');
   if (proAmt) proAmt.textContent = prices.pro;
   if (maxAmt) maxAmt.textContent = prices.max;
-  if (proPer) proPer.textContent = perText;
-  if (maxPer) maxPer.textContent = perText;
+  if (proNote) proNote.textContent = noteText;
+  if (maxNote) maxNote.textContent = noteText;
 }
 
 document.querySelectorAll('.billing-opt').forEach(b => {
