@@ -1365,14 +1365,14 @@
 <div id="loginOverlay" class="login-overlay" style="display:none">
   <div class="login-card">
     <h1>Skriptly</h1>
-    <p class="sub">Sign in to continue</p>
+    <p class="sub" data-i18n="loginSub">Sign in to continue</p>
     <button id="loginGoogleBtn" class="login-btn login-btn-google">
       <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A10.99 10.99 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1A6.6 6.6 0 0 1 5.5 12c0-.73.13-1.44.34-2.1V7.07H2.18A11.02 11.02 0 0 0 1 12c0 1.78.43 3.46 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
-      Continue with Google
+      <span data-i18n="loginGoogle">Continue with Google</span>
     </button>
-    <div class="login-divider"><span>or magic link</span></div>
-    <input id="loginEmailInput" class="login-email" type="email" placeholder="you@example.com" autocomplete="email">
-    <button id="loginEmailBtn" class="login-btn">Send magic link</button>
+    <div class="login-divider"><span data-i18n="loginDivider">or magic link</span></div>
+    <input id="loginEmailInput" class="login-email" type="email" data-i18n-ph="loginEmailPh" placeholder="you@example.com" autocomplete="email">
+    <button id="loginEmailBtn" class="login-btn" data-i18n="loginEmailBtn">Send magic link</button>
     <p id="loginMessage" class="login-message"></p>
   </div>
 </div>
@@ -1388,7 +1388,7 @@
     <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Collapse sidebar">‹</button>
   </div>
   <div class="sidebar-search-wrap">
-    <input id="historySearch" class="sidebar-search" type="text" placeholder="Search transcripts…">
+    <input id="historySearch" class="sidebar-search" type="text" data-i18n-ph="searchPh" placeholder="Search transcripts…">
   </div>
   <div class="sidebar-scroll">
     <div class="history-tag-filters" id="historyTagFilters"></div>
@@ -1417,45 +1417,47 @@
   <div class="hero">
     <div class="hero-meta">
       <span class="meta-line"></span>
+      <button id="uiLangToggle" class="meta-toggle" title="Switch interface language">UA</button>
       <button id="themeToggle" class="meta-toggle" title="Toggle theme">light</button>
     </div>
     <h1 class="hero-title">Skriptly</h1>
-    <p class="hero-sub">AI transcription with speaker separation. Processed on GPU in the cloud — no setup required.</p>
+    <p class="hero-sub" data-i18n="heroSub">AI transcription with speaker separation. Processed on GPU in the cloud — no setup required.</p>
   </div>
 
   <div class="grid-2">
     <div>
-      <label for="language">Language</label>
+      <label for="language" data-i18n="langLabel">Language</label>
       <select id="language">
-        <option value="">Auto-detect</option>
+        <option value="" data-i18n="langAuto">Auto-detect</option>
         <option value="en">English</option>
         <option value="ru">Russian</option>
         <option value="uk">Ukrainian</option>
       </select>
     </div>
     <div id="numSpeakersWrap">
-      <label for="numSpeakers">Speakers</label>
+      <label for="numSpeakers" data-i18n="speakersLabel">Speakers</label>
       <input id="numSpeakers" type="number" min="1" max="20" placeholder="auto">
     </div>
   </div>
 
   <div class="context-field">
-    <label for="contextPrompt">Context <span class="opt">optional</span></label>
+    <label for="contextPrompt"><span data-i18n="contextLabel">Context</span> <span class="opt" data-i18n="contextOpt">optional</span></label>
     <input id="contextPrompt" class="context-input" type="text"
+           data-i18n-ph="contextPh"
            placeholder="Topic, names, terms — helps Whisper get them right">
   </div>
 
   <div class="controls">
-    <button id="startBtn" class="btn-primary">Start recording</button>
-    <button id="stopBtn"  class="btn-danger" disabled>Stop</button>
+    <button id="startBtn" class="btn-primary" data-i18n="startBtn">Start recording</button>
+    <button id="stopBtn"  class="btn-danger" disabled data-i18n="stopBtn">Stop</button>
     <div class="status">
       <span class="dot" id="dot"></span>
       <span class="timer" id="timer" style="display:none"></span>
-      <span id="statusText">ready</span>
+      <span id="statusText" data-i18n="statusReady">ready</span>
     </div>
   </div>
 
-  <div class="hint" id="hint">
+  <div class="hint" id="hint" data-i18n-html="hint">
     Click <b>Start recording</b> → allow microphone → pick a tab (Meet&nbsp;/&nbsp;Teams) or <b>Entire screen</b>, enable <b>Share audio</b> → click <b>Stop</b> when done.
     <br><span class="accent">⚡</span> Processing takes 5–30s per minute of audio — GPU is faster.
     <br><span style="opacity:.7">For long meetings: right-click this tab → <b>Pin tab</b>, and disable Chrome Memory Saver for this site (<kbd style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--surface);border:1px solid var(--border)">chrome://settings/performance</kbd>).</span>
@@ -1463,7 +1465,7 @@
   </div>
 
   <div class="section-title">
-    <span>Transcript</span>
+    <span data-i18n="sectionTranscript">Transcript</span>
     <span class="line"></span>
   </div>
   <div class="transcript-title hidden" id="transcriptTitle">
@@ -1471,43 +1473,43 @@
   </div>
   <div class="tags-row" id="tagsRow" style="display:none"></div>
   <div id="transcript" class="transcript">
-    <div class="transcript-empty">Start a recording — your transcript will appear here.</div>
+    <div class="transcript-empty" data-i18n="transcriptEmpty">Start a recording — your transcript will appear here.</div>
   </div>
   <div class="transcript-footer">
-    <button id="copyBtn" class="btn-ghost">Copy</button>
-    <button id="downloadBtn" class="btn-ghost">Download .md</button>
+    <button id="copyBtn" class="btn-ghost" data-i18n="copyBtn">Copy</button>
+    <button id="downloadBtn" class="btn-ghost" data-i18n="downloadBtn">Download .md</button>
   </div>
   <div id="error" class="error"></div>
   <div id="recoveryBox" class="recovery-box" style="display:none">
-    <div class="recovery-box-title">Audio preserved</div>
-    <div class="recovery-box-msg" id="recoveryMsg">
+    <div class="recovery-box-title" data-i18n="recoveryTitle">Audio preserved</div>
+    <div class="recovery-box-msg" id="recoveryMsg" data-i18n="recoveryMsg">
       The server response failed to parse, but your recording is safe in browser memory.
       Try again, or download the raw audio file as a backup.
     </div>
     <div class="recovery-box-actions">
-      <button id="retryBtn" class="primary">Retry transcription</button>
-      <button id="downloadAudioBtn">Download .webm</button>
-      <button id="dismissRecoveryBtn">Discard</button>
+      <button id="retryBtn" class="primary" data-i18n="retryBtn">Retry transcription</button>
+      <button id="downloadAudioBtn" data-i18n="downloadAudioBtn">Download .webm</button>
+      <button id="dismissRecoveryBtn" data-i18n="dismissBtn">Discard</button>
     </div>
   </div>
 
   <div class="notes-section" id="notesSection" style="display:none">
     <div class="section-title">
-      <span>Notes</span>
+      <span data-i18n="sectionNotes">Notes</span>
       <span class="line"></span>
     </div>
-    <textarea id="notesArea" class="notes-textarea" placeholder="Personal notes — saved with this transcript, included in .md export."></textarea>
+    <textarea id="notesArea" class="notes-textarea" data-i18n-ph="notesPh" placeholder="Personal notes — saved with this transcript, included in .md export."></textarea>
   </div>
 
   <div class="ai-section" id="aiSection" style="display:none">
     <div id="aiToolsSection">
       <div class="section-title">
-        <span>AI tools</span>
+        <span data-i18n="sectionAI">AI tools</span>
         <span class="line"></span>
       </div>
       <div class="ai-toolbar">
-        <button class="ai-btn" data-template="summary">Summary</button>
-        <button class="ai-btn" data-template="actions">Action items</button>
+        <button class="ai-btn" data-template="summary" data-i18n="summaryBtn">Summary</button>
+        <button class="ai-btn" data-template="actions" data-i18n="actionsBtn">Action items</button>
       </div>
       <div id="aiResults"></div>
     </div>
@@ -1515,14 +1517,14 @@
 
   <div class="chat-section" id="chatSection" style="display:none">
     <div class="section-title">
-      <span>Chat with transcript</span>
-      <button class="chat-clear-btn" id="chatClearBtn" title="Clear conversation">clear</button>
+      <span data-i18n="sectionChat">Chat with transcript</span>
+      <button class="chat-clear-btn" id="chatClearBtn" title="Clear conversation" data-i18n="chatClear">clear</button>
       <span class="line"></span>
     </div>
     <div id="chatMessages" class="chat-messages"></div>
     <div class="chat-input-row">
-      <input id="chatInput" class="chat-input" type="text" placeholder="Ask anything about this call…">
-      <button id="chatSendBtn" class="chat-send-btn">Ask</button>
+      <input id="chatInput" class="chat-input" type="text" data-i18n-ph="chatPh" placeholder="Ask anything about this call…">
+      <button id="chatSendBtn" class="chat-send-btn" data-i18n="chatSend">Ask</button>
     </div>
   </div>
 
@@ -1538,22 +1540,22 @@
 
 <div id="settingsModal" class="modal-backdrop hidden settings-modal">
   <div class="modal-card">
-    <div class="modal-title">Settings</div>
+    <div class="modal-title" data-i18n="settingsTitle">Settings</div>
 
     <div class="settings-section">
-      <div class="settings-section-title">Account</div>
+      <div class="settings-section-title" data-i18n="settingsAccount">Account</div>
       <div class="settings-row">
-        <span class="settings-row-label">Email</span>
+        <span class="settings-row-label" data-i18n="settingsEmailLabel">Email</span>
         <span class="settings-row-value" id="settingsEmail">—</span>
       </div>
     </div>
 
     <div class="settings-section">
       <div class="settings-section-title">
-        Subscription
+        <span data-i18n="settingsSubscription">Subscription</span>
         <div class="billing-toggle" id="billingToggle">
-          <button class="billing-opt active" data-billing="monthly">Monthly</button>
-          <button class="billing-opt" data-billing="annual">Annual <span class="billing-save">−20%</span></button>
+          <button class="billing-opt active" data-billing="monthly" data-i18n="settingsBillingMonthly">Monthly</button>
+          <button class="billing-opt" data-billing="annual"><span data-i18n="settingsBillingAnnual">Annual</span> <span class="billing-save">−20%</span></button>
         </div>
       </div>
 
@@ -1567,12 +1569,12 @@
           </div>
           <div class="plan-billed-note"></div>
           <ul class="plan-features">
-            <li>60 min/month</li>
-            <li>Transcription only</li>
-            <li>Last 5 recordings</li>
-            <li>Export .md</li>
+            <li data-i18n="planFreeF1">60 min/month</li>
+            <li data-i18n="planFreeF2">Transcription only</li>
+            <li data-i18n="planFreeF3">Last 5 recordings</li>
+            <li data-i18n="planFreeF4">Export .md</li>
           </ul>
-          <button class="plan-card-btn btn-current" disabled>Current plan</button>
+          <button class="plan-card-btn btn-current" disabled data-i18n="planCurrentBtn">Current plan</button>
         </div>
 
         <!-- Pro -->
@@ -1584,18 +1586,18 @@
           </div>
           <div class="plan-billed-note" id="proBilledNote"></div>
           <ul class="plan-features">
-            <li>600 min/month</li>
-            <li>Speaker diarization</li>
-            <li>Summary + Action items</li>
-            <li>Unlimited history</li>
-            <li>Speaker rename</li>
+            <li data-i18n="planProF1">600 min/month</li>
+            <li data-i18n="planProF2">Speaker diarization</li>
+            <li data-i18n="planProF3">Summary + Action items</li>
+            <li data-i18n="planProF4">Unlimited history</li>
+            <li data-i18n="planProF5">Speaker rename</li>
           </ul>
-          <button class="plan-card-btn btn-upgrade" id="proUpgradeBtn" data-plan="pro">Upgrade to Pro</button>
+          <button class="plan-card-btn btn-upgrade" id="proUpgradeBtn" data-plan="pro" data-i18n="planUpgradePro">Upgrade to Pro</button>
         </div>
 
         <!-- Max -->
         <div class="plan-card featured" id="planCardMax" data-plan="max">
-          <div class="plan-card-badge">Best value</div>
+          <div class="plan-card-badge" data-i18n="planBestValue">Best value</div>
           <div class="plan-card-name">Max</div>
           <div class="plan-price">
             <span class="plan-price-amt" id="maxPriceAmt">$29</span>
@@ -1603,73 +1605,80 @@
           </div>
           <div class="plan-billed-note" id="maxBilledNote"></div>
           <ul class="plan-features">
-            <li>2000 min/month</li>
-            <li>Everything in Pro</li>
-            <li>Share by link</li>
-            <li>Notion integration</li>
-            <li>Priority processing</li>
+            <li data-i18n="planMaxF1">2000 min/month</li>
+            <li data-i18n="planMaxF2">Everything in Pro</li>
+            <li data-i18n="planMaxF3">Share by link</li>
+            <li data-i18n="planMaxF4">Notion integration</li>
+            <li data-i18n="planMaxF5">Priority processing</li>
           </ul>
-          <button class="plan-card-btn btn-upgrade" id="maxUpgradeBtn" data-plan="max">Upgrade to Max</button>
+          <button class="plan-card-btn btn-upgrade" id="maxUpgradeBtn" data-plan="max" data-i18n="planUpgradeMax">Upgrade to Max</button>
         </div>
       </div>
 
       <div class="settings-row" id="settingsUsageRow" style="margin-top:12px">
-        <span class="settings-row-label">Usage this month</span>
+        <span class="settings-row-label" data-i18n="settingsUsageLabel">Usage this month</span>
         <span class="settings-row-value" id="settingsUsage">—</span>
       </div>
     </div>
 
     <div class="settings-section">
-      <div class="settings-section-title">Preferences</div>
+      <div class="settings-section-title" data-i18n="settingsPreferences">Preferences</div>
       <div class="settings-row">
-        <span class="settings-row-label">Theme</span>
+        <span class="settings-row-label" data-i18n="settingsTheme">Theme</span>
         <button id="settingsThemeBtn" class="btn-ghost" style="font-size:12px;padding:6px 14px">Light</button>
+      </div>
+      <div class="settings-row">
+        <span class="settings-row-label" data-i18n="settingsLang">Interface language</span>
+        <div style="display:flex;gap:5px">
+          <button class="billing-opt uilang-opt active" data-uilang="en">EN</button>
+          <button class="billing-opt uilang-opt" data-uilang="ua">UA</button>
+        </div>
       </div>
     </div>
 
     <div class="settings-section">
-      <div class="settings-section-title">Actions</div>
-      <button id="settingsSignOutBtn" class="settings-danger-btn" style="margin-bottom:8px">Sign out</button>
+      <div class="settings-section-title" data-i18n="settingsActions">Actions</div>
+      <button id="settingsSignOutBtn" class="settings-danger-btn" style="margin-bottom:8px" data-i18n="settingsSignOut">Sign out</button>
     </div>
 
-    <div class="modal-footer">Press <kbd>Esc</kbd> to close</div>
+    <div class="modal-footer" data-i18n-html="settingsEscHint">Press <kbd>Esc</kbd> to close</div>
   </div>
 </div>
 
 <div id="shortcutsModal" class="modal-backdrop hidden">
   <div class="modal-card">
-    <div class="modal-title">Keyboard shortcuts</div>
+    <div class="modal-title" data-i18n="shortcutsTitle">Keyboard shortcuts</div>
     <div class="shortcut-list">
       <div class="shortcut-row">
-        <span class="desc">Start / stop recording</span>
+        <span class="desc" data-i18n="shortcutRec">Start / stop recording</span>
         <span class="keys"><kbd>Space</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc">Open History &amp; focus search</span>
+        <span class="desc" data-i18n="shortcutHistory">Open History &amp; focus search</span>
         <span class="keys"><kbd>Ctrl</kbd><kbd>K</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc">Focus search (when History open)</span>
+        <span class="desc" data-i18n="shortcutSearch">Focus search (when History open)</span>
         <span class="keys"><kbd>/</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc">Download as .md</span>
+        <span class="desc" data-i18n="shortcutDownload">Download as .md</span>
         <span class="keys"><kbd>Ctrl</kbd><kbd>S</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc">Toggle light / dark</span>
+        <span class="desc" data-i18n="shortcutTheme">Toggle light / dark</span>
         <span class="keys"><kbd>Ctrl</kbd><kbd>D</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc">Close modal / blur field</span>
+        <span class="desc" data-i18n="shortcutClose">Close modal / blur field</span>
         <span class="keys"><kbd>Esc</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc">Show this list</span>
+        <span class="desc" data-i18n="shortcutHelp">Show this list</span>
         <span class="keys"><kbd>?</kbd></span>
       </div>
     </div>
-    <div class="modal-footer">Press <kbd>?</kbd> any time to open this</div>
+    <div class="modal-footer" data-i18n-html="shortcutsFooter">Press <kbd>?</kbd> any time to open this</div>
   </div>
 </div>
 
@@ -1684,6 +1693,323 @@
 const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   ? ''
   : 'https://razornne--transcriptor-v2-flask-app.modal.run';
+
+// ══════════════════════════════════════════════════════════════
+// ── i18n ─────────────────────────────────────────────────────
+// Two-language UI: EN (default) + UA.
+// Usage: t('key') → string.  tFmt('key', {var: val}) → formatted string.
+// applyI18n() patches all [data-i18n] / [data-i18n-ph] / [data-i18n-html].
+// setUiLang('en'|'ua') persists to localStorage and re-renders.
+// ══════════════════════════════════════════════════════════════
+
+let uiLang = localStorage.getItem('uiLang') || 'en';
+
+const _KBD = s => `<kbd style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--surface);border:1px solid var(--border)">${s}</kbd>`;
+
+const T = {
+  en: {
+    // Login
+    loginSub: 'Sign in to continue',
+    loginGoogle: 'Continue with Google',
+    loginDivider: 'or magic link',
+    loginEmailPh: 'you@example.com',
+    loginEmailBtn: 'Send magic link',
+    loginSending: 'Sending magic link…',
+    loginCheckEmail: 'Check your email for a link!',
+    loginEnterEmail: 'Please enter a valid email.',
+    // Hero
+    heroSub: 'AI transcription with speaker separation. Processed on GPU in the cloud — no setup required.',
+    themeLight: 'light',
+    themeDark: 'dark',
+    uiLangToggle: 'UA',
+    // Controls
+    langLabel: 'Language',
+    langAuto: 'Auto-detect',
+    speakersLabel: 'Speakers',
+    contextLabel: 'Context',
+    contextOpt: 'optional',
+    contextPh: 'Topic, names, terms — helps Whisper get them right',
+    startBtn: 'Start recording',
+    stopBtn: 'Stop',
+    // Status
+    statusReady: 'ready',
+    statusPermissions: 'requesting permissions…',
+    statusRecording: 'recording',
+    statusFinalizing: 'finalizing…',
+    statusUploading: 'uploading…',
+    statusQueued: 'queued…',
+    // Transcript
+    sectionTranscript: 'Transcript',
+    transcriptEmpty: 'Start a recording — your transcript will appear here.',
+    copyBtn: 'Copy',
+    copiedBtn: 'Copied',
+    downloadBtn: 'Download .md',
+    // Hint
+    hint: `Click <b>Start recording</b> → allow microphone → pick a tab (Meet&nbsp;/&nbsp;Teams) or <b>Entire screen</b>, enable <b>Share audio</b> → click <b>Stop</b> when done.<br><span class="accent">⚡</span> Processing takes 5–30s per minute of audio — GPU is faster.<br><span style="opacity:.7">For long meetings: right-click this tab → <b>Pin tab</b>, and disable Chrome Memory Saver for this site (${_KBD('chrome://settings/performance')}).</span><br><span style="opacity:.7">Tip: press ${_KBD('?')} for keyboard shortcuts.</span>`,
+    // Recovery
+    recoveryTitle: 'Audio preserved',
+    recoveryMsg: 'The server response failed to parse, but your recording is safe in browser memory. Try again, or download the raw audio file as a backup.',
+    retryBtn: 'Retry transcription',
+    downloadAudioBtn: 'Download .webm',
+    dismissBtn: 'Discard',
+    // Notes
+    sectionNotes: 'Notes',
+    notesPh: 'Personal notes — saved with this transcript, included in .md export.',
+    // AI
+    sectionAI: 'AI tools',
+    summaryBtn: 'Summary',
+    actionsBtn: 'Action items',
+    aiCopy: 'copy',
+    aiCopied: 'copied',
+    aiRegen: 'regenerate',
+    aiGenerating: 'generating…',
+    templateLabelSummary: 'Summary',
+    templateLabelActions: 'Action items',
+    // Chat
+    sectionChat: 'Chat with transcript',
+    chatClear: 'clear',
+    chatPh: 'Ask anything about this call…',
+    chatSend: 'Ask',
+    // Settings
+    settingsTitle: 'Settings',
+    settingsAccount: 'Account',
+    settingsEmailLabel: 'Email',
+    settingsSubscription: 'Subscription',
+    settingsBillingMonthly: 'Monthly',
+    settingsBillingAnnual: 'Annual',
+    settingsUsageLabel: 'Usage this month',
+    settingsPreferences: 'Preferences',
+    settingsTheme: 'Theme',
+    settingsLang: 'Interface language',
+    settingsActions: 'Actions',
+    settingsSignOut: 'Sign out',
+    settingsEscHint: `Press ${_KBD('Esc')} to close`,
+    settingsThemeLight: 'Light',
+    settingsThemeDark: 'Dark',
+    // Plans
+    planFreeF1: '60 min/month',
+    planFreeF2: 'Transcription only',
+    planFreeF3: 'Last 5 recordings',
+    planFreeF4: 'Export .md',
+    planProF1: '600 min/month',
+    planProF2: 'Speaker diarization',
+    planProF3: 'Summary + Action items',
+    planProF4: 'Unlimited history',
+    planProF5: 'Speaker rename',
+    planMaxF1: '2000 min/month',
+    planMaxF2: 'Everything in Pro',
+    planMaxF3: 'Share by link',
+    planMaxF4: 'Notion integration',
+    planMaxF5: 'Priority processing',
+    planCurrentBtn: 'Current plan',
+    planUpgradePro: 'Upgrade to Pro',
+    planUpgradeMax: 'Upgrade to Max',
+    planBilledAnnually: 'billed annually',
+    planBestValue: 'Best value',
+    // Shortcuts
+    shortcutsTitle: 'Keyboard shortcuts',
+    shortcutRec: 'Start / stop recording',
+    shortcutHistory: 'Open History & focus search',
+    shortcutSearch: 'Focus search (when History open)',
+    shortcutDownload: 'Download as .md',
+    shortcutTheme: 'Toggle light / dark',
+    shortcutClose: 'Close modal / blur field',
+    shortcutHelp: 'Show this list',
+    shortcutsFooter: `Press ${_KBD('?')} any time to open this`,
+    // Sidebar / History
+    historyLabelBase: 'History',
+    searchPh: 'Search transcripts…',
+    historyEmpty: 'No transcripts yet.',
+    historyNoMatch: 'Nothing matches.',
+    historyToday: 'Today',
+    historyYesterday: 'Yesterday',
+    historyThisWeek: 'This week',
+    historyLastWeek: 'Last week',
+    historyEarlier: 'Earlier',
+    // Upgrade prompt
+    upgradeTitle: 'Upgrade to Pro',
+    upgradeSeePlans: 'See plans →',
+    upgradeLimitMsg: 'You\'ve reached your {limit} min/month limit.',
+    upgradeAIMsg: 'AI tools (Summary, Actions) require a Pro plan.',
+  },
+  ua: {
+    // Login
+    loginSub: 'Увійдіть, щоб продовжити',
+    loginGoogle: 'Продовжити з Google',
+    loginDivider: 'або чарівне посилання',
+    loginEmailPh: 'ваш@email.com',
+    loginEmailBtn: 'Надіслати посилання',
+    loginSending: 'Надсилаємо посилання…',
+    loginCheckEmail: 'Перевірте пошту!',
+    loginEnterEmail: 'Введіть коректний email.',
+    // Hero
+    heroSub: 'ШІ-транскрипція з розподілом спікерів. Обробка на GPU в хмарі — без налаштувань.',
+    themeLight: 'світла',
+    themeDark: 'темна',
+    uiLangToggle: 'EN',
+    // Controls
+    langLabel: 'Мова запису',
+    langAuto: 'Авто',
+    speakersLabel: 'Спікери',
+    contextLabel: 'Контекст',
+    contextOpt: 'необов\'язково',
+    contextPh: 'Тема, імена, терміни — допомагає Whisper розпізнати правильно',
+    startBtn: 'Почати запис',
+    stopBtn: 'Стоп',
+    // Status
+    statusReady: 'готово',
+    statusPermissions: 'запит дозволів…',
+    statusRecording: 'запис',
+    statusFinalizing: 'завершення…',
+    statusUploading: 'завантаження…',
+    statusQueued: 'у черзі…',
+    // Transcript
+    sectionTranscript: 'Транскрипт',
+    transcriptEmpty: 'Почніть запис — транскрипт з\'явиться тут.',
+    copyBtn: 'Копіювати',
+    copiedBtn: 'Скопійовано',
+    downloadBtn: 'Завантажити .md',
+    // Hint
+    hint: `Натисніть <b>Почати запис</b> → дозвольте мікрофон → виберіть вкладку (Meet&nbsp;/&nbsp;Teams) або <b>Весь екран</b>, увімкніть <b>Поділитися аудіо</b> → натисніть <b>Стоп</b>.<br><span class="accent">⚡</span> Обробка займає 5–30с на хвилину аудіо — GPU пришвидшує.<br><span style="opacity:.7">Для довгих зустрічей: правий клік на вкладку → <b>Закріпити</b>, вимкніть Memory Saver для цього сайту (${_KBD('chrome://settings/performance')}).</span><br><span style="opacity:.7">Підказка: натисніть ${_KBD('?')} для гарячих клавіш.</span>`,
+    // Recovery
+    recoveryTitle: 'Аудіо збережено',
+    recoveryMsg: 'Сервер не відповів, але запис в безпеці в пам\'яті браузера. Спробуйте ще раз або завантажте аудіо як резерв.',
+    retryBtn: 'Повторити транскрипцію',
+    downloadAudioBtn: 'Завантажити .webm',
+    dismissBtn: 'Відхилити',
+    // Notes
+    sectionNotes: 'Нотатки',
+    notesPh: 'Особисті нотатки — зберігаються з транскриптом, включаються в .md.',
+    // AI
+    sectionAI: 'ШІ-інструменти',
+    summaryBtn: 'Резюме',
+    actionsBtn: 'Завдання',
+    aiCopy: 'копіювати',
+    aiCopied: 'скопійовано',
+    aiRegen: 'оновити',
+    aiGenerating: 'генерація…',
+    templateLabelSummary: 'Резюме',
+    templateLabelActions: 'Завдання',
+    // Chat
+    sectionChat: 'Чат з транскриптом',
+    chatClear: 'очистити',
+    chatPh: 'Запитайте будь-що про цей дзвінок…',
+    chatSend: 'Запит',
+    // Settings
+    settingsTitle: 'Налаштування',
+    settingsAccount: 'Акаунт',
+    settingsEmailLabel: 'Пошта',
+    settingsSubscription: 'Підписка',
+    settingsBillingMonthly: 'Щомісяця',
+    settingsBillingAnnual: 'Щорічно',
+    settingsUsageLabel: 'Використано цього місяця',
+    settingsPreferences: 'Вигляд',
+    settingsTheme: 'Тема',
+    settingsLang: 'Мова інтерфейсу',
+    settingsActions: 'Дії',
+    settingsSignOut: 'Вийти',
+    settingsEscHint: `Натисніть ${_KBD('Esc')} щоб закрити`,
+    settingsThemeLight: 'Світла',
+    settingsThemeDark: 'Темна',
+    // Plans
+    planFreeF1: '60 хв/місяць',
+    planFreeF2: 'Тільки транскрипція',
+    planFreeF3: 'Останні 5 записів',
+    planFreeF4: 'Експорт .md',
+    planProF1: '600 хв/місяць',
+    planProF2: 'Розподіл спікерів',
+    planProF3: 'Резюме + Завдання',
+    planProF4: 'Необмежена історія',
+    planProF5: 'Перейменування спікерів',
+    planMaxF1: '2000 хв/місяць',
+    planMaxF2: 'Все з Pro',
+    planMaxF3: 'Поділитись посиланням',
+    planMaxF4: 'Інтеграція Notion',
+    planMaxF5: 'Пріоритетна обробка',
+    planCurrentBtn: 'Поточний план',
+    planUpgradePro: 'Перейти на Pro',
+    planUpgradeMax: 'Перейти на Max',
+    planBilledAnnually: 'щорічна оплата',
+    planBestValue: 'Вигідно',
+    // Shortcuts
+    shortcutsTitle: 'Гарячі клавіші',
+    shortcutRec: 'Почати / зупинити запис',
+    shortcutHistory: 'Відкрити Історію і пошук',
+    shortcutSearch: 'Пошук (коли Історія відкрита)',
+    shortcutDownload: 'Завантажити .md',
+    shortcutTheme: 'Змінити тему',
+    shortcutClose: 'Закрити / зняти фокус',
+    shortcutHelp: 'Показати цей список',
+    shortcutsFooter: `Натисніть ${_KBD('?')} у будь-який момент`,
+    // Sidebar / History
+    historyLabelBase: 'Історія',
+    searchPh: 'Пошук…',
+    historyEmpty: 'Транскриптів ще немає.',
+    historyNoMatch: 'Нічого не знайдено.',
+    historyToday: 'Сьогодні',
+    historyYesterday: 'Вчора',
+    historyThisWeek: 'Цей тиждень',
+    historyLastWeek: 'Минулий тиждень',
+    historyEarlier: 'Раніше',
+    // Upgrade prompt
+    upgradeTitle: 'Потрібен апгрейд',
+    upgradeSeePlans: 'Дивитись плани →',
+    upgradeLimitMsg: 'Ви досягли ліміту {limit} хв/місяць.',
+    upgradeAIMsg: 'ШІ-інструменти (Резюме, Завдання) потребують плану Pro.',
+  }
+};
+
+function t(key) {
+  return (T[uiLang] && T[uiLang][key] !== undefined) ? T[uiLang][key] : (T.en[key] !== undefined ? T.en[key] : key);
+}
+
+function tFmt(key, vars = {}) {
+  let s = t(key);
+  for (const [k, v] of Object.entries(vars)) s = s.replace('{' + k + '}', v);
+  return s;
+}
+
+function applyI18n() {
+  // textContent nodes
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  // placeholders
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPh);
+  });
+  // innerHTML (hint, modal footers)
+  document.querySelectorAll('[data-i18n-html]').forEach(el => {
+    el.innerHTML = t(el.dataset.i18nHtml);
+  });
+  // theme toggle text
+  const isDark = document.documentElement.dataset.theme === 'dark';
+  const themeTog = document.getElementById('themeToggle');
+  if (themeTog) themeTog.textContent = isDark ? t('themeLight') : t('themeDark');
+  const settingsThemeBtnEl = document.getElementById('settingsThemeBtn');
+  if (settingsThemeBtnEl) settingsThemeBtnEl.textContent = isDark ? t('settingsThemeLight') : t('settingsThemeDark');
+  // UI lang toggle button (hero meta)
+  const uiLangToggleEl = document.getElementById('uiLangToggle');
+  if (uiLangToggleEl) uiLangToggleEl.textContent = t('uiLangToggle');
+  // UI lang option buttons in settings
+  document.querySelectorAll('.uilang-opt').forEach(b => {
+    b.classList.toggle('active', b.dataset.uilang === uiLang);
+  });
+  // billed-annually notes (only update if currently showing)
+  const proNote = document.getElementById('proBilledNote');
+  const maxNote = document.getElementById('maxBilledNote');
+  if (proNote && proNote.textContent) proNote.textContent = t('planBilledAnnually');
+  if (maxNote && maxNote.textContent) maxNote.textContent = t('planBilledAnnually');
+  // html lang attribute
+  document.documentElement.lang = uiLang === 'ua' ? 'uk' : 'en';
+}
+
+function setUiLang(lang) {
+  uiLang = lang;
+  localStorage.setItem('uiLang', lang);
+  applyI18n();
+  if (typeof renderHistory === 'function') renderHistory();
+}
 
 // ── Supabase client ───────────────────────────────────────────
 // URL и anon key публичны (anon — клиентский, защита через RLS).
@@ -1762,7 +2088,7 @@ function _updatePlanUI() {
     card.classList.toggle('current-plan', plan === currentPlan);
     if (!btn) return;
     if (plan === currentPlan) {
-      btn.textContent = 'Current plan';
+      btn.textContent = t('planCurrentBtn');
       btn.className = 'plan-card-btn btn-current';
       btn.disabled = true;
     } else if (planRank < rank) {
@@ -1770,7 +2096,7 @@ function _updatePlanUI() {
       btn.className = 'plan-card-btn btn-downgrade';
       btn.disabled = true;
     } else {
-      btn.textContent = `Upgrade to ${plan.charAt(0).toUpperCase() + plan.slice(1)}`;
+      btn.textContent = plan === 'pro' ? t('planUpgradePro') : plan === 'max' ? t('planUpgradeMax') : t('planUpgradePro');
       btn.className = 'plan-card-btn btn-upgrade';
       btn.disabled = false;
     }
@@ -1815,9 +2141,10 @@ const chatInput     = document.getElementById('chatInput');
 const chatSendBtn   = document.getElementById('chatSendBtn');
 const chatClearBtn  = document.getElementById('chatClearBtn');
 
+// TEMPLATE_LABELS now uses t() for i18n
 const TEMPLATE_LABELS = {
-  summary: 'Summary',
-  actions: 'Action items',
+  get summary() { return t('templateLabelSummary'); },
+  get actions()  { return t('templateLabelActions');  },
 };
 
 // ── Theme toggle ───────────────────────────────────────────────
@@ -1827,13 +2154,25 @@ function applyTheme(theme, animate = false) {
     setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 350);
   }
   document.documentElement.dataset.theme = theme;
-  themeToggle.textContent = theme === 'dark' ? 'light' : 'dark';
+  themeToggle.textContent = theme === 'dark' ? t('themeLight') : t('themeDark');
+  const stb = document.getElementById('settingsThemeBtn');
+  if (stb) stb.textContent = theme === 'dark' ? t('settingsThemeLight') : t('settingsThemeDark');
   localStorage.setItem('theme', theme);
 }
 applyTheme(document.documentElement.dataset.theme || 'dark');
 themeToggle.addEventListener('click', () => {
   applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
 });
+
+// ── UI language toggle ────────────────────────────────────────
+document.getElementById('uiLangToggle').addEventListener('click', () => {
+  setUiLang(uiLang === 'en' ? 'ua' : 'en');
+});
+document.querySelectorAll('.uilang-opt').forEach(b => {
+  b.addEventListener('click', () => setUiLang(b.dataset.uilang));
+});
+// Apply i18n on load
+applyI18n();
 
 // ── Settings persistence ──────────────────────────────────────
 const SETTINGS_KEY = 'transcriptor_settings';
@@ -2662,14 +3001,14 @@ let waitingForFull = false;
 startBtn.addEventListener('click', async () => {
   setError('');
   startBtn.disabled = true;
-  setStatus('requesting permissions…', 'working');
+  setStatus(t('statusPermissions'), 'working');
 
   // Предупреждаем если на батарее с низким зарядом
   const batteryWarning = await checkBatteryWarning();
   if (batteryWarning) {
     if (!confirm(batteryWarning + '\n\nStart recording anyway?')) {
       startBtn.disabled = false;
-      setStatus('ready');
+      setStatus(t('statusReady'));
       return;
     }
   }
@@ -2679,7 +3018,7 @@ startBtn.addEventListener('click', async () => {
     const sizeMb = (lastRecordingBlob.size / (1024 * 1024)).toFixed(1);
     if (!confirm(`There's a ${sizeMb} MB recording from a failed previous attempt. Start a new recording will discard it. Continue?`)) {
       startBtn.disabled = false;
-      setStatus('ready');
+      setStatus(t('statusReady'));
       return;
     }
     lastRecordingBlob = null;
@@ -2693,7 +3032,7 @@ startBtn.addEventListener('click', async () => {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (e) {
       setError(e.name === 'NotAllowedError' ? 'Microphone access denied.' : e.message);
-      setStatus('ready'); startBtn.disabled = false; return;
+      setStatus(t('statusReady')); startBtn.disabled = false; return;
     }
   }
 
@@ -2705,13 +3044,13 @@ startBtn.addEventListener('click', async () => {
     displayStream.getVideoTracks().forEach(t => t.stop());
   } catch (e) {
     setError(e.name === 'NotAllowedError' ? 'Screen share denied.' : 'Screen share canceled.');
-    setStatus('ready'); startBtn.disabled = false; return;
+    setStatus(t('statusReady')); startBtn.disabled = false; return;
   }
 
   if (displayStream.getAudioTracks().length === 0) {
     displayStream.getTracks().forEach(t => t.stop()); displayStream = null;
     setError('No audio captured — enable “Share audio” when selecting screen or tab.');
-    setStatus('ready'); startBtn.disabled = false; return;
+    setStatus(t('statusReady')); startBtn.disabled = false; return;
   }
 
   audioCtx = new AudioContext();
@@ -2758,7 +3097,7 @@ startBtn.addEventListener('click', async () => {
   });
 
   startTimer();
-  setStatus('recording', 'recording');
+  setStatus(t('statusRecording'), 'recording');
   hintEl.style.display = 'none';
   stopBtn.disabled = false;
   langSel.disabled = true;
@@ -2773,7 +3112,7 @@ function stopRecording() {
   updateSectionsVisibility();
   stopBtn.disabled = true;
   stopTimer();
-  setStatus('finalizing…', 'working');
+  setStatus(t('statusFinalizing'), 'working');
 
   // Освобождаем keep-alive
   stopSilentAudio();
@@ -2802,7 +3141,7 @@ async function handleFullStop() {
 
 async function transcribeBlob(blob) {
   waitingForFull = true;
-  setStatus('uploading…', 'working');
+  setStatus(t('statusUploading'), 'working');
   hideRecoveryBox();
   setError('');
 
@@ -2815,7 +3154,7 @@ async function transcribeBlob(blob) {
     if (ctx)                                  fd.append('prompt', ctx);
 
     const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd, true);
-    setStatus('queued…', 'working');
+    setStatus(t('statusQueued'), 'working');
 
     const result = await pollJob(jobId, (progress) => {
       // progress: "converting" | "transcribing" | "diarizing" | "merging"
@@ -2849,17 +3188,17 @@ async function transcribeBlob(blob) {
       requestLLMTitle(segments, langSel.value, currentHistoryId);
       requestLLMTags(segments, currentHistoryId);
     }
-    setStatus('ready');
+    setStatus(t('statusReady'));
     hintEl.style.display = '';
   } catch (e) {
     if (e.upgradeRequired) {
       setError('');
-      setStatus('ready');
+      setStatus(t('statusReady'));
       hintEl.style.display = '';
-      showUpgradePrompt('You\'ve reached your ' + currentMinutesLimit + ' min/month limit.');
+      showUpgradePrompt(tFmt('upgradeLimitMsg', { limit: currentMinutesLimit }));
     } else {
       setError(e.message);
-      setStatus('ready');
+      setStatus(t('statusReady'));
       hintEl.style.display = '';
       if (lastRecordingBlob) showRecoveryBox();
       notify('Transcription failed', e.message);
@@ -2884,12 +3223,12 @@ function showUpgradePrompt(reason) {
 
   const txt = document.createElement('div');
   txt.style.cssText = 'flex:1;min-width:0';
-  txt.innerHTML = `<div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:2px">Upgrade to Pro</div><div style="font-size:12px;color:var(--muted)">${reason}</div>`;
+  txt.innerHTML = `<div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:2px">${t('upgradeTitle')}</div><div style="font-size:12px;color:var(--muted)">${reason}</div>`;
 
   const btn = document.createElement('button');
   btn.className = 'btn-primary';
   btn.style.cssText = 'white-space:nowrap;font-size:13px;padding:7px 16px';
-  btn.textContent = 'See plans →';
+  btn.textContent = t('upgradeSeePlans');
   btn.addEventListener('click', () => openSettingsModal());
 
   const close = document.createElement('button');
@@ -2957,8 +3296,8 @@ window.addEventListener('beforeunload', (e) => {
 copyBtn.addEventListener('click', async () => {
   if (!currentSegments || currentSegments.length === 0) return;
   await navigator.clipboard.writeText(segmentsToPlainText(currentSegments));
-  copyBtn.textContent = 'Copied';
-  setTimeout(() => copyBtn.textContent = 'Copy', 1500);
+  copyBtn.textContent = t('copiedBtn');
+  setTimeout(() => copyBtn.textContent = t('copyBtn'), 1500);
 });
 
 downloadBtn.addEventListener('click', () => {
@@ -3139,17 +3478,18 @@ function formatSidebarDate(iso) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// Returns i18n key — translated in renderHistory via t()
 function getDateGroup(iso) {
   const d = new Date(iso);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const entryDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   const diffDays = Math.round((today - entryDay) / 86400000);
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays <= 6) return 'This week';
-  if (diffDays <= 13) return 'Last week';
-  return 'Earlier';
+  if (diffDays === 0) return 'historyToday';
+  if (diffDays === 1) return 'historyYesterday';
+  if (diffDays <= 6) return 'historyThisWeek';
+  if (diffDays <= 13) return 'historyLastWeek';
+  return 'historyEarlier';
 }
 
 function formatDuration(segments) {
@@ -3213,7 +3553,8 @@ function renderTagFilters() {
 
 function renderHistory() {
   const allHistory = getHistory();
-  historyLabel.textContent = allHistory.length ? `History · ${allHistory.length}` : 'History';
+  const histBase = t('historyLabelBase');
+  historyLabel.textContent = allHistory.length ? `${histBase} · ${allHistory.length}` : histBase;
 
   renderTagFilters();
 
@@ -3224,7 +3565,7 @@ function renderHistory() {
   if (!allHistory.length) {
     const el = document.createElement('p');
     el.className = 'sidebar-empty';
-    el.textContent = 'No transcripts yet.';
+    el.textContent = t('historyEmpty');
     itemsEl.appendChild(el);
     return;
   }
@@ -3234,12 +3575,12 @@ function renderHistory() {
   if (!history.length) {
     const el = document.createElement('p');
     el.className = 'sidebar-empty';
-    el.textContent = 'Nothing matches.';
+    el.textContent = t('historyNoMatch');
     itemsEl.appendChild(el);
     return;
   }
 
-  const GROUP_ORDER = ['Today', 'Yesterday', 'This week', 'Last week', 'Earlier'];
+  const GROUP_ORDER = ['historyToday', 'historyYesterday', 'historyThisWeek', 'historyLastWeek', 'historyEarlier'];
   const groups = {};
   GROUP_ORDER.forEach(g => { groups[g] = []; });
   history.forEach(entry => groups[getDateGroup(entry.date)].push(entry));
@@ -3252,7 +3593,7 @@ function renderHistory() {
 
     const header = document.createElement('div');
     header.className = 'sidebar-group-header';
-    header.textContent = groupName;
+    header.textContent = t(groupName);
     itemsEl.appendChild(header);
 
     items.forEach(entry => {
@@ -3437,7 +3778,7 @@ async function runAI(template) {
     if (e.upgradeRequired) {
       delete currentAIResults[template];
       renderAIResults();
-      showUpgradePrompt('AI tools (Summary, Actions) require a Pro plan.');
+      showUpgradePrompt(t('upgradeAIMsg'));
       return;
     }
     currentAIResults[template] = `**Error:** ${e.message}`;
@@ -3468,16 +3809,16 @@ function renderAIResults() {
 
     const copyAct = document.createElement('button');
     copyAct.className = 'ai-result-action';
-    copyAct.textContent = 'copy';
+    copyAct.textContent = t('aiCopy');
     copyAct.addEventListener('click', async () => {
       await navigator.clipboard.writeText(result);
-      copyAct.textContent = 'copied';
-      setTimeout(() => copyAct.textContent = 'copy', 1200);
+      copyAct.textContent = t('aiCopied');
+      setTimeout(() => copyAct.textContent = t('aiCopy'), 1200);
     });
 
     const regenAct = document.createElement('button');
     regenAct.className = 'ai-result-action';
-    regenAct.textContent = 'regenerate';
+    regenAct.textContent = t('aiRegen');
     regenAct.addEventListener('click', () => {
       delete currentAIResults[template];
       runAI(template);
@@ -3503,7 +3844,7 @@ function renderAIResults() {
     const content = document.createElement('div');
     content.className = 'ai-result-content';
     if (result === '__loading__') {
-      content.innerHTML = '<p style="color:var(--muted)"><span class="spinner" style="display:inline-block;width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;margin-right:6px;animation:spin .8s linear infinite"></span> generating…</p>';
+      content.innerHTML = `<p style="color:var(--muted)"><span class="spinner" style="display:inline-block;width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;margin-right:6px;animation:spin .8s linear infinite"></span> ${t('aiGenerating')}</p>`;
     } else {
       content.innerHTML = renderMarkdown(result);
     }
@@ -3781,18 +4122,18 @@ loginGoogleBtn.addEventListener('click', async () => {
 loginEmailBtn.addEventListener('click', async () => {
   const email = (loginEmailInp.value || '').trim();
   if (!email || !/.+@.+\..+/.test(email)) {
-    setLoginMessage('Enter a valid email', 'error');
+    setLoginMessage(t('loginEnterEmail'), 'error');
     return;
   }
   loginEmailBtn.disabled = true;
-  setLoginMessage('Sending magic link…');
+  setLoginMessage(t('loginSending'));
   const { error } = await sb.auth.signInWithOtp({
     email,
     options: { emailRedirectTo: window.location.origin + window.location.pathname },
   });
   loginEmailBtn.disabled = false;
   if (error) setLoginMessage(error.message, 'error');
-  else      setLoginMessage('Check your inbox — click the link to sign in.', 'success');
+  else      setLoginMessage(t('loginCheckEmail'), 'success');
 });
 
 loginEmailInp.addEventListener('keydown', e => {
@@ -3875,7 +4216,7 @@ settingsModal.addEventListener('click', e => { if (e.target === settingsModal) c
 const settingsThemeBtn = document.getElementById('settingsThemeBtn');
 function syncSettingsThemeBtn() {
   const isDark = document.documentElement.dataset.theme === 'dark';
-  settingsThemeBtn.textContent = isDark ? 'Light' : 'Dark';
+  settingsThemeBtn.textContent = isDark ? t('settingsThemeLight') : t('settingsThemeDark');
 }
 settingsThemeBtn.addEventListener('click', () => {
   applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark', true);
@@ -3903,7 +4244,7 @@ function applyBilling(billing) {
     b.classList.toggle('active', b.dataset.billing === billing);
   });
   const prices = PLAN_PRICES[billing];
-  const noteText = billing === 'annual' ? 'billed annually' : '';
+  const noteText = billing === 'annual' ? t('planBilledAnnually') : '';
   const proAmt = document.getElementById('proPriceAmt');
   const maxAmt = document.getElementById('maxPriceAmt');
   const proNote = document.getElementById('proBilledNote');
