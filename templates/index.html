@@ -1421,6 +1421,7 @@
     .stage-label.done    { color: var(--dim); }
     .stage-time { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--dim); white-space: nowrap; }
     .stage-time.active   { color: var(--accent); }
+    .stage-time.real     { color: var(--muted); }   /* real timing — slightly brighter than estimated */
     .stage-spinner {
       width: 8px; height: 8px; border: 1.5px solid var(--accent);
       border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite;
@@ -3160,25 +3161,34 @@ let recordingDurationSec = 0;
 const RING_CIRCUMFERENCE = 2 * Math.PI * 68; // ≈ 427.26
 
 // Timing rationale (A10G GPU, warm container):
-//   upload:     ~4s (network + FormData parse)
+//   upload:     ~4s  (network + FormData parse)
 //   warmup:     ~70s cold start (models load) — 0s if container already warm,
 //               but we budget for it so the ring doesn't stall visually
-//   diarize:    pyannote 3.1 ≈ d/10  (10x real-time on A10G)
 //   transcribe: whisper large-v3-turbo ≈ d/15 (15x real-time on A10G)
+//   diarize:    pyannote 3.1 ≈ d/10  (10x real-time on A10G)
 //   correct:    Qwen LLM correction — ~8s flat (1 batch for most calls)
 //   assemble:   merge + return — ~1s
+//
+// realId: backend stage name (from modal.Dict) that signals this stage completed.
+// null = stage has no direct backend signal (upload/assemble done implicitly).
 const PIPELINE_DEF = [
-  { id: 'upload',     headKey: 'procHeadUpload',     labelKey: 'procStageUpload',     est: () => 4 },
-  { id: 'warmup',     headKey: 'procHeadWarmup',     labelKey: 'procStageWarmup',     est: () => 70 },
-  { id: 'diarize',    headKey: 'procHeadDiarize',    labelKey: 'procStageDiarize',    est: d => Math.max(5, d / 10) },
-  { id: 'transcribe', headKey: 'procHeadTranscribe', labelKey: 'procStageTranscribe', est: d => Math.max(5, d / 15) },
-  { id: 'correct',    headKey: 'procHeadCorrect',    labelKey: 'procStageCorrect',    est: () => 8 },
-  { id: 'assemble',   headKey: 'procHeadAssemble',   labelKey: 'procStageAssemble',   est: () => 1 },
+  { id: 'upload',     headKey: 'procHeadUpload',     labelKey: 'procStageUpload',     est: () => 4,                  realId: null },
+  { id: 'warmup',     headKey: 'procHeadWarmup',     labelKey: 'procStageWarmup',     est: () => 70,                 realId: 'convert' },
+  { id: 'transcribe', headKey: 'procHeadTranscribe', labelKey: 'procStageTranscribe', est: d => Math.max(5, d / 15), realId: 'transcribe' },
+  { id: 'diarize',    headKey: 'procHeadDiarize',    labelKey: 'procStageDiarize',    est: d => Math.max(5, d / 10), realId: 'diarize' },
+  { id: 'correct',    headKey: 'procHeadCorrect',    labelKey: 'procStageCorrect',    est: () => 8,                  realId: 'correct' },
+  { id: 'assemble',   headKey: 'procHeadAssemble',   labelKey: 'procStageAssemble',   est: () => 1,                  realId: null },
 ];
 
 let _procTimer = null;
 let _procStartMs = 0;
 let _procAudioDur = 0; // audio duration in seconds
+
+// Real progress state (set by _applyRealStage when backend signals a stage done).
+// Falls back to estimation if no real signals arrive (cold container / Flask restart).
+let _realDoneUntil = -1;      // index: stages 0.._realDoneUntil-1 are confirmed done
+let _minRingPct = 0;          // ring won't go below this pct (set on real signal)
+let _realStageCompletedAt = {}; // stageId → wall-clock elapsed seconds when completed
 
 function _fmtSecs(s) {
   const m = Math.floor(s / 60), sec = Math.floor(s % 60);
@@ -3189,9 +3199,41 @@ function _stageTimings(audioDur) {
   return PIPELINE_DEF.map(s => s.est(audioDur));
 }
 
+/**
+ * Called when the backend reports a real stage completion via modal.Dict.
+ * Advances ring minimum and marks stages done up to and including
+ * the stage with realId === backendStage.
+ */
+function _applyRealStage(backendStage) {
+  const idx = PIPELINE_DEF.findIndex(s => s.realId === backendStage);
+  if (idx < 0) return;
+
+  const newDoneUntil = idx + 1; // stages 0..idx are done; idx+1 is now active
+  if (newDoneUntil <= _realDoneUntil) return; // don't go backwards
+
+  const elapsed = (Date.now() - _procStartMs) / 1000;
+  _realStageCompletedAt[PIPELINE_DEF[idx].id] = elapsed;
+  _realDoneUntil = newDoneUntil;
+
+  // Set minimum ring pct: use real elapsed vs estimated total
+  const timings = _stageTimings(_procAudioDur);
+  const total   = timings.reduce((a, b) => a + b, 0);
+  // Pct based on real elapsed time (more accurate than estimated cumul)
+  const realPct = Math.min(96, (elapsed / total) * 100);
+  // Also pct from estimated cumul for this stage (floors the minimum)
+  let estCumul = 0;
+  for (let i = 0; i <= idx; i++) estCumul += timings[i];
+  const estPct  = Math.min(96, (estCumul / total) * 100);
+  _minRingPct = Math.max(_minRingPct, estPct, realPct);
+}
+
 function showProcessingScreen(audioDurSec) {
   _procAudioDur = audioDurSec || 60; // fallback 60s if unknown
   _procStartMs  = Date.now();
+  // Reset real progress state for new job
+  _realDoneUntil      = -1;
+  _minRingPct         = 0;
+  _realStageCompletedAt = {};
 
   const ps = document.getElementById('processingState');
   const ts = document.getElementById('transcriptSectionTitle');
@@ -3234,23 +3276,32 @@ function _tickProcessing() {
   const timings = _stageTimings(_procAudioDur);
   const total   = timings.reduce((a, b) => a + b, 0);
 
-  // Determine current stage
-  let cumul = 0, stageIdx = 0, stageElapsed = elapsed;
+  // Estimation-based stage index
+  let cumul = 0, estStageIdx = 0, estStageElapsed = elapsed;
   for (let i = 0; i < timings.length; i++) {
-    if (elapsed >= cumul + timings[i]) { cumul += timings[i]; stageIdx = i + 1; }
-    else { stageElapsed = elapsed - cumul; break; }
+    if (elapsed >= cumul + timings[i]) { cumul += timings[i]; estStageIdx = i + 1; }
+    else { estStageElapsed = elapsed - cumul; break; }
   }
-  stageIdx = Math.min(stageIdx, PIPELINE_DEF.length - 1);
+  estStageIdx = Math.min(estStageIdx, PIPELINE_DEF.length - 1);
 
-  const pct = Math.min(97, (elapsed / total) * 100);
-  _updateRing(pct, elapsed, stageIdx, stageElapsed, timings);
-  _renderPipelineStages(stageIdx, elapsed);
+  // Blend: take the furthest-along index (real or estimated)
+  const effectiveStageIdx = Math.max(
+    _realDoneUntil >= 0 ? _realDoneUntil : 0,
+    estStageIdx
+  );
+  const clampedIdx = Math.min(effectiveStageIdx, PIPELINE_DEF.length - 1);
+
+  const estPct = Math.min(97, (elapsed / total) * 100);
+  const pct    = Math.max(_minRingPct, estPct);
+
+  _updateRing(pct, elapsed, clampedIdx, estStageElapsed, timings);
+  _renderPipelineStages(clampedIdx, elapsed);
 
   // Headline
   document.getElementById('processingHeadline').textContent =
-    t(PIPELINE_DEF[stageIdx].headKey);
+    t(PIPELINE_DEF[clampedIdx].headKey);
 
-  // ETA
+  // ETA — based on real elapsed vs total estimate
   const remaining = Math.max(0, total - elapsed);
   const etaEl = document.getElementById('processingEta');
   etaEl.textContent = remaining > 5
@@ -3279,7 +3330,7 @@ function _updateRing(pct, elapsed, stageIdx, stageElapsed, timings) {
 function _renderPipelineStages(currentIdx, elapsed) {
   const el = document.getElementById('pipelineStages');
   const timings = _stageTimings(_procAudioDur);
-  let cumul = 0;
+  let estCumul = 0;
 
   el.innerHTML = PIPELINE_DEF.map((stage, i) => {
     const isDone   = i < currentIdx;
@@ -3294,17 +3345,34 @@ function _renderPipelineStages(currentIdx, elapsed) {
 
     let timeHtml = '';
     if (isDone) {
-      const shown = t_sec < 1 ? t_sec.toFixed(1) + 's' : Math.round(t_sec) + 's';
-      timeHtml = `<span class="stage-time">${shown}</span>`;
-    } else if (isActive && stage.id === 'transcribe') {
-      const se = Math.max(0, elapsed - cumul);
+      // Prefer real timing: compute per-stage duration from wall-clock signals
+      const realTs = _realStageCompletedAt[stage.id];
+      if (realTs !== undefined) {
+        // Find when the previous stage completed (real or estimated cumul)
+        let prevTs = 0;
+        for (let j = i - 1; j >= 0; j--) {
+          const pReal = _realStageCompletedAt[PIPELINE_DEF[j].id];
+          if (pReal !== undefined) { prevTs = pReal; break; }
+        }
+        const dur = Math.max(0, realTs - prevTs);
+        const shown = dur < 60
+          ? (dur < 1 ? dur.toFixed(1) + 's' : Math.round(dur) + 's')
+          : Math.floor(dur / 60) + 'm ' + (Math.round(dur % 60)) + 's';
+        timeHtml = `<span class="stage-time real">${shown}</span>`;
+      } else {
+        // Fallback to estimated
+        const shown = t_sec < 1 ? t_sec.toFixed(1) + 's' : Math.round(t_sec) + 's';
+        timeHtml = `<span class="stage-time">${shown}</span>`;
+      }
+    } else if (isActive && (stage.id === 'transcribe' || stage.id === 'diarize')) {
+      const se = Math.max(0, elapsed - estCumul);
       timeHtml = `<span class="stage-time active">${_fmtSecs(se)} / ${_fmtSecs(t_sec)}</span>`;
     } else {
       timeHtml = `<span class="stage-time">—</span>`;
     }
 
     const labelClass = isDone ? 'stage-label done' : isActive ? 'stage-label active' : 'stage-label';
-    cumul += t_sec;
+    estCumul += t_sec;
 
     return `<div class="pipeline-stage">${icon}<span class="${labelClass}">${t(stage.labelKey)}</span>${timeHtml}</div>`;
   }).join('');
@@ -3479,7 +3547,10 @@ async function transcribeBlob(blob) {
 
     const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd, true);
 
-    const result = await pollJob(jobId);
+    const result = await pollJob(jobId, (progress) => {
+      // Real backend stage signal — advance ring to confirmed position
+      if (progress && progress.stage) _applyRealStage(progress.stage);
+    });
     const segments = result.segments || [];
 
     // Успех — можем отпустить blob и почистить IDB-сессию
