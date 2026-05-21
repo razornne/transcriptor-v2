@@ -13,6 +13,8 @@ export function Footer({ t, lang, setLang }: { t: Copy; lang: Lang; setLang: (l:
         </div>
         <div className="foot-links">
           {t.foot.links.map((l, i) => <a key={i} href="#">{l}</a>)}
+          <a href="/privacy" style={{ color: "var(--faint)", fontSize: 13 }}>Privacy</a>
+          <a href="/terms"   style={{ color: "var(--faint)", fontSize: 13 }}>Terms</a>
         </div>
         <SegToggle<Lang>
           ariaLabel="Language"
