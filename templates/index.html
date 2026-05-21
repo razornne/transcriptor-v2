@@ -1400,6 +1400,10 @@
         </div>
         <button class="settings-upgrade-btn" id="settingsUpgradeBtn">Upgrade →</button>
       </div>
+      <div class="settings-row" id="settingsUsageRow" style="margin-top:10px">
+        <span class="settings-row-label">Usage this month</span>
+        <span class="settings-row-value" id="settingsUsage">—</span>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -1483,6 +1487,11 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 let currentSession = null;
 let currentUser    = null;
 
+// План пользователя — подгружается через fetchProfile() после логина.
+let currentPlan         = 'free';
+let currentMinutesUsed  = 0;
+let currentMinutesLimit = 60;
+
 // Обёртка fetch — автоматически добавляет Authorization: Bearer <jwt>.
 // Используется для всех запросов к /api/*.
 async function authFetch(url, opts = {}) {
@@ -1491,6 +1500,46 @@ async function authFetch(url, opts = {}) {
     headers.set('Authorization', 'Bearer ' + currentSession.access_token);
   }
   return fetch(url, { ...opts, headers });
+}
+
+// ── Plan profile ──────────────────────────────────────────────
+const PLAN_LABELS = { free: 'Free', pro: 'Pro', max: 'Max', team: 'Team' };
+const PLAN_DESCS  = {
+  free: '60 min/month · transcription only',
+  pro:  '600 min/month · diarization + AI tools',
+  max:  '2000 min/month · sharing + Notion',
+  team: '600 min/user/month · workspace',
+};
+
+async function fetchProfile() {
+  if (!currentUser) return;
+  try {
+    const res = await authFetch(`${API_BASE}/api/profile`);
+    if (!res.ok) return;
+    const data = await res.json();
+    currentPlan         = data.plan         || 'free';
+    currentMinutesUsed  = data.minutes_used  || 0;
+    currentMinutesLimit = data.minutes_limit || 60;
+    _updatePlanUI();
+  } catch (e) {
+    console.warn('[profile] fetch failed:', e);
+  }
+}
+
+function _updatePlanUI() {
+  // Sidebar badge
+  const badge = document.getElementById('sidebarPlan');
+  if (badge) badge.textContent = PLAN_LABELS[currentPlan] || currentPlan;
+
+  // Settings modal
+  const planNameEl = document.getElementById('settingsPlanName');
+  const planDescEl = document.getElementById('settingsPlanDesc');
+  const usageEl    = document.getElementById('settingsUsage');
+  const upgradeBtn = document.getElementById('settingsUpgradeBtn');
+  if (planNameEl) planNameEl.textContent = PLAN_LABELS[currentPlan] || currentPlan;
+  if (planDescEl) planDescEl.textContent = PLAN_DESCS[currentPlan]  || '';
+  if (usageEl)    usageEl.textContent    = `${currentMinutesUsed} / ${currentMinutesLimit} min`;
+  if (upgradeBtn) upgradeBtn.style.display = currentPlan === 'free' ? '' : 'none';
 }
 
 // ── Feature flags ─────────────────────────────────────────────
@@ -2332,6 +2381,11 @@ async function submitJob(url, body, isFormData = false) {
   }
   const res = await authFetch(url, opts);
   const data = await safeJson(res);
+  if (res.status === 402) {
+    const err = new Error(data.error || 'plan limit reached');
+    err.upgradeRequired = true;
+    throw err;
+  }
   if (!res.ok) throw new Error(data.error || 'submit failed');
   if (!data.job_id) throw new Error('expected job_id in response');
   return data.job_id;
@@ -2554,17 +2608,59 @@ async function transcribeBlob(blob) {
     setStatus('ready');
     hintEl.style.display = '';
   } catch (e) {
-    setError(e.message);
-    setStatus('ready');
-    hintEl.style.display = '';
-    if (lastRecordingBlob) showRecoveryBox();
-    notify('Transcription failed', e.message);
+    if (e.upgradeRequired) {
+      setError('');
+      setStatus('ready');
+      hintEl.style.display = '';
+      showUpgradePrompt('You\'ve reached your ' + currentMinutesLimit + ' min/month limit.');
+    } else {
+      setError(e.message);
+      setStatus('ready');
+      hintEl.style.display = '';
+      if (lastRecordingBlob) showRecoveryBox();
+      notify('Transcription failed', e.message);
+    }
   } finally {
     waitingForFull = false;
     startBtn.disabled = false;
     langSel.disabled  = false;
     numSpeakersEl.disabled = false;
   }
+}
+
+// ── Upgrade prompt ───────────────────────────────────────────
+function showUpgradePrompt(reason) {
+  // Remove any existing prompt
+  const existing = document.getElementById('upgradePrompt');
+  if (existing) existing.remove();
+
+  const box = document.createElement('div');
+  box.id = 'upgradePrompt';
+  box.style.cssText = 'background:var(--surface);border:1px solid var(--accent);border-radius:10px;padding:16px 20px;margin-top:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap';
+
+  const txt = document.createElement('div');
+  txt.style.cssText = 'flex:1;min-width:0';
+  txt.innerHTML = `<div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:2px">Upgrade to Pro</div><div style="font-size:12px;color:var(--muted)">${reason}</div>`;
+
+  const btn = document.createElement('button');
+  btn.className = 'btn-primary';
+  btn.style.cssText = 'white-space:nowrap;font-size:13px;padding:7px 16px';
+  btn.textContent = 'See plans →';
+  btn.addEventListener('click', () => openSettingsModal());
+
+  const close = document.createElement('button');
+  close.style.cssText = 'background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0 0 0 4px';
+  close.textContent = '×';
+  close.addEventListener('click', () => box.remove());
+
+  box.appendChild(txt);
+  box.appendChild(btn);
+  box.appendChild(close);
+
+  // Insert after status bar
+  const statusBar = document.querySelector('.status-bar');
+  if (statusBar) statusBar.insertAdjacentElement('afterend', box);
+  else document.querySelector('.shell').prepend(box);
 }
 
 // ── Recovery UI ──────────────────────────────────────────────
@@ -3088,6 +3184,12 @@ async function runAI(template) {
     const result = await pollJob(jobId);
     currentAIResults[template] = result.result || '';
   } catch (e) {
+    if (e.upgradeRequired) {
+      delete currentAIResults[template];
+      renderAIResults();
+      showUpgradePrompt('AI tools (Summary, Actions) require a Pro plan.');
+      return;
+    }
     currentAIResults[template] = `**Error:** ${e.message}`;
   }
   renderAIResults();
@@ -3474,7 +3576,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
     if (settingsEmailEl) settingsEmailEl.textContent = email;
     // Подгружаем историю юзера из БД при логине / refresh page
     if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-      await refreshHistory();
+      await Promise.all([refreshHistory(), fetchProfile()]);
       console.log('[auth] history loaded, items:', _historyCache.length);
       renderHistory();
     }
@@ -3493,6 +3595,7 @@ const settingsModal = document.getElementById('settingsModal');
 function openSettingsModal() {
   const email = currentUser?.email || '';
   document.getElementById('settingsEmail').textContent = email || '—';
+  _updatePlanUI();
   settingsModal.classList.remove('hidden');
 }
 function closeSettingsModal() { settingsModal.classList.add('hidden'); }
@@ -3518,10 +3621,51 @@ document.getElementById('settingsSignOutBtn').addEventListener('click', async ()
   await sb.auth.signOut();
 });
 
-// Upgrade button — Stripe not wired yet
-document.getElementById('settingsUpgradeBtn').addEventListener('click', () => {
-  alert('Upgrade plans coming soon!');
+// Upgrade button — Stripe Checkout
+document.getElementById('settingsUpgradeBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('settingsUpgradeBtn');
+  btn.disabled = true;
+  btn.textContent = 'Redirecting…';
+  try {
+    const res = await authFetch(`${API_BASE}/api/stripe/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      alert(data.error || 'Could not start checkout. Try again.');
+      btn.disabled = false;
+      btn.textContent = 'Upgrade →';
+    }
+  } catch (e) {
+    alert('Could not start checkout: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Upgrade →';
+  }
 });
+
+// Handle return from Stripe Checkout
+(function() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('checkout') === 'success') {
+    history.replaceState({}, '', window.location.pathname);
+    // Show a brief success message after login loads
+    setTimeout(() => {
+      setError('');
+      const msg = document.createElement('div');
+      msg.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--accent);color:var(--bg);padding:12px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.3)';
+      msg.textContent = '🎉 Welcome to Pro!';
+      document.body.appendChild(msg);
+      setTimeout(() => msg.remove(), 4000);
+      fetchProfile();
+    }, 800);
+  } else if (params.get('checkout') === 'cancelled') {
+    history.replaceState({}, '', window.location.pathname);
+  }
+})();
 
 // Bootstrap — проверяем сессию при старте.
 // onAuthStateChange сам сработает с INITIAL_SESSION и покажет login если нужно.
