@@ -681,19 +681,28 @@ def stripe_webhook():
     etype = event["type"]
     obj = event["data"]["object"]
 
+    # Stripe SDK v5+ objects are not dicts — use getattr(..., None) instead of .get()
+    def _g(o, key, default=None):
+        try:
+            return getattr(o, key, default)
+        except Exception:
+            return default
+
     if etype == "checkout.session.completed":
-        user_id = obj.get("client_reference_id")
+        user_id = _g(obj, "client_reference_id")
+        print(f"[webhook] checkout.session.completed user_id={user_id}", flush=True)
         if user_id:
             _sb_admin("user_profiles", method="PATCH",
                       params={"id": f"eq.{user_id}"},
                       data={
                           "plan": "pro",
-                          "stripe_customer_id": obj.get("customer"),
-                          "stripe_subscription_id": obj.get("subscription"),
+                          "stripe_customer_id": _g(obj, "customer"),
+                          "stripe_subscription_id": _g(obj, "subscription"),
                       })
+            print(f"[webhook] plan updated to pro for {user_id}", flush=True)
 
     elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
-        customer_id = obj.get("customer")
+        customer_id = _g(obj, "customer")
         rows = _sb_admin("user_profiles",
                          params={"stripe_customer_id": f"eq.{customer_id}", "select": "id"})
         if rows:
@@ -701,9 +710,10 @@ def stripe_webhook():
             if etype == "customer.subscription.deleted":
                 plan = "free"
             else:
-                plan = "pro" if obj.get("status") in ("active", "trialing") else "free"
+                plan = "pro" if _g(obj, "status") in ("active", "trialing") else "free"
             _sb_admin("user_profiles", method="PATCH",
                       params={"id": f"eq.{uid}"}, data={"plan": plan})
+            print(f"[webhook] {etype} → plan={plan} for {uid}", flush=True)
 
     return jsonify({"ok": True})
 
