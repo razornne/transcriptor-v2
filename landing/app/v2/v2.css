@@ -394,6 +394,7 @@
   -webkit-backdrop-filter: blur(20px);
   position: relative;
   overflow: hidden;
+  flex: 0 0 auto;
 }
 .s-studio-panel::before {
   content: "";
@@ -625,6 +626,7 @@
   display: flex; align-items: center; gap: 8px;
   padding: 20px 32px 12px;
   flex-wrap: wrap;
+  flex: 0 0 auto;
 }
 .s-speakers-label {
   font-family: var(--s-mono);
@@ -681,6 +683,7 @@
   gap: 4px;
   padding: 0 32px;
   border-bottom: 1px solid var(--s-border);
+  flex: 0 0 auto;
 }
 .s-tab {
   position: relative;
@@ -718,6 +721,7 @@
   padding: 24px 32px 32px;
   display: flex; flex-direction: column;
   gap: 22px;
+  flex: 0 0 auto;
 }
 .s-tx-line {
   display: grid;
