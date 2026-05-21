@@ -712,6 +712,49 @@ def stripe_checkout():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/stripe/portal", methods=["POST"])
+def stripe_portal():
+    """Stripe Customer Portal — управление подпиской (отмена, смена плана, карточка).
+
+    Требует stripe_customer_id в user_profiles — сохраняется вебхуком на checkout.session.completed.
+    Если customer_id не найден — возвращает ошибку (юзер ещё не оплачивал через Stripe).
+
+    Returns: {"url": "https://billing.stripe.com/..."} — редиректим туда фронт.
+    """
+    import stripe as _stripe
+    _stripe.api_key = STRIPE_SECRET_KEY
+    if not STRIPE_SECRET_KEY:
+        return jsonify({"error": "Stripe not configured"}), 503
+
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+
+    # Находим stripe_customer_id из профиля пользователя
+    try:
+        rows = _sb_admin("user_profiles",
+                         params={"id": f"eq.{g.user_id}", "select": "stripe_customer_id"})
+    except Exception as e:
+        return jsonify({"error": f"profile lookup failed: {e}"}), 500
+
+    customer_id = (rows[0].get("stripe_customer_id") or "") if rows else ""
+    if not customer_id:
+        return jsonify({
+            "error": "No active subscription found. Please subscribe first.",
+            "no_subscription": True,
+        }), 404
+
+    origin = request.headers.get("Origin", "https://skriptly.io")
+    return_url = origin + "/app?portal=return"
+    try:
+        session = _stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=return_url,
+        )
+        return jsonify({"url": session.url})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/stripe/webhook", methods=["POST"])
 def stripe_webhook():
     """Stripe отправляет сюда события подписок. Обновляем план в Supabase."""
