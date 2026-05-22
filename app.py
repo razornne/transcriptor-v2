@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 import jwt as pyjwt
 import requests
-from flask import Flask, render_template, jsonify, request, g
+from flask import Flask, render_template, jsonify, request, g, make_response
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -515,8 +515,16 @@ def _require_jwt():
 def index():
     """Отдаём фронт с этого же сервера — удобно для dev.
     Когда фронт переедет на Vercel, этот роут можно удалить.
+
+    Cache-Control: no-cache — Vercel edge не должен кешировать HTML.
+    Без этого после modal deploy юзеры могут видеть старую версию
+    пока не истечёт Vercel CDN TTL (обычно ~5-60 мин).
     """
-    return render_template("index.html")
+    resp = make_response(render_template("index.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 @app.route("/api/health")
