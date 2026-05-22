@@ -68,6 +68,7 @@ image = (
         "huggingface_hub",
         # Utils
         "numpy",
+        "requests",
     )
     # Включаем локальный merger.py в образ — чистая Python-логика без GPU-deps
     .add_local_python_source("merger")
@@ -128,6 +129,11 @@ _CORRECTION_INSTRUCTIONS: dict[str, str] = {
         "Do NOT add or remove words. If unsure, leave as is."
     ),
 }
+
+# Gemini correction model. Flash дешёвый и быстрый — дефолт для всех.
+# Pro даёт лучшее качество на длинных контекстах — можно включать для Max
+# юзеров (override через env CORRECTION_MODEL=gemini-2.5-pro).
+GEMINI_CORRECTION_MODEL = os.environ.get("CORRECTION_MODEL", "gemini-2.5-flash")
 
 
 # ── Main class ───────────────────────────────────────────────────
@@ -331,6 +337,17 @@ class Transcriptor:
 
             # --- LLM correction ---
             merged = self._correct_segments(merged, language)
+
+            # После Gemini boundary-fix соседние сегменты могут оказаться
+            # одного спикера — склеиваем заново.
+            re_merged: list[dict] = []
+            for seg in merged:
+                if re_merged and re_merged[-1]["speaker"] == seg["speaker"]:
+                    re_merged[-1]["end"]   = seg["end"]
+                    re_merged[-1]["text"] += " " + seg["text"]
+                else:
+                    re_merged.append(dict(seg))
+            merged = re_merged
             _report("correct")  # LLM correction done
 
             return merged
@@ -343,10 +360,173 @@ class Transcriptor:
                     pass
 
     def _correct_segments(self, segments: list[dict], language: str | None) -> list[dict]:
-        """LLM correction pass — только фонетические STT-ошибки."""
+        """Главный correction pass.
+
+        Стратегия:
+        1. Пробуем Gemini 2.5 Flash — у него есть знание мира (ADHD/СДВГ,
+           политики, бренды, аббревиатуры) и контекст 2M токенов на весь
+           созвон. Также может перекидывать boundary-слова между
+           соседними репликами если граница спикеров пропустила фразу.
+        2. Если Gemini недоступен (нет ключа, ошибка сети, rate limit) —
+           фоллбэк на Qwen 7B inline на GPU (старая логика).
+        """
         if not segments:
             return segments
 
+        # Try Gemini first if API key available
+        if os.environ.get("GEMINI_API_KEY", "").strip():
+            try:
+                result = self._correct_segments_gemini(segments, language)
+                if result:
+                    return result
+            except Exception as e:
+                print(f"[modal] gemini correction failed, falling back to qwen: {e}", flush=True)
+
+        return self._correct_segments_qwen(segments, language)
+
+    def _correct_segments_gemini(self, segments: list[dict], language: str | None) -> list[dict] | None:
+        """Gemini-based correction с boundary-fix capability.
+
+        Передаём весь транскрипт с метками спикеров. Gemini может:
+        - исправить STT-ошибки используя знание мира (рдух → ADHD)
+        - переместить 1-3 слова в начале/конце реплики на соседнего
+          спикера если грамматика явно указывает на pyannote-ошибку
+        Возвращает обновлённые segments или None если ничего не вышло.
+        """
+        import requests
+
+        api_key = os.environ["GEMINI_API_KEY"].strip()
+        instruction = _CORRECTION_INSTRUCTIONS.get(language or "", _CORRECTION_INSTRUCTIONS["en"])
+
+        # Format: "N. [SPEAKER_XX] text"
+        lines = [
+            f"{i + 1}. [{seg['speaker']}] {seg['text']}"
+            for i, seg in enumerate(segments)
+        ]
+        lines_in = "\n".join(lines)
+
+        prompt = (
+            f"{instruction}\n\n"
+            "Below is a numbered, speaker-diarized transcript. Each line is:\n"
+            "  N. [SPEAKER_XX] text\n\n"
+            "Your tasks (in this order of importance):\n"
+            "1. Fix obvious phonetic STT errors using world knowledge:\n"
+            "   - Acronyms transliterated wrong (e.g. рдух → ADHD, СДВГ; стіарар → CTR)\n"
+            "   - Misrecognized names of people, brands, products\n"
+            "   - Technical terms broken by phonetic recognition\n"
+            "2. Boundary fix: if you see a phrase clearly belonging to the NEXT or PREVIOUS speaker\n"
+            "   (e.g. an answer's first words attached to the question), move those 1-5 words\n"
+            "   across the speaker boundary. ONLY when grammar and semantics give clear evidence.\n\n"
+            "STRICT RULES:\n"
+            "- Output ONLY the same numbered lines, same format: 'N. [SPEAKER_XX] text'\n"
+            "- Keep numbering 1..N identical, no gaps\n"
+            "- Keep speaker labels [SPEAKER_XX] unchanged\n"
+            "- Do NOT add commentary, headers, explanations\n"
+            "- Do NOT change meaning, style, punctuation, case\n"
+            "- Word count per line: within ±20% of original (boundary moves can shift it more)\n"
+            "- If unsure about a line — output it verbatim\n"
+            "- Same language as input\n\n"
+            "INPUT:\n"
+            f"{lines_in}\n\n"
+            "OUTPUT (numbered lines only, no preamble):"
+        )
+
+        endpoint = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{GEMINI_CORRECTION_MODEL}:generateContent"
+        )
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": min(32000, max(2000, len(lines_in) * 2)),
+            },
+        }
+
+        try:
+            resp = requests.post(endpoint, params={"key": api_key}, json=body, timeout=180)
+        except requests.RequestException as e:
+            print(f"[modal] gemini request error: {e}", flush=True)
+            return None
+
+        if resp.status_code != 200:
+            print(f"[modal] gemini {resp.status_code}: {resp.text[:200]}", flush=True)
+            return None
+
+        data = resp.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            print(f"[modal] gemini: no candidates ({data.get('promptFeedback')})", flush=True)
+            return None
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        raw = "".join(p.get("text", "") for p in parts).strip()
+        if not raw:
+            return None
+
+        # Parse: same format "N. [SPEAKER_XX] text"
+        parsed: dict[int, tuple[str, str]] = {}
+        line_re = re.compile(r'^\s*(\d+)\.\s*\[([A-Z_0-9]+)\]\s*(.+)$')
+        for line in raw.splitlines():
+            m = line_re.match(line)
+            if not m:
+                continue
+            idx     = int(m.group(1)) - 1
+            speaker = m.group(2)
+            text    = m.group(3).strip()
+            if 0 <= idx < len(segments):
+                parsed[idx] = (speaker, text)
+
+        # Coverage check — если Gemini вернул меньше 70% строк, что-то пошло
+        # не так, лучше вообще не применять (избегаем частичной коррекции).
+        coverage = len(parsed) / max(len(segments), 1)
+        if coverage < 0.7:
+            print(f"[modal] gemini parse coverage too low: {coverage:.0%}", flush=True)
+            return None
+
+        # Apply corrections with safety checks
+        corrected = [dict(s) for s in segments]
+        changes_count = 0
+        speaker_changes = 0
+        for idx, (new_speaker, new_text) in parsed.items():
+            orig = corrected[idx]
+            orig_text = orig["text"]
+
+            # Length sanity: 20% by default, 50% if boundary moves expected
+            length_ratio = abs(len(new_text) - len(orig_text)) / max(len(orig_text), 1)
+            if length_ratio > 0.5:
+                continue
+
+            # Latin/Cyrillic safety — не пускаем массовый переход в латиницу
+            orig_latin = sum(1 for c in orig_text if c.isascii() and c.isalpha())
+            new_latin  = sum(1 for c in new_text  if c.isascii() and c.isalpha())
+            orig_cyr   = sum(1 for c in orig_text if 'Ѐ' <= c <= 'ӿ')
+            # Allow some Latin (acronyms like ADHD, CTR), but not wholesale
+            if orig_cyr > len(orig_text) * 0.5 and new_latin > orig_latin + 8:
+                continue
+
+            if new_text != orig_text:
+                corrected[idx]["text"] = new_text
+                changes_count += 1
+            # Speaker reassignment (boundary fix) — accept only if speaker
+            # exists in the original set (Gemini doesn't invent new speakers)
+            original_speakers = {s["speaker"] for s in segments}
+            if new_speaker in original_speakers and new_speaker != orig["speaker"]:
+                corrected[idx]["speaker"] = new_speaker
+                speaker_changes += 1
+
+        print(
+            f"[modal] gemini corrected {changes_count} texts, "
+            f"reassigned {speaker_changes} segments to other speakers "
+            f"(coverage {coverage:.0%})",
+            flush=True,
+        )
+        return corrected
+
+    def _correct_segments_qwen(self, segments: list[dict], language: str | None) -> list[dict]:
+        """Фоллбэк: локальный Qwen 7B (4-bit) на GPU. Используется когда
+        Gemini недоступен (нет ключа, сетевая ошибка, rate limit).
+        Без boundary-fix — только фонетика, в батчах по 60 строк.
+        """
         instruction = _CORRECTION_INSTRUCTIONS.get(language or "", _CORRECTION_INSTRUCTIONS["en"])
         batch_size  = 60
         corrected   = [dict(s) for s in segments]
@@ -374,10 +554,8 @@ class Transcriptor:
                     if not (0 <= idx < len(batch)):
                         continue
                     orig = batch[idx]["text"]
-                    # Отклоняем: >40% изменение длины
                     if abs(len(text) - len(orig)) / max(len(orig), 1) > 0.4:
                         continue
-                    # Отклоняем: латиница появилась в кириллическом тексте
                     orig_latin = sum(1 for c in orig  if c.isascii() and c.isalpha())
                     new_latin  = sum(1 for c in text  if c.isascii() and c.isalpha())
                     orig_cyr   = sum(1 for c in orig  if 'Ѐ' <= c <= 'ӿ')
@@ -386,7 +564,7 @@ class Transcriptor:
                     corrected[batch_start + idx]["text"] = text
 
             except Exception as e:
-                print(f"[modal] correction batch {batch_start // batch_size} failed: {e}", flush=True)
+                print(f"[modal] qwen correction batch {batch_start // batch_size} failed: {e}", flush=True)
 
         return corrected
 
