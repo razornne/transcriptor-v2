@@ -3,11 +3,12 @@
 Облачный сервис транскрипции созвонов со **спикер-разделением** и **AI-инструментами**. Работает на serverless GPU (Modal), аутентификация и хранение — Supabase, лендинг — Vercel/Next.js.
 
 **Стек:**
-- **Modal** A10G GPU: faster-whisper (large-v3-turbo) + pyannote-3.1 + Qwen2.5-7B-Instruct (4-bit)
-- **Supabase** Auth (Google OAuth + magic link) + Postgres с Row-Level Security
+- **Modal** A10G GPU: faster-whisper (large-v3-turbo + опционально large-v3 для Max) + pyannote-3.1 + Qwen2.5-7B-Instruct (4-bit) + Gemini 2.5 (Flash/Pro REST API)
+- **Supabase** Auth (Google OAuth + magic link) + Postgres (transcripts, user_profiles с vocabulary JSONB, workspaces)
 - **Flask** на Modal как `@modal.wsgi_app()` — тонкий прокси с JWT валидацией
-- **Vercel** Next.js 15 landing на `skriptly.io`, проксирует `/app` на Modal
-- **Frontend приложения** — single-file HTML/JS, отдаётся Flask, доступен на `skriptly.io/app`
+- **Vercel** Next.js 15 landing на `skriptly.io`, проксирует `/app` на Modal + `/ingest/*` на PostHog (reverse proxy для обхода adblock'ов)
+- **PostHog EU** — product analytics (events + funnels + retention + session replay)
+- **Frontend приложения** — single-file HTML/JS с tabs UI (Transcript/Summary/Actions), отдаётся Flask, доступен на `skriptly.io/app`
 
 🔗 **Production:** https://skriptly.io
 🛠 **Direct Modal endpoint:** https://razornne--transcriptor-v2-flask-app.modal.run
@@ -18,19 +19,23 @@
 
 - 🔐 **Аутентификация** — Google OAuth или email magic link через Supabase
 - 🎙 **Запись через браузер** — mic + системный звук вкладки (Meet / Teams / Zoom)
-- 📝 **Транскрипция** — Whisper large-v3-turbo с языковыми prompt'ами под качество UA / RU / EN
-- 👥 **Разделение по спикерам** — pyannote-3.1 + word-level alignment в merger (правильно режет быстрый диалог)
-- ✨ **LLM correction** — Qwen2.5 вычищает фонетические ошибки распознавания после транскрипции
-- 🤖 **AI-инструменты**: Summary, Action items, Sales call / 1-on-1 / Stand-up templates
+- 📝 **Транскрипция** — Whisper large-v3-turbo (default) или **large-v3 (Best Quality для Max)** с языковыми prompt'ами UA / RU / EN
+- 👥 **Разделение по спикерам** — pyannote-3.1 + hybrid merger (majority-vote для коротких сегментов, word-level split для длинных, iterative smoothing)
+- ✨ **Gemini STT correction** — Gemini 2.5 Flash правит фонетические ошибки используя knowledge мира (рдух → ADHD), может переносить слова через границы спикеров (boundary fix). Fallback на Qwen если Gemini недоступен.
+- 📚 **Персональный словарь** — авто-обучается: термины которые Gemini исправил (аббревиатуры + имена) сохраняются и пропадают в Whisper prompt при следующих записях (как Wispr Flow, но без участия юзера)
+- 🤖 **AI-инструменты**: Summary, Action items (Gemini 2.5 Pro), Sales call / 1-on-1 / Stand-up templates
+- 📑 **Tabs UI** — Transcript / Summary / Actions табы вместо длинного скролла
 - 🏷 **Авто-заголовок** — LLM генерирует название по содержанию
 - ✎ **Inline edit** транскрипта, **переименование спикеров**
 - 📝 **Notes** прямо во время созвона
+- 👥 **Workspace collaboration** — owner приглашает members, transcripts можно расшарить workspace-wide
 - 💾 **Auto-save в IndexedDB** + recovery на крэш вкладки
 - 🔁 **Retry** на сетевой сбой — запись остаётся в браузере, не теряется
 - 🔍 **Поиск по истории** с подсветкой
-- 🎨 Light / Dark тема, keyboard shortcuts (`?` чтобы посмотреть)
+- 🎨 Light / Dark тема, keyboard shortcuts: `?` (список), `⌘B` (sidebar), `⌘L` (UI lang), `⌘K` (search), `⌘S` (download)
 - 📦 Export в Markdown
 - ☁️ **История синхронизируется между устройствами** через Supabase Postgres
+- 📊 **PostHog analytics** — events tracking, funnels, retention, session replay (через reverse proxy для обхода adblock'ов)
 
 ---
 

@@ -32,9 +32,12 @@ Modal flask_app (CPU, scale-to-zero)
    │ JWT verify (Supabase JWKS) + .spawn() в GPU класс
    ▼
 Modal Transcriptor (A10G GPU, scaledown_window=300)
-   - faster-whisper large-v3-turbo
-   - pyannote-3.1
-   - Qwen2.5-7B-Instruct (4-bit) — title, LLM correction
+   - faster-whisper large-v3-turbo (fast, default)
+   - faster-whisper large-v3 (best quality, Max plan only)
+   - pyannote-3.1 (с bounds min_speakers=1, max_speakers=6)
+   - Qwen2.5-7B-Instruct (4-bit) — title generation + fallback STT correction
+   - Gemini 2.5 Flash REST call (direct from container) — STT correction
+     с world knowledge + boundary fix + vocab extraction
 
 Modal gemini_generate (CPU, scaledown_window=60)
    - Gemini 2.5 Pro REST API — summary, action items
@@ -42,7 +45,9 @@ Modal gemini_generate (CPU, scaledown_window=60)
 
 Supabase Postgres
    - auth.users (Google OAuth / Email magic link)
-   - public.transcripts (RLS — owner-only)
+   - public.transcripts (RLS, workspace visibility)
+   - public.user_profiles (plan, minutes_used, vocabulary JSONB)
+   - public.workspaces + workspace_members (collaboration)
 ```
 
 **Production URLs:**
@@ -63,43 +68,58 @@ Supabase Postgres
 **Поток обработки:**
 1. Юзер логинится через Supabase Auth (Google или magic link)
 2. Запись: `fullRecorder` MediaRecorder `timeslice=5s` → каждый chunk в IndexedDB (autosave для recovery)
-3. Stop: blob отправляется на `/api/transcribe` с JWT в header
-4. Flask валидирует JWT через JWKS, делает `Transcriptor.transcribe_full.spawn(audio_bytes, ...)` → возвращает `t_<modal_call_id>`
+3. Stop: blob отправляется на `/api/transcribe` с JWT + `quality` form field
+4. Flask валидирует JWT, проверяет план (Max → может best, иначе fast), достаёт personal vocabulary юзера из `user_profiles.vocabulary` и **prepend'ит топ-30 терминов** в `initial_prompt` Whisper'a, спавнит `Transcriptor.transcribe_full.spawn(audio_bytes, language, num_speakers, prompt, progress_key, quality)` → возвращает `t_<modal_call_id>`
 5. Фронт polling'ует `/api/jobs/<job_id>` каждые 2с → `FunctionCall.from_id(id).get(timeout=0)`
-6. На done — segments возвращаются, рендерятся
-7. Фронт сохраняет в Supabase `public.transcripts` через **raw fetch** (Supabase JS PostgrestClient зависает в нашей среде)
-8. Параллельно `/api/title` генерирует заголовок через `run_llm.spawn(...)` (Qwen)
-9. По кнопке Summary / Action items — `/api/generate` спавнит `gemini_generate.spawn(...)` (Gemini 2.5 Pro), polling через тот же `/api/jobs/<id>` механизм
+6. Внутри Transcriptor: ffmpeg → Whisper (turbo или large-v3) → pyannote → merger → **Gemini 2.5 Flash STT correction** (с boundary fix + vocab extraction) → re-merge consecutive same-speaker → return `{segments, vocab_additions}`
+7. На done — segments + vocab_additions возвращаются. Flask добавляет minutes_used, **сохраняет vocab_additions** в `user_profiles.vocabulary` (с frequency tracking, LRU топ-100)
+8. Фронт рендерит, сохраняет в Supabase `public.transcripts` через **raw fetch** (Supabase JS PostgrestClient зависает в нашей среде)
+9. Параллельно `/api/title` генерирует заголовок через `run_llm.spawn(...)` (Qwen)
+10. По кнопке Summary / Action items — `/api/generate` спавнит `gemini_generate.spawn(...)` (Gemini 2.5 Pro), polling через тот же `/api/jobs/<id>` механизм
+11. PostHog трекит ключевые ивенты в каждой точке через `/ingest/*` reverse proxy на Vercel (обход adblock'ов)
 
 ## Файлы
 
 ### Backend (Python)
 - **`modal_app.py`** — Modal app definition. Содержит:
-  - `image` — GPU образ (CUDA 12.4 + faster-whisper + pyannote + transformers + bitsandbytes)
-  - `web_image` — лёгкий CPU образ (Flask + flask-cors + pyjwt[crypto] + requests)
-  - `Transcriptor` (cls, A10G) — `load_models()` грузит whisper / pyannote / Qwen в `@modal.enter()`. Методы `transcribe_full(audio_bytes, language, num_speakers, prompt)` и `run_llm(prompt, max_tokens, temperature)`.
-  - `gemini_generate(prompt, max_output_tokens, temperature)` — CPU функция на `web_image`, POST в `generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent`. Модель задана в `GEMINI_MODEL` (сейчас `gemini-2.5-pro`). Возвращает текст или бросает `RuntimeError`.
-  - `flask_app()` — `@modal.wsgi_app()` декоратор, импортирует `app.py` и отдаёт Flask instance. Принудительно выставляет `USE_MODAL=true`.
+  - `image` — GPU образ (CUDA 12.4 + faster-whisper + pyannote + transformers + bitsandbytes + requests). `requests` нужен для прямого HTTP в Gemini API из GPU контейнера (correction pass).
+  - `web_image` — лёгкий CPU образ (Flask + flask-cors + pyjwt[crypto] + requests + stripe)
+  - `Transcriptor` (cls, A10G) — `load_models()` грузит **две модели Whisper** (turbo + large-v3 для Max), pyannote, Qwen в `@modal.enter()`. Методы:
+    - `transcribe_full(audio_bytes, language, num_speakers, prompt, progress_key, quality)` → `{"segments": [...], "vocab_additions": [...]}`. Выбирает модель Whisper по `quality` ("fast"|"best"). Pyannote получает `min_speakers=1, max_speakers=6` если `num_speakers` не задан. После merge — Gemini correction; результат содержит vocab additions из исправлений.
+    - `run_llm(prompt, max_tokens, temperature)` — title / chat / tags через Qwen 7B.
+  - `_correct_segments` стратегия: Gemini 2.5 Flash → Qwen fallback на ошибке. `_correct_segments_gemini` собирает vocab_additions (аббревиатуры + имена собственные) для персонального словаря.
+  - `gemini_generate(prompt, max_output_tokens, temperature)` — CPU функция на `web_image` для summary/actions через Gemini 2.5 **Pro** (длинные аналитические задачи). Отдельный контейнер чтобы scale-to-zero без блокировки GPU.
+  - `flask_app()` — `@modal.wsgi_app()` декоратор. Принудительно `USE_MODAL=true`.
 
 - **`app.py`** — Flask backend. Эндпоинты:
-  - `GET /api/health` — без auth, для проверки
-  - `POST /api/transcribe` (auth) — принимает audio, `_transcriptor.transcribe_full.spawn(...)` → `{job_id: "t_<id>"}`
-  - `POST /api/generate` (auth) — LLM template processing → `{job_id: "g_<id>"}`. Для `template in {"summary", "actions"}` спавнит `gemini_generate` (Gemini 2.5 Pro, без обрезки текста). Иначе — Qwen через `run_llm.spawn(...)` с обрезкой до 12k символов
-  - `POST /api/chat` (auth) — вопрос-ответ по транскрипту → `{job_id: "c_<id>"}`
-  - `GET /api/jobs/<job_id>` (auth) — `FunctionCall.from_id(...).get(timeout=0)`. Префикс job_id определяет какое поле возвращать (`segments` / `result` / `answer`)
-  - `POST /api/title` (auth, sync) — короткий LLM запрос ~5-10c
-  - `POST /api/tags` (auth, sync) — LLM tags (FEATURE_TAGS=false на фронте)
-  - `POST /api/transcribe-chunk` (auth, sync) — **dormant**, оставлен на случай возврата live-text фичи
-  - `GET /` — отдаёт `templates/index.html` (для текущего deploy; уберётся когда фронт переедет на Vercel)
-  - **JWT middleware**: `@app.before_request _require_jwt()` валидирует токен через Supabase JWKS endpoint (поддерживает HS256 legacy + ES256/RS256 new). Только `/api/health` пропускается без auth.
-  - **Dual mode**: `USE_MODAL=true` (production на Modal) → spawn-based async. `USE_MODAL` не задан (local dev) → in-memory `JOBS` dict + Python threads + локальные Whisper/pyannote/Ollama.
+  - `GET /api/health` — без auth
+  - `POST /api/transcribe` (auth) — принимает `audio`, `language`, `num_speakers`, `prompt`, `quality`. Проверяет план (только Max → может best), достаёт `user_profiles.vocabulary` и **prepend'ит топ-30 в Whisper prompt**, спавнит → `{job_id: "t_<id>"}`. Сохраняет `_job_user[job_id]` и `_job_language[job_id]` для последующего vocab save.
+  - `POST /api/generate` (auth) — Summary / actions → `gemini_generate` (Pro). Остальные шаблоны → Qwen (с обрезкой до 12k).
+  - `POST /api/chat` (auth) — Q&A по транскрипту → `{job_id: "c_<id>"}`
+  - `GET /api/jobs/<job_id>` (auth) — `FunctionCall.from_id(...).get(timeout=0)`. На done транскрипции **трекит minutes_used + сохраняет vocab_additions** в профиль юзера (через `_save_vocabulary_additions`).
+  - `POST /api/title`, `/api/tags`, `/api/transcribe-chunk` (sync, Qwen)
+  - `GET /api/profile`, `POST /api/stripe/checkout`, `POST /api/stripe/portal`, `POST /api/stripe/webhook` (план, биллинг)
+  - **Workspace API**: `GET/POST/DELETE /api/workspace`, `POST /api/workspace/invite`, `DELETE /api/workspace/members/<id>`, `POST /api/workspace/leave`, `POST /api/workspace/accept`
+  - `GET /` — отдаёт `templates/index.html` (через Modal Flask)
+  - **JWT middleware**: `_require_jwt()` валидирует через JWKS (HS256 legacy + ES256/RS256 new). Только `/api/health` без auth.
+  - **Vocabulary helpers**: `_get_user_vocabulary()`, `_save_vocabulary_additions()`, `_build_vocab_prompt()` — управляют JSONB-словарём в `user_profiles.vocabulary`.
+  - **Dual mode**: `USE_MODAL=true` (production) vs local dev (Python threads + Ollama).
 
-- **`transcriber.py`** — local mode only. faster-whisper wrapper. На Modal не используется (Transcriptor cls в modal_app.py содержит свою версию).
+- **`transcriber.py`** — local mode only. faster-whisper wrapper.
 - **`diarizer.py`** — local mode only. pyannote wrapper.
-- **`merger.py`** — общий для Modal и local. Word-level speaker alignment. Конфигурируемый smoothing через `SMOOTH_THRESHOLD_S` (default 0 = выключено). Forward-fill для SPEAKER_UNKNOWN на первых словах сегмента.
+- **`merger.py`** — общий для Modal и local. Гибридный word-level alignment:
+  - **Majority-vote для коротких сегментов** (`SHORT_SEGMENT_THRESHOLD_S=2.0`): если Whisper выдал блок ≤2с и в нём ≥70% слов одного спикера — присваиваем весь блок этому спикеру. Лечит микро-ABAB ping-pong от pyannote-шума на быстрых репликах.
+  - **Word-level split для длинных сегментов** (>2с) — режем в местах смены спикера. Лечит случай склейки Whisper'ом быстрого диалога.
+  - **Iterative smoothing** (`SMOOTH_THRESHOLD_S=1.0` default, было 0): сегменты короче 1с между одинаковыми соседями переназначаются. До 3 проходов (`SMOOTH_PASSES`).
+  - **Forward/backward-fill** для `SPEAKER_UNKNOWN` на первых словах сегмента.
+
+### Migrations (`migrations/`)
+- **`001_workspace.sql`** — workspace collaboration. Создаёт `workspaces` + `workspace_members`, ALTER'ит `transcripts` для visibility/workspace_id, обновляет RLS-политики. **Дроп `workspaces_member_select`** обязателен — без этого infinite recursion в RLS.
+- **`002_vocabulary.sql`** — `ALTER TABLE user_profiles ADD COLUMN vocabulary JSONB`. Хранит auto-learned терминологию.
+- Миграции выполняются **вручную через Supabase SQL Editor** — нет миграционного фреймворка. После добавления новой — обновить эту секцию + сам файл должен начинаться с комментария "Run in Supabase SQL Editor".
 
 ### Frontend — приложение
-- **`templates/index.html`** — single-file (CSS+JS inline). ~3000 строк. Это сам transcriptor (запись, транскрипт, AI tools).
+- **`templates/index.html`** — single-file (CSS+JS inline). ~5200 строк. Это сам transcriptor: запись, **tabs (Transcript / Summary / Actions)**, AI tools, **Best Quality toggle** (Max only), **personal vocabulary** прозрачно влияет на Whisper, **PostHog** ивенты через reverse proxy.
 
 ### Frontend — landing + Studio v2 (Next.js)
 - **`landing/`** — Next.js 15 проект, деплоится на Vercel как `skriptly.io`.
@@ -142,6 +162,8 @@ npm run dev
 
 # ── Production деплой ─────────────────────────────────────────
 # Modal CLI должен быть установлен (pip install modal в venv) и авторизован (modal setup)
+# ВАЖНО: PYTHONUTF8=1 обязателен на Windows (без него charmap codec падает на ✓ эмодзи)
+$env:PYTHONUTF8 = "1"
 modal deploy modal_app.py
 
 # Frontend (Vercel) автоматом при git push в main
@@ -223,9 +245,15 @@ python app.py
 - **Auto-title + progressive UI**: `autoSuggestTitle()` ставит placeholder из первых ~6 слов. `requestLLMTitle()` запускает LLM в фоне, рендерит `✨ thinking…` placeholder. Если юзер кликнул и переименовал руками — `currentTitleIsAuto=false`, LLM не перетирает
 - **Inline edit транскрипта** — двойной клик на текст или ✎ hover-кнопка → textarea (auto-sized). Enter save, Esc cancel, Shift+Enter newline. Помечает `seg.edited`
 
-### Контент-секции
-- **Notes section** — textarea между транскриптом и AI-блоком. Дебаунс 600ms перед save
-- **AI tools** — Summary / Action items + dropdown с другими шаблонами. Кешируется в `currentAIResults[template]`. Карточки имеют actions: copy, regenerate, ×
+### Контент-секции (Tabs UI)
+- **Tab bar**: `Transcript | Summary | Actions`. Появляется когда `hasSegments`. Под капотом — три `tab-panel` div'а, видимость управляется `switchTab(name)`.
+- **Transcript tab** — сам транскрипт + copy/download .md кнопки + recovery box + error box
+- **Summary tab** — generate button → результат от Gemini Pro (или upgrade prompt для Free). Loading spinner пока генерация.
+- **Actions tab** — то же что Summary, но шаблон "actions". Каждый таб имеет дот-индикатор `.tab-has-content` если результат уже есть.
+- `renderAIPanel(template)` — рендерит один панель (Summary или Actions). `runAI(template)` спавнит job, обновляет таб с loading state, парсит результат.
+- `currentAIResults` хранит результаты обоих templates в памяти. При загрузке из истории — восстанавливается.
+- **Notes section** — отдельной секцией под табами (не в табе). Видима когда `isRecording || hasSegments`. Debounce 600ms на save.
+- **Best Quality toggle** — чекбокс `qualityBestToggle` под Controls. Виден только если `currentPlan === 'max'`. При checked → отправляется `quality=best` в FormData.
 
 ### Search и filter
 - `filterHistory(history, query)` — поиск по title / text / speaker names / date / language. Активный tag filter если `activeTagFilter`
@@ -243,21 +271,29 @@ python app.py
 ## Modal app — ключевые куски
 
 ### Container reuse
-- **`Transcriptor` cls** (`@app.cls(gpu="A10G", scaledown_window=300)`) — держится тёплым 5 мин. Первый запуск ~60-90с (загрузка моделей), последующие быстрые.
+- **`Transcriptor` cls** (`@app.cls(gpu="A10G", scaledown_window=300)`) — держится тёплым 5 мин. Первый запуск ~60-90с (загрузка моделей + первый прогрев большой модели). VRAM: turbo (3GB) + large-v3 (3GB) + pyannote (2GB) + Qwen 4-bit (5GB) ≈ 13GB на 24GB A10G.
 - **`flask_app` wsgi** (`@app.function(min_containers=0, scaledown_window=60)`) — scale-to-zero. Cold start ~3-5с.
 - Persistent Volume `transcriptor-models` — модели кэшируются между рестартами.
 
 ### Spawn-based async
-- `Transcriptor.transcribe_full.spawn(audio_bytes, language, num_speakers, prompt)` → возвращает `FunctionCall` сразу. Flask отдаёт `object_id` как `job_id` (с префиксом `t_`)
-- На polling: `modal.FunctionCall.from_id(call_id).get(timeout=0)` — не блокирует, либо `TimeoutError` (processing) либо result. Errors всплывают как исключения с оригинальным сообщением.
+- `Transcriptor.transcribe_full.spawn(audio_bytes, language, num_speakers, prompt, progress_key, quality)` → возвращает `FunctionCall` сразу. Flask отдаёт `object_id` как `job_id` (с префиксом `t_`).
+- Возвращает **dict** `{"segments": [...], "vocab_additions": [...]}` (раньше был bare list). Polling endpoint обратно совместим — детектит формат.
+- На polling: `modal.FunctionCall.from_id(call_id).get(timeout=0)` — не блокирует, либо `TimeoutError` либо result. Errors всплывают как исключения.
 
 ### Native Python типы перед return
 - faster-whisper и pyannote возвращают `numpy.float32` для start/end. Modal serializes via cbor2; **Flask контейнер не имеет numpy** → deserialize падает.
 - Все timestamps кастуем через `float()`, speakers через `str()` перед return.
 
-### LLM correction
-- `_correct_segments(merged, language)` внутри `transcribe_full` — батчи по 60 сегментов, формат `1. text\n2. text\n...`
-- Safety checks: отклоняем если изменение длины >40% или появилась латиница в Cyrillic-тексте
+### STT correction pipeline (Gemini → Qwen fallback)
+- **Primary: Gemini 2.5 Flash** (`CORRECTION_MODEL` env, override на Pro для Max). HTTP вызов напрямую из GPU контейнера (есть `requests` + `GEMINI_API_KEY` в общем секрете).
+- Один вызов на **весь транскрипт** с speaker labels: `"N. [SPEAKER_XX] text"`. Контекст 2M токенов → часовой созвон в один shot.
+- Gemini может:
+  1. Чинить STT-ошибки используя **world knowledge** (рдух → ADHD, СТР → CTR, имена)
+  2. Делать **boundary fix** — переносить 1-5 слов через границу спикеров если грамматика явно показывает что фразу прикрепило не к тому
+- Safety: coverage ≥70% (иначе отвергаем целиком), length ratio ≤50%, latin/cyrillic guard (8 latin chars OK для аббревиатур), speaker reassignment только в существующего из набора.
+- После Gemini boundary-fix — re-merge consecutive same-speaker сегменты (могли стать соседями).
+- **Vocab extraction**: `_extract_vocab_terms` берёт изменённые слова, фильтрует на аббревиатуры (2+ CAPS) и имена собственные (Capitalized, 4+ chars). Возвращается в `vocab_additions` → Flask сохраняет в `user_profiles.vocabulary`.
+- **Fallback: Qwen 7B 4-bit** — старая логика батчей по 60 строк, формат `N. text`. Используется только если Gemini fail (нет ключа, network, rate limit, parse fail). Без vocab additions.
 
 ## Non-obvious things future-Claude will trip on
 
@@ -276,6 +312,8 @@ python app.py
 - **`?error=...` в URL после неудачного Google OAuth** — Supabase JS не очищает URL, остаётся как параметр. Не критично, но user видит. Идея для cleanup: `history.replaceState({}, '', window.location.pathname)` после успешного `SIGNED_IN`.
 - **OAuth consent screen в testing mode** — только добавленные test users могут логиниться через Google. Для широкой аудитории — Publish app в Google Cloud Console.
 - **Supabase magic link rate limit** — 4 в час на default SMTP. Custom SMTP (Resend / SendGrid) снимает лимит.
+- **PostHog reverse proxy через Vercel rewrites** — `*.posthog.com` режут все популярные adblock'и (uBlock, AdGuard, Brave, Privacy Badger) → `ERR_BLOCKED_BY_CLIENT`. Конфиг в `landing/next.config.mjs`: `/ingest/static/*` → `eu-assets.i.posthog.com/static/*`, `/ingest/*` → `eu.i.posthog.com/*`. **Важен порядок** — static rule должен быть ПЕРЕД общим `/ingest/:path*`. Также `skipTrailingSlashRedirect: true` чтобы PostHog endpoints не редиректились. На localhost rewrites не работают → фоллбэк на прямой `eu.i.posthog.com` (см. логику в `posthog.init` snippet).
+- **`PYTHONUTF8=1` обязателен при `modal deploy`** на Windows. Без него `'charmap' codec can't encode character '✓'` валит CLI на UTF-8 эмодзи. Запускать: `PYTHONUTF8=1 modal deploy modal_app.py` (или `$env:PYTHONUTF8="1"; modal deploy modal_app.py` в PowerShell).
 
 ### Gemini для summary / action items
 - **`/api/generate` маршрутизация по шаблону.** `summary` и `actions` идут в `gemini_generate` (Gemini 2.5 Pro). Все остальные — в Qwen на A10G. Список переключаемых шаблонов: `GEMINI_TEMPLATES` в `app.py`.
@@ -291,8 +329,11 @@ python app.py
 
 ### Whisper / Diarization
 - **Word-level alignment в merger** — режет Whisper-сегменты в местах смены спикера. Требует `word_timestamps=True` в whisper.transcribe.
-- **SPEAKER_UNKNOWN forward-fill** — pyannote иногда не атрибутирует первое слово сегмента. Merger делает forward-fill из следующих слов с known speaker.
-- **Smoothing выключен по умолчанию** — `SMOOTH_THRESHOLD_S=0`. Pyannote-3.1 достаточно точен, smoothing ломал быстрый диалог. Можно включить через env (1.0 = переназначать сегменты короче 1с между одинаковыми соседями).
+- **Гибридный split в merger** (2026-05): короткий Whisper-сегмент (≤2s) → majority-vote (70% threshold). Длинный → word-level split. Решает проблему когда pyannote дробит одну реплику на ABAB ping-pong.
+- **SPEAKER_UNKNOWN forward-fill** — pyannote иногда не атрибутирует первое слово сегмента. Merger делает forward/backward-fill.
+- **Smoothing включён по умолчанию (1.0с)** + до 3 проходов. Раньше был выключен (`SMOOTH_THRESHOLD_S=0`) — но без него быстрые диалоги дробились на ABA-паттерны. Переменные: `SMOOTH_THRESHOLD_S`, `SHORT_SEGMENT_THRESHOLD_S`, `SMOOTH_PASSES`.
+- **Pyannote bounds**: когда `num_speakers` не задан, передаём `min_speakers=1, max_speakers=6`. Это уменьшает фантомных спикеров (один разделён на двух) и слияние двух в одного. Если юзер ввёл точное число — приоритет ему (`num_speakers=N` constraint, без bounds).
+- **`whisper_best` опционально**: грузится только если `LOAD_BEST_QUALITY=true` (default) и `WHISPER_BEST_MODEL != WHISPER_MODEL`. Если VRAM проблема — выключить `LOAD_BEST_QUALITY=false`, `transcribe_full` тогда фоллбэкает на fast для всех.
 
 ### Локальный режим (USE_MODAL=false)
 - **cuDNN конфликт PyTorch vs CTranslate2** на Windows — см. README. Замена `torch/lib/cudnn*.dll` на `9.22` из `nvidia-cudnn-cu12`.
@@ -306,6 +347,104 @@ python app.py
 - **`CORS(app, ..., origins="*")`** — открыто для dev. При переезде на `skriptly.io` через Vercel rewrites CORS не нужен (single origin), но оставить.
 - **`recordings/` ephemeral** в local mode. На Modal вообще не пишем — bytes в память → ffmpeg → wav в /tmp → удаляется.
 - **History в Postgres** хранит `segments` JSONB целиком. Не ломать формат без миграции схемы.
+
+## Personal Vocabulary (auto-learned terminology)
+
+**Цель:** научить Whisper твоей специфической лексике без участия юзера. Не Wispr Flow-стиль "юзер правит → словарь" — наш подход умнее: **Gemini правит → словарь**.
+
+### Pipeline
+
+1. Юзер записывает созвон, Gemini correction исправляет "рдух" → "ADHD"
+2. `_extract_vocab_terms` (в `modal_app.py`) выцепляет "ADHD" как интересный термин (2+ заглавных = аббревиатура; первая заглавная + 4+ символов = имя собственное)
+3. Возвращается в `vocab_additions` (list of strings)
+4. Flask polling endpoint → `_save_vocabulary_additions(user_id, terms, language)` → upsert в `user_profiles.vocabulary` (JSONB array of `{term, freq, lang, last_seen}`)
+5. На следующем `/api/transcribe` Flask тянет vocab, берёт топ-30 по freq, формирует строку: `"Recurring terms in this user's recordings: ADHD, CTR, Біллі Айліш, ..."` и **prepend'ит** к `prompt` юзера перед спавном в Modal
+6. Whisper получает эти термины как `initial_prompt` → распознаёт их с первой попытки (Gemini correction не нужен)
+
+### Лимиты
+
+- **VOCAB_MAX_ITEMS=100** — топ-100 терминов на юзера. Старые редкие выбывают (sort by freq desc).
+- **VOCAB_PROMPT_TOP=30** — сколько прокидываем в initial_prompt. Whisper не любит сильно длинные prompts.
+- **Минимум 2 символа** на термин (`_extract_vocab_terms`).
+- Casing обновляется если новый вариант "выглядит правильнее" (CAPS или первая заглавная).
+
+### Что НЕ попадает в словарь
+
+- Обычные слова которые Gemini поправил (грамматика, пунктуация) — отсеиваются по правилам в `_extract_vocab_terms`
+- Изменения регистра — игнорируются (word.lower() сравнивается)
+- Слова из оригинала которые не изменились — не учитываются (только diff)
+
+### Gotchas
+
+- **Coverage 70%** — если Gemini вернул мусор (структура сломана), `_correct_segments_gemini` возвращает `None` → fallback на Qwen → vocab additions пустой. Это нормально.
+- **Vocab сохраняется по `user_id` из job tracking** (`_job_user[job_id]`), не из текущего request — потому что polling может прийти из другого session/контекста.
+- **Без миграции 002** (`vocabulary` column) сохранение молча падает с warning в логах — транскрипция не ломается.
+
+---
+
+## PostHog Analytics
+
+**Setup:** EU instance, reverse proxy через `skriptly.io/ingest/*` для обхода adblock'ов.
+
+### Project key
+- Hardcoded в `templates/index.html`: `phc_yXYdbAQoySKp6BaHbpkZ3kawiByFRjERMYo5VBNMyvFE`
+- Это public client-side key — безопасно держать в HTML
+
+### Reverse proxy (важно!)
+Без этого ~30-40% юзеров не отправляют ивенты (uBlock / AdGuard / Brave / Privacy Badger режут `*.posthog.com`).
+
+Конфиг в `landing/next.config.mjs`:
+```js
+{ source: "/ingest/static/:path*", destination: "https://eu-assets.i.posthog.com/static/:path*" },
+{ source: "/ingest/:path*",        destination: "https://eu.i.posthog.com/:path*" },
+```
+
+В `posthog.init` → `api_host: location.origin + '/ingest'` на проде, `https://eu.i.posthog.com` на localhost (rewrites не работают в Next dev).
+
+`ui_host: 'https://eu.posthog.com'` — для toolbar и правильных ссылок в UI.
+
+### User identification
+В `onAuthStateChange` после login делаем:
+```js
+posthog.identify(session.user.id, {
+  email, plan, minutes_used, minutes_limit,
+  has_workspace, workspace_role, ui_lang,
+});
+posthog.setPersonProperties(props);
+```
+На sign-out → `posthog.reset()` чтобы не наследовать identity.
+
+### Tracked events (custom)
+| Event | Когда | Properties |
+|---|---|---|
+| `sign_in` | После Supabase SIGNED_IN | `method` (google/email) |
+| `transcription_started` | Spawn job | `language`, `duration_sec` |
+| `transcription_completed` | Job done | `segments`, `language` |
+| `transcription_failed` | Job error | `error`, `duration_sec`, `has_recovery` |
+| `summary_generated` / `actions_generated` | AI panel done | `template` |
+| `export_clicked` | Download .md button | `format`, `segments` |
+| `speaker_renamed` | Rename inline | `raw_label`, `name_length` |
+| `recording_recovered` | IDB recovery accepted | `size_mb`, `chunks` |
+| `recording_recovery_dismissed` | IDB recovery rejected | `size_mb` |
+| `upgrade_prompt_shown` | Free hit limit / AI gate | `reason` (minutes_limit / ai_tools), `template` |
+| `payment_started` | Stripe checkout начат | `plan`, `billing` |
+| `workspace_invite_sent` | Owner пригласил | `status` (invited/active) |
+| `workspace_invite_accepted` | Member принял | `workspace_name` |
+| `best_quality_toggled` | Max включает large-v3 | `enabled` (bool) |
+
+### Что НЕ настроено (TODO)
+- **Server-side events** из Stripe webhook (`subscription_activated`, `subscription_cancelled`) — было бы надёжнее чем client-side `payment_started` (юзер может закрыть вкладку до webhook'а)
+- **Session Replay** — фича включается в PostHog UI, требует privacy masking (нужно замаскировать `.transcript`, `.ai-result-content`, `#notesArea`, `#contextPrompt`, `#loginEmailInput` — иначе записываются тексты созвонов)
+- **Error tracking** через `posthog.init({capture_exceptions: true})` — заменит ручной `transcription_failed`
+
+### Какие dashboards / insights рекомендованы (в PostHog UI)
+- **Activation funnel**: `sign_in → transcription_started → transcription_completed → summary_generated|export_clicked` (24h window)
+- **Conversion funnel**: `sign_in → transcription_completed → upgrade_prompt_shown → payment_started` (30d)
+- **Retention** на `transcription_completed`, weekly
+- **Cohorts**: Active free, Pro near limit, Workspace owners
+- **Daily ops dashboard**: new users / transcriptions / failures / upgrade prompts / best_quality usage
+
+---
 
 ## Studio v2 Redesign (в разработке — Phase 1.5 in progress)
 
@@ -622,18 +761,28 @@ Pixel pass round 1 (коммиты `97c2b72` и `478210e`):
 
 **Команды деплоя:**
 ```powershell
-# Backend (Modal)
+# Backend (Modal). PYTHONUTF8=1 обязателен на Windows.
+$env:PYTHONUTF8 = "1"
 modal deploy modal_app.py
 
 # Frontend landing — автоматом из GitHub push в main
 git push origin main  # Vercel сразу собирает и катит на skriptly.io
 ```
 
+**После добавления новой миграции:** выполнить SQL вручную в Supabase SQL Editor (project `bmonakhktbaliwgobrxv`). Текущие миграции:
+- `migrations/001_workspace.sql` — workspaces + workspace_members + transcripts.visibility
+- `migrations/002_vocabulary.sql` — user_profiles.vocabulary JSONB
+
+Миграции **не идемпотентны через какой-то фреймворк** — каждая написана с `IF NOT EXISTS` чтобы безопасно перезапустить, но фиксить руками тоже окей.
+
 См. `ROADMAP.md` для дальнейших шагов.
 
 ## Constraints
 
 - Modal A10G GPU — pay-per-use, idle = 0. Один пользователь за раз с быстрой обработкой; параллельные транскрипции спавнят новые контейнеры (Modal auto-scales).
+- **VRAM 24GB на A10G** держит две модели Whisper + pyannote + Qwen 4-bit одновременно (~13GB used). Если добавим что-то ещё (например Qwen без quantization) — пересмотреть.
 - Supabase free tier: 500MB DB, 50K MAU, 4 magic link emails/hour.
+- **Gemini API**: Pro/Flash в Modal Secret `GEMINI_API_KEY`. Стоимость correction ~$0.015/час (Flash) или ~$0.06 (Pro). Summary стоит столько же (Pro по умолчанию).
+- **PostHog free tier**: 1M events/month + 5K session replays. На наших объёмах хватит надолго.
 - Web-only frontend. Mobile via responsive design, native не планируется.
 - Только NVIDIA GPU в local mode (CUDA).
