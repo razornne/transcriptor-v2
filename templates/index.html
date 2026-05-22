@@ -1574,8 +1574,9 @@
       </select>
     </div>
     <div id="numSpeakersWrap">
-      <label for="numSpeakers" data-i18n="speakersLabel">Speakers</label>
-      <input id="numSpeakers" type="number" min="1" max="20" placeholder="auto">
+      <label for="numSpeakers" data-i18n="speakersLabel" title="If you know the exact number of speakers — set it. Diarization quality improves significantly.">Speakers</label>
+      <input id="numSpeakers" type="number" min="1" max="20" placeholder="auto" data-i18n-ph="speakersPh"
+             title="Knowing the exact speaker count dramatically improves diarization quality (recommended: set this for 1-on-1 calls).">
     </div>
   </div>
 
@@ -1902,7 +1903,7 @@
         <span class="keys"><kbd>Ctrl</kbd><kbd>B</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc" data-i18n="shortcutLang">Cycle recording language</span>
+        <span class="desc" data-i18n="shortcutLang">Toggle UI language (EN ↔ UA)</span>
         <span class="keys"><kbd>Ctrl</kbd><kbd>L</kbd></span>
       </div>
       <div class="shortcut-row">
@@ -1966,6 +1967,7 @@ const T = {
     langLabel: 'Language',
     langAuto: 'Auto-detect',
     speakersLabel: 'Speakers',
+    speakersPh: 'auto',
     contextLabel: 'Context',
     contextOpt: 'optional',
     contextPh: 'Topic, names, terms — helps Whisper get them right',
@@ -2076,7 +2078,7 @@ const T = {
     shortcutSearch: 'Focus search (when History open)',
     shortcutDownload: 'Download as .md',
     shortcutSidebar: 'Toggle sidebar',
-    shortcutLang: 'Cycle recording language',
+    shortcutLang: 'Toggle UI language (EN ↔ UA)',
     shortcutTheme: 'Toggle light / dark',
     shortcutClose: 'Close modal / blur field',
     shortcutHelp: 'Show this list',
@@ -2138,6 +2140,7 @@ const T = {
     langLabel: 'Мова запису',
     langAuto: 'Авто',
     speakersLabel: 'Спікери',
+    speakersPh: 'авто',
     contextLabel: 'Контекст',
     contextOpt: 'необов\'язково',
     contextPh: 'Тема, імена, терміни — допомагає Whisper розпізнати правильно',
@@ -2248,7 +2251,7 @@ const T = {
     shortcutSearch: 'Пошук (коли Історія відкрита)',
     shortcutDownload: 'Завантажити .md',
     shortcutSidebar: 'Сховати / показати панель',
-    shortcutLang: 'Переключити мову запису',
+    shortcutLang: 'Перемкнути мову інтерфейсу (EN ↔ UA)',
     shortcutTheme: 'Змінити тему',
     shortcutClose: 'Закрити / зняти фокус',
     shortcutHelp: 'Показати цей список',
@@ -4972,13 +4975,11 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl/Cmd + L — cycle recording language (Auto → EN → RU → UK → Auto)
-  if (mod && (e.key === 'l' || e.key === 'L') && !isRecording) {
+  // Ctrl/Cmd + L — toggle UI language (EN ↔ UA)
+  if (mod && (e.key === 'l' || e.key === 'L')) {
     e.preventDefault();
-    const langs = ['', 'en', 'ru', 'uk'];
-    const idx = langs.indexOf(langSel.value);
-    langSel.value = langs[(idx + 1) % langs.length];
-    langSel.dispatchEvent(new Event('change'));
+    const btn = document.getElementById('uiLangToggle');
+    if (btn) btn.click();
     return;
   }
 

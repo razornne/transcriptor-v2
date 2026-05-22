@@ -302,7 +302,15 @@ class Transcriptor:
             }
             kwargs = {}
             if num_speakers:
+                # Юзер задал точное число — pyannote делает constrained clustering,
+                # качество резко лучше. Особенно для 2-3 спикеров.
                 kwargs["num_speakers"] = num_speakers
+            else:
+                # Bounds на пространство поиска — помогает кластеризации не
+                # фрагментировать одного спикера на несколько и не сливать
+                # двух в одного. 1..6 покрывает 95% реальных созвонов.
+                kwargs["min_speakers"] = 1
+                kwargs["max_speakers"] = 6
 
             result = self.pyannote(audio_input, **kwargs)
             annotation = result.speaker_diarization

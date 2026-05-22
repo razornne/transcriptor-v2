@@ -2,19 +2,35 @@
 
 Алгоритм:
 1. Если Whisper-сегменты содержат пословные таймстемпы (`words`) —
-   режем каждый сегмент по словам в местах смены pyannote-спикера.
-   Это позволяет правильно атрибутировать быстрый диалог типа
-   "Менше одного? — Менше одного." когда Whisper склеил это в один сегмент.
-2. Если слов нет — фоллбэк к сегментному уровню (как раньше).
-3. Smoothing (опционально): короткий сегмент (< SMOOTH_THRESHOLD_S),
-   зажатый между двумя одинаковыми спикерами, переназначается на их
-   спикера. По умолчанию отключено (0) — pyannote-3.1 достаточно точен.
+   обрабатываем каждый сегмент:
+   - Если сегмент короткий (<= SHORT_SEGMENT_THRESHOLD_S) — используем
+     majority-vote: pyannote часто шумит на коротких репликах, выдавая
+     микро-пинг-понг между спикерами на одной фразе. Whisper же режет
+     по реальным паузам, поэтому короткий блок ≈ одна реплика одного
+     человека. Берём большинство спикера по словам и применяем ко всему.
+   - Если длинный — режем по словам в местах смены pyannote-спикера
+     (быстрый диалог склеенный Whisper'ом, монологи с уточнениями и т.п.)
+2. Если слов нет — фоллбэк к сегментному уровню.
+3. Smoothing: короткий сегмент (< SMOOTH_THRESHOLD_S), зажатый между
+   двумя одинаковыми спикерами, переназначается на их спикера. Делается
+   итеративно — после первого прохода могут открыться новые ABA-паттерны.
 4. Склеиваем подряд идущие сегменты одного спикера в блоки.
 """
 import os
+from collections import Counter
 
-# 0 = выключено (доверяем pyannote как есть). Любое >0 = порог в секундах.
-SMOOTH_THRESHOLD_S = float(os.environ.get("SMOOTH_THRESHOLD_S", "0"))
+# Smoothing: 0 = выключено. >0 = порог в секундах. Default 1.0 — лечит
+# мелкий бaunce pyannote на быстрых диалогах. Раньше было 0, поднято 2026-05.
+SMOOTH_THRESHOLD_S = float(os.environ.get("SMOOTH_THRESHOLD_S", "1.0"))
+
+# Короткие Whisper-сегменты (<= 2.0s) обрабатываются majority-vote
+# вместо word-level splitting. Это убирает шум pyannote на коротких
+# репликах, когда одна фраза дробится на 4 микро-куска с разными спикерами.
+SHORT_SEGMENT_THRESHOLD_S = float(os.environ.get("SHORT_SEGMENT_THRESHOLD_S", "2.0"))
+
+# Сколько проходов smoothing делать. Каждый проход может открыть новые
+# ABA-паттерны после изменений предыдущего. Обычно сходится за 1-2.
+SMOOTH_PASSES = int(os.environ.get("SMOOTH_PASSES", "3"))
 
 
 def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -50,8 +66,11 @@ def _assign_initial(transcript_segments: list[dict], speaker_turns: list[dict]) 
 
 
 def _split_by_speaker(transcript_segments: list[dict], speaker_turns: list[dict]) -> list[dict]:
-    """Пословное разбиение: каждый Whisper-сегмент режется по словам
-    в местах, где меняется pyannote-спикер. Лечит склейки быстрого диалога.
+    """Гибридное разбиение:
+    - Короткий Whisper-сегмент (<= SHORT_SEGMENT_THRESHOLD_S) → majority-vote.
+      Одна короткая фраза не должна дробиться pyannote-шумом на ABAB.
+    - Длинный Whisper-сегмент → word-level split в местах смены спикера
+      (быстрый диалог склеенный Whisper'ом, монолог с уточнениями и т.п.)
 
     Требует transcript_segments[i]["words"] = [{start, end, word}, ...].
     Если words нет — фоллбэк к сегментному уровню для этого сегмента.
@@ -73,12 +92,9 @@ def _split_by_speaker(transcript_segments: list[dict], speaker_turns: list[dict]
             last_speaker = sp
             continue
 
-        # Заранее посчитаем спикеров для всех слов — это позволит делать
-        # forward-fill (если на первых словах pyannote не определился, берём
-        # спикера со следующего слова где определился).
+        # Word-level speakers + forward/backward-fill UNKNOWN
         word_speakers = [_best_speaker_for(w["start"], w["end"], speaker_turns) for w in words]
 
-        # Forward-fill: если первые слова SPEAKER_UNKNOWN, ищем первый известный
         first_known = next((s for s in word_speakers if s != "SPEAKER_UNKNOWN"), None)
         for i, s in enumerate(word_speakers):
             if s != "SPEAKER_UNKNOWN":
@@ -88,7 +104,6 @@ def _split_by_speaker(transcript_segments: list[dict], speaker_turns: list[dict]
             elif last_speaker:
                 word_speakers[i] = last_speaker
 
-        # Backward-fill: остальные UNKNOWN наследуют предыдущего
         running = last_speaker or first_known or "SPEAKER_UNKNOWN"
         for i, s in enumerate(word_speakers):
             if s == "SPEAKER_UNKNOWN":
@@ -96,7 +111,32 @@ def _split_by_speaker(transcript_segments: list[dict], speaker_turns: list[dict]
             else:
                 running = s
 
-        current = None  # текущая группа слов одного спикера
+        seg_duration = seg["end"] - seg["start"]
+        unique_speakers = set(word_speakers)
+
+        # === Majority-vote path для коротких сегментов ===
+        # Если Whisper выдал короткий цельный блок (одна реплика) — даже
+        # если pyannote передумал в середине, доверяем большинству.
+        # Исключение: если ровно ABA-pattern и доля меньшинства большая
+        # (>30%), всё-таки оставляем word-level — это может быть реальное
+        # двухголосое короткое подтверждение типа "А ты как? — Норм."
+        if seg_duration <= SHORT_SEGMENT_THRESHOLD_S and len(unique_speakers) > 1:
+            counter = Counter(word_speakers)
+            top_speaker, top_count = counter.most_common(1)[0]
+            top_ratio = top_count / len(word_speakers)
+            # Доминирующий спикер (>= 70%) → берём весь сегмент ему
+            if top_ratio >= 0.7:
+                result.append({
+                    "speaker": top_speaker,
+                    "start":   seg["start"],
+                    "end":     seg["end"],
+                    "text":    seg["text"].strip(),
+                })
+                last_speaker = top_speaker
+                continue
+
+        # === Word-level split path для длинных или явно двухголосых сегментов ===
+        current = None
         for w, sp in zip(words, word_speakers):
             if current is None or current["speaker"] != sp:
                 if current is not None:
@@ -121,22 +161,28 @@ def _split_by_speaker(transcript_segments: list[dict], speaker_turns: list[dict]
 
 def _smooth(labeled: list[dict]) -> list[dict]:
     """Короткий сегмент, зажатый между двумя одинаковыми спикерами,
-    переназначается на их спикера. Лечит мелкие ошибки диаризации.
+    переназначается на их спикера. Итеративно: после первого прохода
+    могут открыться новые ABA-паттерны.
 
     Управляется SMOOTH_THRESHOLD_S (env). 0 = выключено.
     """
     if SMOOTH_THRESHOLD_S <= 0 or len(labeled) < 3:
         return labeled
 
-    for i in range(1, len(labeled) - 1):
-        cur      = labeled[i]
-        duration = cur["end"] - cur["start"]
-        if duration >= SMOOTH_THRESHOLD_S:
-            continue
-        prev_sp = labeled[i - 1]["speaker"]
-        next_sp = labeled[i + 1]["speaker"]
-        if prev_sp == next_sp and prev_sp != cur["speaker"]:
-            cur["speaker"] = prev_sp
+    for _pass in range(SMOOTH_PASSES):
+        changed = False
+        for i in range(1, len(labeled) - 1):
+            cur      = labeled[i]
+            duration = cur["end"] - cur["start"]
+            if duration >= SMOOTH_THRESHOLD_S:
+                continue
+            prev_sp = labeled[i - 1]["speaker"]
+            next_sp = labeled[i + 1]["speaker"]
+            if prev_sp == next_sp and prev_sp != cur["speaker"]:
+                cur["speaker"] = prev_sp
+                changed = True
+        if not changed:
+            break
     return labeled
 
 
