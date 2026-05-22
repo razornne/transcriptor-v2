@@ -1,11 +1,20 @@
 /** @type {import('next').NextConfig} */
 const MODAL_URL = "https://razornne--transcriptor-v2-flask-app.modal.run";
+// PostHog EU region. Reverse proxy через skriptly.io/ingest/* чтобы adblock'и
+// (uBlock, AdGuard, Brave Shields) не блочили запросы — они режут *.posthog.com
+// по умолчанию. First-party requests на свой домен они не трогают.
+const POSTHOG_API    = "https://eu.i.posthog.com";
+const POSTHOG_ASSETS = "https://eu-assets.i.posthog.com";
 
 const nextConfig = {
-  // Прокси для backend и текущего /app фронта на Modal.
-  // Когда фронт /app переедет в этот же проект как статика — уберём app-прокси.
+  // skipTrailingSlashRedirect нужен для корректной работы PostHog API endpoints
+  skipTrailingSlashRedirect: true,
   async rewrites() {
     return [
+      // PostHog ingest — static assets и API endpoints. ВАЖНО: static ДО общего!
+      { source: "/ingest/static/:path*", destination: `${POSTHOG_ASSETS}/static/:path*` },
+      { source: "/ingest/:path*",        destination: `${POSTHOG_API}/:path*` },
+      // Backend API + Modal-served /app HTML
       { source: "/api/:path*", destination: `${MODAL_URL}/api/:path*` },
       { source: "/app",         destination: `${MODAL_URL}/` },
       { source: "/app/:path*",  destination: `${MODAL_URL}/:path*` },
