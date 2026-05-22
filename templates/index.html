@@ -1587,6 +1587,15 @@
            placeholder="Topic, names, terms — helps Whisper get them right">
   </div>
 
+  <!-- Best Quality toggle — visible only for Max plan -->
+  <div id="qualityToggleWrap" style="display:none; margin-top:10px">
+    <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer; user-select:none">
+      <input type="checkbox" id="qualityBestToggle" style="cursor:pointer">
+      <span data-i18n="qualityBestLabel">Best Quality (large-v3) — slower, higher accuracy on UA/RU</span>
+      <span class="opt" style="margin-left:auto; padding:2px 8px; border-radius:10px; background:var(--accent); color:white; font-size:10px; letter-spacing:.05em">MAX</span>
+    </label>
+  </div>
+
   <div class="controls">
     <button id="startBtn" class="btn-primary" data-i18n="startBtn">Start recording</button>
     <button id="stopBtn"  class="btn-danger" disabled data-i18n="stopBtn">Stop</button>
@@ -1968,6 +1977,7 @@ const T = {
     langAuto: 'Auto-detect',
     speakersLabel: 'Speakers',
     speakersPh: 'auto',
+    qualityBestLabel: 'Best Quality (large-v3) — slower, higher accuracy on UA/RU',
     contextLabel: 'Context',
     contextOpt: 'optional',
     contextPh: 'Topic, names, terms — helps Whisper get them right',
@@ -2141,6 +2151,7 @@ const T = {
     langAuto: 'Авто',
     speakersLabel: 'Спікери',
     speakersPh: 'авто',
+    qualityBestLabel: 'Найкраща якість (large-v3) — повільніше, точніше на UA/RU',
     contextLabel: 'Контекст',
     contextOpt: 'необов\'язково',
     contextPh: 'Тема, імена, терміни — допомагає Whisper розпізнати правильно',
@@ -2453,6 +2464,10 @@ function _updatePlanUI() {
   // Show "Manage billing" row only for paid users (they have a Stripe subscription)
   const manageSubRow = document.getElementById('manageSubRow');
   if (manageSubRow) manageSubRow.style.display = isFree ? 'none' : '';
+
+  // Best Quality toggle — only Max plan
+  const qualityWrap = document.getElementById('qualityToggleWrap');
+  if (qualityWrap) qualityWrap.style.display = (currentPlan === 'max') ? '' : 'none';
 }
 
 // ── Workspace ──────────────────────────────────────────────────
@@ -3999,6 +4014,9 @@ async function transcribeBlob(blob) {
     if (numSpeakersEl.value)                  fd.append('num_speakers', numSpeakersEl.value);
     const ctx = document.getElementById('contextPrompt').value.trim();
     if (ctx)                                  fd.append('prompt', ctx);
+    // Best Quality (large-v3) — отправляем только если чекбокс активен (Max plan)
+    const qualityToggle = document.getElementById('qualityBestToggle');
+    if (qualityToggle && qualityToggle.checked) fd.append('quality', 'best');
 
     const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd, true);
     if (window.posthog) posthog.capture('transcription_started', {

@@ -54,6 +54,10 @@ JOB_TTL_MINUTES = 30
 # Best-effort: если Flask контейнер рестартует, mapping теряется и фронт
 # фоллбэкает на estimation-based прогресс — это нормально, транскрипция продолжается.
 _job_progress_keys: dict[str, str] = {}
+# job_id → language: для последующего сохранения vocab additions с правильным lang.
+_job_language: dict[str, str | None] = {}
+# job_id → user_id: чтобы знать чьи vocab additions сохранять.
+_job_user: dict[str, str] = {}
 
 # Ленивая ссылка на modal.Dict для прогресса — инициализируется при первом use.
 _progress_dict = None
@@ -153,6 +157,14 @@ def _modal_job_status(job_id: str) -> dict:
 
     # Возвращаем правильное поле в зависимости от типа задачи
     if kind == "transcribe":
+        # Backward compat: result может быть list (старый формат) ИЛИ
+        # dict {"segments": [...], "vocab_additions": [...]} (новый).
+        if isinstance(result, dict):
+            return {
+                "status": "done",
+                "segments": result.get("segments") or [],
+                "vocab_additions": result.get("vocab_additions") or [],
+            }
         return {"status": "done", "segments": result or []}
     if kind == "generate":
         return {"status": "done", "result": (result or "").strip()}
@@ -453,6 +465,86 @@ def _add_minutes(user_id: str, minutes: float):
     _sb_admin("rpc/add_minutes", method="POST",
               data={"user_id": user_id, "mins": max(1, int(minutes + 0.5))})
 
+
+# ── Personal vocabulary (auto-learned terminology) ───────────────
+#
+# Стратегия: Gemini correction возвращает список терминов которые он
+# исправил (рдух → ADHD, → "Біллі Айліш" и т.п.). Сохраняем их в
+# user_profiles.vocabulary (JSONB). На следующей транскрипции топ-N
+# терминов идёт в initial_prompt Whisper'а — он распознаёт их с
+# первого раза без необходимости коррекции.
+
+VOCAB_MAX_ITEMS = 100  # максимум терминов в персональном словаре
+VOCAB_PROMPT_TOP = 30  # сколько подаём в Whisper initial_prompt
+
+def _get_user_vocabulary(user_id: str) -> list[dict]:
+    """Возвращает список терминов юзера из user_profiles.vocabulary."""
+    if not (SUPABASE_SERVICE_ROLE_KEY and user_id):
+        return []
+    try:
+        rows = _sb_admin("user_profiles",
+                         params={"id": f"eq.{user_id}", "select": "vocabulary"})
+        if rows and isinstance(rows[0].get("vocabulary"), list):
+            return rows[0]["vocabulary"]
+    except Exception as e:
+        print(f"[vocab] fetch failed: {e}")
+    return []
+
+
+def _save_vocabulary_additions(user_id: str, terms: list[str], language: str | None):
+    """Добавляет/инкрементит термины в персональный словарь юзера.
+
+    Логика: для каждого нового термина — если есть в словаре, +1 к freq
+    и обновляем last_seen. Если нет — добавляем с freq=1. Держим топ-100
+    по freq (старые редкие выкидываем).
+    """
+    if not (SUPABASE_SERVICE_ROLE_KEY and user_id and terms):
+        return
+    try:
+        existing = _get_user_vocabulary(user_id)
+        by_key: dict[str, dict] = {item.get("term", "").lower(): item for item in existing if item.get("term")}
+
+        now_iso = datetime.now().isoformat()
+        for term in terms:
+            if len(term) < 2:
+                continue
+            key = term.lower()
+            if key in by_key:
+                by_key[key]["freq"] = int(by_key[key].get("freq", 1)) + 1
+                by_key[key]["last_seen"] = now_iso
+                # Обновляем casing если новый вариант больше похож на правильный
+                if term.isupper() or term[0].isupper():
+                    by_key[key]["term"] = term
+            else:
+                by_key[key] = {
+                    "term": term,
+                    "freq": 1,
+                    "lang": language or "auto",
+                    "last_seen": now_iso,
+                }
+
+        # Сортируем по freq desc, обрезаем до VOCAB_MAX_ITEMS
+        all_items = sorted(by_key.values(), key=lambda x: (-int(x.get("freq", 1)), x.get("last_seen", "")))[:VOCAB_MAX_ITEMS]
+
+        _sb_admin("user_profiles", method="PATCH",
+                  params={"id": f"eq.{user_id}"},
+                  data={"vocabulary": all_items})
+        print(f"[vocab] saved {len(terms)} new terms for user {user_id[:8]}…, total {len(all_items)}")
+    except Exception as e:
+        print(f"[vocab] save failed: {e}")
+
+
+def _build_vocab_prompt(vocab: list[dict]) -> str:
+    """Берёт топ-30 терминов по freq и форматирует как initial_prompt."""
+    if not vocab:
+        return ""
+    top = sorted(vocab, key=lambda x: -int(x.get("freq", 1)))[:VOCAB_PROMPT_TOP]
+    terms = [item.get("term") for item in top if item.get("term")]
+    if not terms:
+        return ""
+    # Whisper prompt format — просто перечисление через запятую работает
+    return "Recurring terms in this user's recordings: " + ", ".join(terms) + "."
+
 _jwks_client = None
 def _get_jwks_client():
     """Ленивая инициализация — клиент кэширует ключи между запросами."""
@@ -557,6 +649,18 @@ def job_status_endpoint(job_id):
                     _tracked_jobs.add(job_id)
                 except Exception as e:
                     print(f"[usage] tracking failed: {e}")
+            # Сохраняем persona vocabulary additions из Gemini correction
+            vocab_additions = result.get("vocab_additions") or []
+            if vocab_additions:
+                lang = _job_language.get(job_id)
+                try:
+                    _save_vocabulary_additions(g.user_id, vocab_additions, lang)
+                except Exception as e:
+                    print(f"[vocab] save failed: {e}")
+            # Cleanup tracking dicts
+            _job_language.pop(job_id, None)
+            _job_user.pop(job_id, None)
+            _job_progress_keys.pop(job_id, None)
         return jsonify(result)
 
     # Local: обычный uuid hex
@@ -1414,8 +1518,12 @@ def transcribe_endpoint():
     prompt = request.form.get("prompt") or None
     num_speakers_raw = request.form.get("num_speakers")
     num_speakers = int(num_speakers_raw) if num_speakers_raw and num_speakers_raw.isdigit() else None
+    quality = (request.form.get("quality") or "fast").lower()
+    if quality not in ("fast", "best"):
+        quality = "fast"
 
-    # Plan limits check
+    # Plan limits check + best-quality gating + vocabulary fetch
+    user_vocab_prompt = ""
     if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
         try:
             profile = _get_user_profile(g.user_id)
@@ -1428,8 +1536,19 @@ def transcribe_endpoint():
                 }), 402
             if not limits["diarization"]:
                 num_speakers = 1  # Free: транскрипция без разделения по спикерам
+            # Best Quality (large-v3) — только для Max плана
+            if quality == "best" and plan != "max":
+                quality = "fast"
+            # Personal vocabulary — у всех залогиненных юзеров
+            vocab_items = profile.get("vocabulary") or []
+            if isinstance(vocab_items, list) and vocab_items:
+                user_vocab_prompt = _build_vocab_prompt(vocab_items)
         except Exception as e:
             print(f"[limits] check failed: {e}")
+
+    # Подмешиваем персональный словарь к пользовательскому prompt
+    if user_vocab_prompt:
+        prompt = f"{user_vocab_prompt} {prompt}" if prompt else user_vocab_prompt
 
     # ── Modal path: spawn() возвращает FunctionCall сразу, обработка идёт в облаке
     if USE_MODAL:
@@ -1437,12 +1556,16 @@ def transcribe_endpoint():
         progress_key = uuid.uuid4().hex  # уникальный ключ для modal.Dict прогресса
         try:
             call = _transcriptor.transcribe_full.spawn(
-                audio_bytes, language, num_speakers, prompt, progress_key
+                audio_bytes, language, num_speakers, prompt, progress_key, quality
             )
         except Exception as e:
             return jsonify({"error": f"modal spawn failed: {e}"}), 502
         job_id = JOB_PREFIX_TRANSCRIBE + call.object_id
         _job_progress_keys[job_id] = progress_key  # сохраняем для polling
+        # сохраняем язык и user_id для последующего vocab save (см. /api/jobs polling)
+        _job_language[job_id] = language
+        if g.user_id:
+            _job_user[job_id] = g.user_id
         return jsonify({"job_id": job_id, "status": "queued"})
 
     # ── Local path: пишем на диск, обрабатываем в фоновом потоке

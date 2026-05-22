@@ -159,17 +159,35 @@ class Transcriptor:
 
         hf_token = os.environ["HF_TOKEN"]
 
-        # large-v3-turbo — дефолт в Modal: ~3-4x быстрее large-v3, качество сопоставимо.
-        # Переопределить: WHISPER_MODEL=large-v3 в Modal Secrets или .env
-        whisper_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
-        print(f"[modal] loading whisper {whisper_model}...", flush=True)
+        # large-v3-turbo — дефолт: ~3-4x быстрее large-v3, чуть слабее на UA/RU
+        whisper_fast_model = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+        print(f"[modal] loading whisper {whisper_fast_model} (fast)...", flush=True)
         self.whisper = WhisperModel(
-            whisper_model,
+            whisper_fast_model,
             device="cuda",
             compute_type="float16",
             download_root=f"{MODELS_DIR}/whisper",
         )
-        print("[modal] whisper ready", flush=True)
+        print("[modal] whisper fast ready", flush=True)
+
+        # large-v3 — для Max плана ("Best Quality" toggle). Грузим только если
+        # отличается от fast и LOAD_BEST_QUALITY=true. На A10G 24GB обе модели
+        # вместе с pyannote и Qwen-4bit влезают (~13GB total).
+        whisper_best_model = os.environ.get("WHISPER_BEST_MODEL", "large-v3")
+        self.whisper_best = None
+        if whisper_best_model != whisper_fast_model and os.environ.get("LOAD_BEST_QUALITY", "true").lower() == "true":
+            print(f"[modal] loading whisper {whisper_best_model} (best)...", flush=True)
+            try:
+                self.whisper_best = WhisperModel(
+                    whisper_best_model,
+                    device="cuda",
+                    compute_type="float16",
+                    download_root=f"{MODELS_DIR}/whisper",
+                )
+                print("[modal] whisper best ready", flush=True)
+            except Exception as e:
+                print(f"[modal] whisper best failed to load: {e} — falling back to fast for all requests", flush=True)
+                self.whisper_best = None
 
         print("[modal] loading pyannote/speaker-diarization-3.1...", flush=True)
         self.pyannote = Pipeline.from_pretrained(
@@ -214,15 +232,21 @@ class Transcriptor:
         num_speakers: int | None,
         prompt: str | None,
         progress_key: str | None = None,
-    ) -> list[dict]:
+        quality: str = "fast",
+    ) -> dict:
         """Полный пайплайн: webm → whisper → pyannote → merge → LLM correction.
 
         Принимает сырой WebM/Opus blob, конвертирует через ffmpeg внутри.
-        Возвращает [{speaker, start, end, text}, ...].
+        Возвращает dict:
+          { "segments": [{speaker, start, end, text}, ...],
+            "vocab_additions": [term1, term2, ...] }
 
         progress_key: если задан, пишем этапы в modal.Dict progress_store
-        чтобы фронт видел реальный прогресс (не估计ку).
+        чтобы фронт видел реальный прогресс.
         Этапы: "convert" → "transcribe" → "diarize" → "merge" → "correct"
+
+        quality: "fast" (large-v3-turbo, default) | "best" (large-v3).
+        Best качество доступно только для Max-юзеров (проверяется в Flask).
         """
         import soundfile as sf
         import numpy as np
@@ -259,7 +283,9 @@ class Transcriptor:
             else:
                 effective_prompt = lang_hint or prompt
 
-            segments_iter, _ = self.whisper.transcribe(
+            # Best quality для Max — large-v3 (~3x медленнее, +15-20% качества на UA/RU)
+            whisper_model = self.whisper_best if (quality == "best" and getattr(self, "whisper_best", None)) else self.whisper
+            segments_iter, _ = whisper_model.transcribe(
                 wav_path,
                 language=language,
                 initial_prompt=effective_prompt,
@@ -297,7 +323,7 @@ class Transcriptor:
             _report("transcribe")  # whisper done
 
             if not segments:
-                return []
+                return {"segments": [], "vocab_additions": []}
 
             # --- Pyannote ---
             waveform, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
@@ -336,7 +362,7 @@ class Transcriptor:
             _report("merge")  # merge done
 
             # --- LLM correction ---
-            merged = self._correct_segments(merged, language)
+            merged, vocab_additions = self._correct_segments(merged, language)
 
             # После Gemini boundary-fix соседние сегменты могут оказаться
             # одного спикера — склеиваем заново.
@@ -350,7 +376,7 @@ class Transcriptor:
             merged = re_merged
             _report("correct")  # LLM correction done
 
-            return merged
+            return {"segments": merged, "vocab_additions": vocab_additions}
 
         finally:
             for p in (webm_path, wav_path):
@@ -359,32 +385,69 @@ class Transcriptor:
                 except OSError:
                     pass
 
-    def _correct_segments(self, segments: list[dict], language: str | None) -> list[dict]:
+    def _correct_segments(self, segments: list[dict], language: str | None) -> tuple[list[dict], list[str]]:
         """Главный correction pass.
 
+        Возвращает (corrected_segments, vocab_additions).
+        vocab_additions — список терминов которые Gemini добавил при
+        коррекции (аббревиатуры, имена собственные). Используется для
+        пополнения персонального словаря юзера в Supabase.
+
         Стратегия:
-        1. Пробуем Gemini 2.5 Flash — у него есть знание мира (ADHD/СДВГ,
-           политики, бренды, аббревиатуры) и контекст 2M токенов на весь
-           созвон. Также может перекидывать boundary-слова между
-           соседними репликами если граница спикеров пропустила фразу.
-        2. Если Gemini недоступен (нет ключа, ошибка сети, rate limit) —
-           фоллбэк на Qwen 7B inline на GPU (старая логика).
+        1. Пробуем Gemini 2.5 Flash — знание мира (ADHD, бренды, имена)
+           + контекст 2M токенов + boundary fix.
+        2. Если Gemini недоступен — фоллбэк на Qwen 7B на GPU.
+           Qwen не даёт vocab additions (он только мелкие правки делает).
         """
         if not segments:
-            return segments
+            return segments, []
 
         # Try Gemini first if API key available
         if os.environ.get("GEMINI_API_KEY", "").strip():
             try:
                 result = self._correct_segments_gemini(segments, language)
                 if result:
-                    return result
+                    return result  # (segments, vocab_additions)
             except Exception as e:
                 print(f"[modal] gemini correction failed, falling back to qwen: {e}", flush=True)
 
-        return self._correct_segments_qwen(segments, language)
+        return self._correct_segments_qwen(segments, language), []
 
-    def _correct_segments_gemini(self, segments: list[dict], language: str | None) -> list[dict] | None:
+    def _extract_vocab_terms(self, orig_text: str, corrected_text: str) -> list[str]:
+        """Извлекаем "интересные" термины из разницы оригинал/коррекция.
+
+        Идея: если Gemini заменил "рдух" на "ADHD" — это терминология
+        пользователя, она должна попасть в его персональный словарь.
+        Берём только: аббревиатуры (CAPS), имена собственные (Capitalized),
+        длиннее 2 символов. Игнорируем мелкие правки регистра/пунктуации.
+        """
+        if orig_text == corrected_text:
+            return []
+
+        import string
+        # Извлекаем слова из обоих текстов (без пунктуации)
+        def words(t: str) -> set[str]:
+            cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in t)
+            return {w for w in cleaned.split() if len(w) > 2}
+
+        orig_words = words(orig_text)
+        new_words  = words(corrected_text)
+        # Новые токены, которых не было в оригинале
+        added = new_words - orig_words
+
+        interesting: list[str] = []
+        for w in added:
+            # Аббревиатура: 2+ заглавных подряд (ADHD, CTR, FPV, ПТСР)
+            if sum(1 for c in w if c.isupper()) >= 2 and any(c.isalpha() for c in w):
+                interesting.append(w)
+                continue
+            # Имя собственное: первая заглавная + хотя бы 4 символа всего
+            # (отфильтровывает обычные слова в начале предложения)
+            if len(w) >= 4 and w[0].isupper() and w[1:].islower():
+                interesting.append(w)
+        return interesting
+
+    def _correct_segments_gemini(self, segments: list[dict], language: str | None) -> tuple[list[dict], list[str]] | None:
         """Gemini-based correction с boundary-fix capability.
 
         Передаём весь транскрипт с метками спикеров. Gemini может:
@@ -487,11 +550,13 @@ class Transcriptor:
         corrected = [dict(s) for s in segments]
         changes_count = 0
         speaker_changes = 0
+        vocab_additions: list[str] = []
+        original_speakers = {s["speaker"] for s in segments}
         for idx, (new_speaker, new_text) in parsed.items():
             orig = corrected[idx]
             orig_text = orig["text"]
 
-            # Length sanity: 20% by default, 50% if boundary moves expected
+            # Length sanity: 50% (boundary moves can shift things)
             length_ratio = abs(len(new_text) - len(orig_text)) / max(len(orig_text), 1)
             if length_ratio > 0.5:
                 continue
@@ -505,22 +570,32 @@ class Transcriptor:
                 continue
 
             if new_text != orig_text:
+                # Извлекаем терминологию для персонального словаря
+                vocab_additions.extend(self._extract_vocab_terms(orig_text, new_text))
                 corrected[idx]["text"] = new_text
                 changes_count += 1
-            # Speaker reassignment (boundary fix) — accept only if speaker
-            # exists in the original set (Gemini doesn't invent new speakers)
-            original_speakers = {s["speaker"] for s in segments}
+            # Speaker reassignment (boundary fix)
             if new_speaker in original_speakers and new_speaker != orig["speaker"]:
                 corrected[idx]["speaker"] = new_speaker
                 speaker_changes += 1
 
+        # Дедуплицируем словарные термины (сохраняем порядок появления)
+        seen: set[str] = set()
+        unique_vocab: list[str] = []
+        for t in vocab_additions:
+            key = t.lower()
+            if key not in seen:
+                seen.add(key)
+                unique_vocab.append(t)
+
         print(
             f"[modal] gemini corrected {changes_count} texts, "
-            f"reassigned {speaker_changes} segments to other speakers "
+            f"reassigned {speaker_changes} segments, "
+            f"vocab+{len(unique_vocab)} ({', '.join(unique_vocab[:8])}) "
             f"(coverage {coverage:.0%})",
             flush=True,
         )
-        return corrected
+        return corrected, unique_vocab
 
     def _correct_segments_qwen(self, segments: list[dict], language: str | None) -> list[dict]:
         """Фоллбэк: локальный Qwen 7B (4-bit) на GPU. Используется когда
