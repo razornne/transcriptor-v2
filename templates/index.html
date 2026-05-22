@@ -14,6 +14,12 @@
   <!-- Vercel Web Analytics — works on /app served via Vercel rewrite -->
   <script defer src="/_vercel/insights/script.js"></script>
 
+  <!-- PostHog — product analytics. Replace phc_YOUR_KEY with your project key. -->
+  <script>
+    !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+" (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+    posthog.init('phc_YOUR_KEY_HERE', { api_host: 'https://eu.i.posthog.com', person_profiles: 'identified_only' });
+  </script>
+
   <!-- Supabase JS client v2: auth + database queries.
        Anon key и URL зашиты — оба публичны, защита через RLS. -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -430,8 +436,42 @@
     .notes-textarea:focus { border-color: var(--accent); }
     .notes-textarea::placeholder { color: var(--dim); font-style: italic; }
 
+    /* ── Content tabs (Transcript / Summary / Actions) ── */
+    .content-tabs {
+      display: flex; gap: 0; margin: 24px 0 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .content-tab {
+      padding: 9px 18px; font-size: 13px; font-weight: 500;
+      font-variation-settings: 'wdth' 90;
+      color: var(--muted); background: none; border: none;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+      white-space: nowrap; letter-spacing: .02em;
+      position: relative;
+    }
+    .content-tab:hover { color: var(--text); }
+    .content-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+    /* small dot when tab has AI content */
+    .content-tab.tab-has-content::after {
+      content: ''; position: absolute; top: 7px; right: 7px;
+      width: 5px; height: 5px; border-radius: 50%;
+      background: var(--accent); opacity: .7;
+    }
+    .tab-panel { padding-top: 20px; }
+    .ai-panel-generate {
+      padding: 28px 0 12px; display: flex; align-items: center; gap: 10px;
+    }
+    .ai-panel-empty {
+      padding: 8px 0 32px; color: var(--muted); font-size: 14px; line-height: 1.6;
+    }
+    /* AI result inside tab — no extra top margin */
+    .tab-panel .ai-result-card:first-child { margin-top: 0; }
+
     /* AI tools */
-    .ai-section { margin-top: 36px; }
+    .ai-section { margin-top: 36px; display: none; } /* kept as hidden compat stub */
 
     .ai-toolbar {
       display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -1594,35 +1634,53 @@
     </div>
   </div>
 
-  <div class="section-title" id="transcriptSectionTitle">
-    <span data-i18n="sectionTranscript">Transcript</span>
-    <span class="line"></span>
-  </div>
   <div class="transcript-title hidden" id="transcriptTitle">
     <span class="transcript-name" id="transcriptName" title="Click to rename"></span>
   </div>
   <div class="tags-row" id="tagsRow" style="display:none"></div>
-  <div id="transcript" class="transcript">
-    <div class="transcript-empty" data-i18n="transcriptEmpty">Start a recording — your transcript will appear here.</div>
+
+  <!-- ── Content tab bar — shown only when transcript loaded ── -->
+  <div class="content-tabs" id="contentTabs" style="display:none">
+    <button class="content-tab active" data-tab="transcript" data-i18n="tabTranscript">Transcript</button>
+    <button class="content-tab" data-tab="summary" data-i18n="tabSummary">Summary</button>
+    <button class="content-tab" data-tab="actions" data-i18n="tabActions">Actions</button>
   </div>
-  <div class="transcript-footer">
-    <button id="copyBtn" class="btn-ghost" data-i18n="copyBtn">Copy</button>
-    <button id="downloadBtn" class="btn-ghost" data-i18n="downloadBtn">Download .md</button>
-  </div>
-  <div id="error" class="error"></div>
-  <div id="recoveryBox" class="recovery-box" style="display:none">
-    <div class="recovery-box-title" data-i18n="recoveryTitle">Audio preserved</div>
-    <div class="recovery-box-msg" id="recoveryMsg" data-i18n="recoveryMsg">
-      The server response failed to parse, but your recording is safe in browser memory.
-      Try again, or download the raw audio file as a backup.
+
+  <!-- ── Transcript panel ── -->
+  <div class="tab-panel" id="tabPanel_transcript">
+    <div id="transcript" class="transcript">
+      <div class="transcript-empty" data-i18n="transcriptEmpty">Start a recording — your transcript will appear here.</div>
     </div>
-    <div class="recovery-box-actions">
-      <button id="retryBtn" class="primary" data-i18n="retryBtn">Retry transcription</button>
-      <button id="downloadAudioBtn" data-i18n="downloadAudioBtn">Download .webm</button>
-      <button id="dismissRecoveryBtn" data-i18n="dismissBtn">Discard</button>
+    <div class="transcript-footer">
+      <button id="copyBtn" class="btn-ghost" data-i18n="copyBtn">Copy</button>
+      <button id="downloadBtn" class="btn-ghost" data-i18n="downloadBtn">Download .md</button>
+    </div>
+    <div id="error" class="error"></div>
+    <div id="recoveryBox" class="recovery-box" style="display:none">
+      <div class="recovery-box-title" data-i18n="recoveryTitle">Audio preserved</div>
+      <div class="recovery-box-msg" id="recoveryMsg" data-i18n="recoveryMsg">
+        The server response failed to parse, but your recording is safe in browser memory.
+        Try again, or download the raw audio file as a backup.
+      </div>
+      <div class="recovery-box-actions">
+        <button id="retryBtn" class="primary" data-i18n="retryBtn">Retry transcription</button>
+        <button id="downloadAudioBtn" data-i18n="downloadAudioBtn">Download .webm</button>
+        <button id="dismissRecoveryBtn" data-i18n="dismissBtn">Discard</button>
+      </div>
     </div>
   </div>
 
+  <!-- ── Summary panel ── -->
+  <div class="tab-panel" id="tabPanel_summary" style="display:none">
+    <div id="summaryPanel"></div>
+  </div>
+
+  <!-- ── Actions panel ── -->
+  <div class="tab-panel" id="tabPanel_actions" style="display:none">
+    <div id="actionsPanel"></div>
+  </div>
+
+  <!-- Notes — below tabs, always visible when recording or transcript loaded -->
   <div class="notes-section" id="notesSection" style="display:none">
     <div class="section-title">
       <span data-i18n="sectionNotes">Notes</span>
@@ -1631,20 +1689,7 @@
     <textarea id="notesArea" class="notes-textarea" data-i18n-ph="notesPh" placeholder="Personal notes — saved with this transcript, included in .md export."></textarea>
   </div>
 
-  <div class="ai-section" id="aiSection" style="display:none">
-    <div id="aiToolsSection">
-      <div class="section-title">
-        <span data-i18n="sectionAI">AI tools</span>
-        <span class="line"></span>
-      </div>
-      <div class="ai-toolbar">
-        <button class="ai-btn" data-template="summary" data-i18n="summaryBtn">Summary</button>
-        <button class="ai-btn" data-template="actions" data-i18n="actionsBtn">Action items</button>
-      </div>
-      <div id="aiResults"></div>
-    </div>
-  </div>
-
+  <!-- Chat with transcript (FEATURE_CHAT=false) -->
   <div class="chat-section" id="chatSection" style="display:none">
     <div class="section-title">
       <span data-i18n="sectionChat">Chat with transcript</span>
@@ -1657,6 +1702,11 @@
       <button id="chatSendBtn" class="chat-send-btn" data-i18n="chatSend">Ask</button>
     </div>
   </div>
+
+  <!-- Hidden compat stubs — referenced by plan-check JS code -->
+  <div id="aiSection" style="display:none"></div>
+  <div id="aiToolsSection" style="display:none"></div>
+  <div id="aiResults" style="display:none"></div>
 
 </div><!-- /.shell -->
 </div><!-- /.main-content -->
@@ -1848,6 +1898,14 @@
         <span class="keys"><kbd>Ctrl</kbd><kbd>S</kbd></span>
       </div>
       <div class="shortcut-row">
+        <span class="desc" data-i18n="shortcutSidebar">Toggle sidebar</span>
+        <span class="keys"><kbd>Ctrl</kbd><kbd>B</kbd></span>
+      </div>
+      <div class="shortcut-row">
+        <span class="desc" data-i18n="shortcutLang">Cycle recording language</span>
+        <span class="keys"><kbd>Ctrl</kbd><kbd>L</kbd></span>
+      </div>
+      <div class="shortcut-row">
         <span class="desc" data-i18n="shortcutTheme">Toggle light / dark</span>
         <span class="keys"><kbd>Ctrl</kbd><kbd>D</kbd></span>
       </div>
@@ -2006,12 +2064,19 @@ const T = {
     planUpgradeMax: 'Upgrade to Max',
     planBilledAnnually: 'billed annually',
     planBestValue: 'Best value',
+    // Tabs
+    tabTranscript: 'Transcript',
+    tabSummary: 'Summary',
+    tabActions: 'Actions',
+    aiPanelEmpty: 'Click the button above to generate.',
     // Shortcuts
     shortcutsTitle: 'Keyboard shortcuts',
     shortcutRec: 'Start / stop recording',
     shortcutHistory: 'Open History & focus search',
     shortcutSearch: 'Focus search (when History open)',
     shortcutDownload: 'Download as .md',
+    shortcutSidebar: 'Toggle sidebar',
+    shortcutLang: 'Cycle recording language',
     shortcutTheme: 'Toggle light / dark',
     shortcutClose: 'Close modal / blur field',
     shortcutHelp: 'Show this list',
@@ -2171,12 +2236,19 @@ const T = {
     planUpgradeMax: 'Перейти на Max',
     planBilledAnnually: 'щорічна оплата',
     planBestValue: 'Вигідно',
+    // Tabs
+    tabTranscript: 'Транскрипт',
+    tabSummary: 'Резюме',
+    tabActions: 'Завдання',
+    aiPanelEmpty: 'Натисніть кнопку вище, щоб згенерувати.',
     // Shortcuts
     shortcutsTitle: 'Гарячі клавіші',
     shortcutRec: 'Почати / зупинити запис',
     shortcutHistory: 'Відкрити Історію і пошук',
     shortcutSearch: 'Пошук (коли Історія відкрита)',
     shortcutDownload: 'Завантажити .md',
+    shortcutSidebar: 'Сховати / показати панель',
+    shortcutLang: 'Переключити мову запису',
     shortcutTheme: 'Змінити тему',
     shortcutClose: 'Закрити / зняти фокус',
     shortcutHelp: 'Показати цей список',
@@ -2627,9 +2699,15 @@ const historyLabel  = document.getElementById('historyLabel');
 const themeToggle   = document.getElementById('themeToggle');
 const notesSection  = document.getElementById('notesSection');
 const notesArea     = document.getElementById('notesArea');
-const aiSection     = document.getElementById('aiSection');
-const aiResultsEl   = document.getElementById('aiResults');
+const aiSection     = document.getElementById('aiSection');   // hidden compat stub
+const aiResultsEl   = document.getElementById('aiResults');   // hidden compat stub
 const chatSection   = document.getElementById('chatSection');
+// Content tabs
+const contentTabs      = document.getElementById('contentTabs');
+const tabPanelTranscript = document.getElementById('tabPanel_transcript');
+const tabPanelSummary    = document.getElementById('tabPanel_summary');
+const tabPanelActions    = document.getElementById('tabPanel_actions');
+let   currentTab         = 'transcript';
 const chatMessagesEl = document.getElementById('chatMessages');
 const chatInput     = document.getElementById('chatInput');
 const chatSendBtn   = document.getElementById('chatSendBtn');
@@ -3093,12 +3171,35 @@ function highlightHTML(text, query) {
 
 function updateSectionsVisibility() {
   const hasSegments = currentSegments && currentSegments.length > 0;
-  // Notes — видно во время записи и при готовом транскрипте
+  // Tab bar — only when transcript loaded
+  contentTabs.style.display = hasSegments ? '' : 'none';
+  // Notes — visible during recording and when transcript loaded
   notesSection.style.display = (isRecording || hasSegments) ? '' : 'none';
-  // AI tools и Chat — только когда уже есть готовый транскрипт
-  aiSection.style.display    = hasSegments ? '' : 'none';
+  // Chat — feature-flagged
   chatSection.style.display  = (hasSegments && FEATURE_CHAT) ? '' : 'none';
+  // If tabs were hidden (no segments) and now visible, ensure transcript tab is active
+  if (hasSegments) switchTab(currentTab, false);
 }
+
+function switchTab(name, save = true) {
+  if (save) currentTab = name;
+  const panels = { transcript: tabPanelTranscript, summary: tabPanelSummary, actions: tabPanelActions };
+  document.querySelectorAll('.content-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === name);
+  });
+  Object.entries(panels).forEach(([k, el]) => {
+    if (el) el.style.display = k === name ? '' : 'none';
+  });
+  // Render AI panel content on first switch into it
+  if (name === 'summary') renderAIPanel('summary');
+  if (name === 'actions') renderAIPanel('actions');
+}
+
+// Tab click delegation
+document.getElementById('contentTabs').addEventListener('click', e => {
+  const btn = e.target.closest('.content-tab');
+  if (btn && btn.dataset.tab) switchTab(btn.dataset.tab);
+});
 
 function renderTranscript(segments, highlightQuery) {
   currentSegments = segments;
@@ -3217,12 +3318,20 @@ function segmentsToMarkdown(segments) {
     md += `## Notes\n\n${currentNotes.trim()}\n\n`;
   }
 
-  // AI-результаты — в порядке, добавляем секциями
+  // AI results — each section. If the AI content already starts with its own
+  // markdown heading (Gemini outputs "## Аналітичний звіт…") we skip the wrapper
+  // heading to avoid "## Резюме\n\n## Аналітичний звіт…" (empty section header).
   const order = ['summary', 'actions'];
   order.forEach(template => {
     const result = currentAIResults[template];
     if (result && result !== '__loading__') {
-      md += `## ${TEMPLATE_LABELS[template] || template}\n\n${result.trim()}\n\n`;
+      const trimmed = result.trim();
+      if (/^#{1,6}\s/.test(trimmed)) {
+        // Already has its own heading — just append with separator
+        md += `---\n\n${trimmed}\n\n`;
+      } else {
+        md += `## ${TEMPLATE_LABELS[template] || template}\n\n${trimmed}\n\n`;
+      }
     }
   });
 
@@ -3580,9 +3689,8 @@ function showProcessingScreen(audioDurSec) {
   _realStageCompletedAt = {};
 
   const ps = document.getElementById('processingState');
-  const ts = document.getElementById('transcriptSectionTitle');
   ps.style.display = '';
-  if (ts) ts.style.display = 'none';
+  contentTabs.style.display = 'none';
   transcriptEl.style.display = 'none';
   document.querySelector('.transcript-footer').style.display = 'none';
   hintEl.style.display = 'none';
@@ -3610,8 +3718,7 @@ function showProcessingScreen(audioDurSec) {
 function hideProcessingScreen() {
   if (_procTimer) { clearInterval(_procTimer); _procTimer = null; }
   document.getElementById('processingState').style.display = 'none';
-  const ts = document.getElementById('transcriptSectionTitle');
-  if (ts) ts.style.display = '';
+  // contentTabs visibility is controlled by updateSectionsVisibility() after renderTranscript
   transcriptEl.style.display = '';
   document.querySelector('.transcript-footer').style.display = '';
 }
@@ -3891,6 +3998,10 @@ async function transcribeBlob(blob) {
     if (ctx)                                  fd.append('prompt', ctx);
 
     const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd, true);
+    if (window.posthog) posthog.capture('transcription_started', {
+      language: langSel.value || 'auto',
+      duration_sec: recordingDurationSec || null,
+    });
 
     const result = await pollJob(jobId, (progress) => {
       // Real backend stage signal — advance ring to confirmed position
@@ -3906,6 +4017,10 @@ async function transcribeBlob(blob) {
       currentSessionId = null;
     }
     notify('Transcription ready', 'Your meeting transcript is ready.');
+    if (window.posthog) posthog.capture('transcription_completed', {
+      segments: segments.length,
+      language: langSel.value || 'auto',
+    });
 
     currentSpeakerNames = {};
     currentHistoryId = null;
@@ -3916,6 +4031,7 @@ async function transcribeBlob(blob) {
     currentAIResults = {};
     currentChatHistory = [];
     currentTags = [];
+    currentTab = 'transcript';   // always start on transcript tab after new recording
     hideProcessingScreen();
     renderTranscript(segments);
     renderChatMessages();
@@ -4040,6 +4156,7 @@ copyBtn.addEventListener('click', async () => {
 
 downloadBtn.addEventListener('click', () => {
   if (!currentSegments || currentSegments.length === 0) return;
+  if (window.posthog) posthog.capture('export_clicked', { format: 'md', segments: currentSegments.length });
   const md = segmentsToMarkdown(currentSegments);
   const blob = new Blob([md], { type: 'text/markdown' });
   const url  = URL.createObjectURL(blob);
@@ -4419,6 +4536,7 @@ function renderHistory() {
         currentAIResults = { ...(entry.aiResults || {}) };
         currentChatHistory = [...(entry.chatHistory || [])];
         currentTags = [...(entry.tags || [])];
+        currentTab = 'transcript';   // always start on transcript tab when loading from history
         const queryAtClick = (searchEl.value || '').trim();
         renderTranscript(entry.segments, queryAtClick);
         renderChatMessages();
@@ -4539,12 +4657,12 @@ function renderMarkdown(md) {
 async function runAI(template) {
   if (!currentSegments || currentSegments.length === 0) return;
   if (currentAIResults[template] && currentAIResults[template] !== '__loading__') {
-    renderAIResults();
+    renderAIPanel(template);
     return;
   }
 
   currentAIResults[template] = '__loading__';
-  renderAIResults();
+  renderAIPanel(template);
 
   try {
     const jobId = await submitJob(`${API_BASE}/api/generate`, {
@@ -4555,91 +4673,114 @@ async function runAI(template) {
     });
     const result = await pollJob(jobId);
     currentAIResults[template] = result.result || '';
+    if (window.posthog) posthog.capture(template + '_generated', { template });
   } catch (e) {
     if (e.upgradeRequired) {
       delete currentAIResults[template];
-      renderAIResults();
+      renderAIPanel(template);
       showUpgradePrompt(t('upgradeAIMsg'));
       return;
     }
     currentAIResults[template] = `**Error:** ${e.message}`;
   }
-  renderAIResults();
+  renderAIPanel(template);
   if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
 }
 
-function renderAIResults() {
-  aiResultsEl.innerHTML = '';
-  const order = ['summary', 'actions'];
-  order.forEach(template => {
-    const result = currentAIResults[template];
-    if (result === undefined) return;
+// Render one AI panel (summary or actions)
+function renderAIPanel(template) {
+  const panelEl = document.getElementById(template + 'Panel');
+  if (!panelEl) return;
 
-    const card = document.createElement('div');
-    card.className = 'ai-result-card';
+  const result = currentAIResults[template];
 
-    const header = document.createElement('div');
-    header.className = 'ai-result-header';
+  // Update tab dot indicator
+  const tabBtn = document.querySelector(`.content-tab[data-tab="${template}"]`);
+  if (tabBtn) tabBtn.classList.toggle('tab-has-content', !!result && result !== '__loading__');
 
-    const lbl = document.createElement('span');
-    lbl.className = 'ai-result-label';
-    lbl.textContent = TEMPLATE_LABELS[template] || template;
+  if (result === undefined || result === null) {
+    panelEl.innerHTML = `
+      <div class="ai-panel-generate">
+        <button class="ai-btn ai-panel-generate-btn" data-template="${template}">
+          ${escapeHtml(TEMPLATE_LABELS[template] || template)}
+        </button>
+      </div>
+      <div class="ai-panel-empty">${escapeHtml(t('aiPanelEmpty'))}</div>`;
+    panelEl.querySelector('.ai-panel-generate-btn').addEventListener('click', () => runAI(template));
+    return;
+  }
 
-    const actions = document.createElement('div');
-    actions.className = 'ai-result-actions';
+  if (result === '__loading__') {
+    panelEl.innerHTML = `<div class="ai-result-card">
+      <div class="ai-result-content">
+        <p style="color:var(--muted)"><span class="spinner" style="display:inline-block;width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;margin-right:6px;animation:spin .8s linear infinite"></span> ${t('aiGenerating')}</p>
+      </div>
+    </div>`;
+    return;
+  }
 
-    const copyAct = document.createElement('button');
-    copyAct.className = 'ai-result-action';
-    copyAct.textContent = t('aiCopy');
-    copyAct.addEventListener('click', async () => {
-      await navigator.clipboard.writeText(result);
-      copyAct.textContent = t('aiCopied');
-      setTimeout(() => copyAct.textContent = t('aiCopy'), 1200);
-    });
+  // Result state — build card
+  const card = document.createElement('div');
+  card.className = 'ai-result-card';
 
-    const regenAct = document.createElement('button');
-    regenAct.className = 'ai-result-action';
-    regenAct.textContent = t('aiRegen');
-    regenAct.addEventListener('click', () => {
-      delete currentAIResults[template];
-      runAI(template);
-    });
+  const header = document.createElement('div');
+  header.className = 'ai-result-header';
 
-    const delAct = document.createElement('button');
-    delAct.className = 'ai-result-action';
-    delAct.textContent = '×';
-    delAct.title = 'Remove';
-    delAct.addEventListener('click', () => {
-      delete currentAIResults[template];
-      renderAIResults();
-      if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
-    });
+  const lbl = document.createElement('span');
+  lbl.className = 'ai-result-label';
+  lbl.textContent = TEMPLATE_LABELS[template] || template;
 
-    actions.appendChild(copyAct);
-    actions.appendChild(regenAct);
-    actions.appendChild(delAct);
+  const actionsEl = document.createElement('div');
+  actionsEl.className = 'ai-result-actions';
 
-    header.appendChild(lbl);
-    header.appendChild(actions);
-
-    const content = document.createElement('div');
-    content.className = 'ai-result-content';
-    if (result === '__loading__') {
-      content.innerHTML = `<p style="color:var(--muted)"><span class="spinner" style="display:inline-block;width:10px;height:10px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;vertical-align:-1px;margin-right:6px;animation:spin .8s linear infinite"></span> ${t('aiGenerating')}</p>`;
-    } else {
-      content.innerHTML = renderMarkdown(result);
-    }
-
-    card.appendChild(header);
-    card.appendChild(content);
-    aiResultsEl.appendChild(card);
+  const copyAct = document.createElement('button');
+  copyAct.className = 'ai-result-action';
+  copyAct.textContent = t('aiCopy');
+  copyAct.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(result);
+    copyAct.textContent = t('aiCopied');
+    setTimeout(() => copyAct.textContent = t('aiCopy'), 1200);
   });
+
+  const regenAct = document.createElement('button');
+  regenAct.className = 'ai-result-action';
+  regenAct.textContent = t('aiRegen');
+  regenAct.addEventListener('click', () => {
+    delete currentAIResults[template];
+    runAI(template);
+  });
+
+  const delAct = document.createElement('button');
+  delAct.className = 'ai-result-action';
+  delAct.textContent = '×';
+  delAct.title = 'Remove';
+  delAct.addEventListener('click', () => {
+    delete currentAIResults[template];
+    renderAIPanel(template);
+    if (currentHistoryId !== null) updateHistoryEntry(currentHistoryId);
+  });
+
+  actionsEl.appendChild(copyAct);
+  actionsEl.appendChild(regenAct);
+  actionsEl.appendChild(delAct);
+  header.appendChild(lbl);
+  header.appendChild(actionsEl);
+
+  const content = document.createElement('div');
+  content.className = 'ai-result-content';
+  content.innerHTML = renderMarkdown(result);
+
+  card.appendChild(header);
+  card.appendChild(content);
+  panelEl.innerHTML = '';
+  panelEl.appendChild(card);
 }
 
-// Кнопки AI-toolbar
-aiSection.querySelectorAll('.ai-btn').forEach(btn => {
-  btn.addEventListener('click', () => runAI(btn.dataset.template));
-});
+// Kept for backward-compat calls (renderAIResults called from loadEntry, clearTranscript, etc.)
+function renderAIResults() {
+  renderAIPanel('summary');
+  renderAIPanel('actions');
+}
 
 // ── Chat with transcript ─────────────────────────────────────
 function renderChatMessages() {
@@ -4823,6 +4964,24 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Ctrl/Cmd + B — toggle sidebar
+  if (mod && (e.key === 'b' || e.key === 'B')) {
+    e.preventDefault();
+    const isCollapsed = sidebarEl ? sidebarEl.classList.contains('collapsed') : true;
+    setSidebarCollapsed(!isCollapsed);
+    return;
+  }
+
+  // Ctrl/Cmd + L — cycle recording language (Auto → EN → RU → UK → Auto)
+  if (mod && (e.key === 'l' || e.key === 'L') && !isRecording) {
+    e.preventDefault();
+    const langs = ['', 'en', 'ru', 'uk'];
+    const idx = langs.indexOf(langSel.value);
+    langSel.value = langs[(idx + 1) % langs.length];
+    langSel.dispatchEvent(new Event('change'));
+    return;
+  }
+
   // Ctrl/Cmd + D — переключение темы
   if (mod && (e.key === 'd' || e.key === 'D')) {
     e.preventDefault();
@@ -4951,6 +5110,11 @@ sb.auth.onAuthStateChange(async (event, session) => {
       await Promise.all([refreshHistory(), fetchProfile(), fetchWorkspace()]);
       console.log('[auth] history loaded, items:', _historyCache.length);
       renderHistory();
+      // PostHog: identify user and fire sign_in event
+      if (window.posthog) {
+        posthog.identify(session.user.id, { email });
+        if (event === 'SIGNED_IN') posthog.capture('sign_in', { method: session.user.app_metadata?.provider || 'unknown' });
+      }
     }
   } else {
     showLogin();
