@@ -763,6 +763,266 @@ def stripe_portal():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Workspace ──────────────────────────────────────────────────
+# Workspace = collaboration layer. Each user belongs to at most ONE workspace
+# (either as owner or as active member — not both, not multiple).
+# No shared billing: every member has their own plan/limits independently.
+#
+# Endpoints:
+#   GET  /api/workspace             — get current user's workspace (owner or member)
+#   POST /api/workspace             — create new workspace
+#   DELETE /api/workspace           — delete workspace (owner only)
+#   POST /api/workspace/invite      — invite member by email
+#   DELETE /api/workspace/members/<id> — remove member (owner only)
+#   POST /api/workspace/leave       — leave workspace (member only)
+#   POST /api/workspace/accept      — accept pending invitation (by current email)
+
+
+def _get_user_workspace(user_id: str, user_email: str | None = None) -> dict | None:
+    """Returns workspace info for a user (owner or active member), or None."""
+    # Check if user is owner of a workspace
+    rows = _sb_admin("workspaces", params={
+        "owner_id": f"eq.{user_id}", "select": "*", "limit": "1"
+    })
+    if rows:
+        ws = dict(rows[0])
+        ws["is_owner"] = True
+        ws["members"] = _sb_admin("workspace_members", params={
+            "workspace_id": f"eq.{ws['id']}", "select": "*", "order": "invited_at.asc"
+        })
+        return ws
+
+    # Check if user is active member
+    mem_rows = _sb_admin("workspace_members", params={
+        "user_id": f"eq.{user_id}", "status": "eq.active", "select": "workspace_id", "limit": "1"
+    })
+    if mem_rows:
+        ws_id = mem_rows[0]["workspace_id"]
+        ws_rows = _sb_admin("workspaces", params={"id": f"eq.{ws_id}", "select": "*"})
+        if ws_rows:
+            ws = dict(ws_rows[0])
+            ws["is_owner"] = False
+            ws["members"] = _sb_admin("workspace_members", params={
+                "workspace_id": f"eq.{ws_id}", "select": "*", "order": "invited_at.asc"
+            })
+            return ws
+
+    return None
+
+
+def _lookup_user_id_by_email(email: str) -> str | None:
+    """Looks up a registered user's ID by email via Supabase Admin API."""
+    if not SUPABASE_SERVICE_ROLE_KEY or not SUPABASE_URL:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/auth/v1/admin/users",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            },
+            params={"page": 1, "per_page": 1000},
+            timeout=5,
+        )
+        if r.status_code == 200:
+            for u in (r.json().get("users") or []):
+                if (u.get("email") or "").lower() == email.lower():
+                    return u.get("id")
+    except Exception as e:
+        print(f"[workspace] user lookup failed: {e}")
+    return None
+
+
+@app.route("/api/workspace", methods=["GET"])
+def workspace_get():
+    """Return current user's workspace (as owner or member)."""
+    ws = _get_user_workspace(g.user_id, g.user_email)
+    return jsonify({"workspace": ws})
+
+
+@app.route("/api/workspace", methods=["POST"])
+def workspace_create():
+    """Create a new workspace. User must not already belong to one."""
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    if len(name) > 64:
+        return jsonify({"error": "name too long (max 64 chars)"}), 400
+
+    existing = _get_user_workspace(g.user_id, g.user_email)
+    if existing:
+        return jsonify({"error": "You already belong to a workspace."}), 409
+
+    rows = _sb_admin("workspaces", method="POST", data={
+        "name": name, "owner_id": g.user_id,
+    })
+    if not rows:
+        return jsonify({"error": "failed to create workspace"}), 500
+
+    ws = dict(rows[0])
+    ws["is_owner"] = True
+    ws["members"] = []
+    return jsonify({"workspace": ws}), 201
+
+
+@app.route("/api/workspace", methods=["DELETE"])
+def workspace_delete():
+    """Delete workspace entirely. Owner only. Unshares all transcripts."""
+    ws_rows = _sb_admin("workspaces", params={
+        "owner_id": f"eq.{g.user_id}", "select": "id"
+    })
+    if not ws_rows:
+        return jsonify({"error": "You don't own a workspace."}), 404
+    ws_id = ws_rows[0]["id"]
+
+    # Unshare all transcripts that belonged to this workspace
+    try:
+        _sb_admin("transcripts", method="PATCH",
+                  params={"workspace_id": f"eq.{ws_id}"},
+                  data={"workspace_id": None, "visibility": "private"})
+    except Exception as e:
+        print(f"[workspace delete] unshare failed (non-fatal): {e}")
+
+    # Delete workspace — members cascade via FK
+    _sb_admin("workspaces", method="DELETE", params={"id": f"eq.{ws_id}"})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/workspace/invite", methods=["POST"])
+def workspace_invite():
+    """Invite a user by email. Owner only.
+
+    If the email belongs to an existing registered user → creates active member immediately.
+    If not registered yet → creates 'invited' row; they can accept via /api/workspace/accept.
+    """
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return jsonify({"error": "valid email required"}), 400
+
+    # Must be workspace owner
+    ws_rows = _sb_admin("workspaces", params={
+        "owner_id": f"eq.{g.user_id}", "select": "id,name"
+    })
+    if not ws_rows:
+        return jsonify({"error": "You must own a workspace to invite members."}), 403
+    ws_id = ws_rows[0]["id"]
+
+    # Can't invite yourself
+    if email == (g.user_email or "").lower():
+        return jsonify({"error": "You cannot invite yourself."}), 400
+
+    # Check if already a member/invited
+    existing = _sb_admin("workspace_members", params={
+        "workspace_id": f"eq.{ws_id}", "email": f"eq.{email}", "select": "id,status"
+    })
+    if existing:
+        st = existing[0].get("status")
+        if st == "active":
+            return jsonify({"error": "This user is already a member."}), 409
+        if st == "invited":
+            return jsonify({"error": "Invitation already sent to this email."}), 409
+
+    # Look up if this email belongs to a registered user
+    invited_user_id = _lookup_user_id_by_email(email)
+
+    # If user exists, check they don't already belong to another workspace
+    if invited_user_id:
+        their_ws = _get_user_workspace(invited_user_id)
+        if their_ws:
+            return jsonify({"error": "This user already belongs to a workspace."}), 409
+
+    # Create invite row
+    invite_data = {
+        "workspace_id": ws_id,
+        "email": email,
+        "role": "member",
+        "status": "active" if invited_user_id else "invited",
+        "invited_by": g.user_id,
+    }
+    if invited_user_id:
+        invite_data["user_id"] = invited_user_id
+        invite_data["joined_at"] = datetime.utcnow().isoformat()
+
+    rows = _sb_admin("workspace_members", method="POST", data=invite_data)
+    if not rows:
+        return jsonify({"error": "failed to create invite"}), 500
+
+    status = invite_data["status"]
+    return jsonify({"member": rows[0], "status": status}), 201
+
+
+@app.route("/api/workspace/members/<member_id>", methods=["DELETE"])
+def workspace_remove_member(member_id):
+    """Remove a member from the workspace. Owner only."""
+    ws_rows = _sb_admin("workspaces", params={
+        "owner_id": f"eq.{g.user_id}", "select": "id"
+    })
+    if not ws_rows:
+        return jsonify({"error": "You must own a workspace to remove members."}), 403
+    ws_id = ws_rows[0]["id"]
+
+    mem_rows = _sb_admin("workspace_members", params={
+        "id": f"eq.{member_id}", "workspace_id": f"eq.{ws_id}", "select": "id"
+    })
+    if not mem_rows:
+        return jsonify({"error": "Member not found in your workspace."}), 404
+
+    _sb_admin("workspace_members", method="DELETE", params={"id": f"eq.{member_id}"})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/workspace/leave", methods=["POST"])
+def workspace_leave():
+    """Leave workspace. Member only (owner must delete instead)."""
+    rows = _sb_admin("workspace_members", params={
+        "user_id": f"eq.{g.user_id}", "status": "eq.active", "select": "id"
+    })
+    if not rows:
+        return jsonify({"error": "You are not a member of any workspace."}), 404
+
+    _sb_admin("workspace_members", method="DELETE", params={"id": f"eq.{rows[0]['id']}"})
+    return jsonify({"ok": True})
+
+
+@app.route("/api/workspace/accept", methods=["POST"])
+def workspace_accept():
+    """Accept a pending invitation matched by current user's email.
+
+    Called when user logs in and might have a pending invite.
+    Returns {has_invite: false} if none found — safe to call on every login.
+    """
+    email = (g.user_email or "").lower()
+    if not email:
+        return jsonify({"error": "email not in token"}), 400
+
+    rows = _sb_admin("workspace_members", params={
+        "email": f"eq.{email}", "status": "eq.invited", "select": "*", "limit": "1"
+    })
+    if not rows:
+        return jsonify({"has_invite": False})
+
+    member = rows[0]
+
+    # Check if user already belongs to another workspace
+    existing = _get_user_workspace(g.user_id, g.user_email)
+    if existing:
+        return jsonify({"error": "You already belong to a workspace."}), 409
+
+    # Activate the invite
+    _sb_admin("workspace_members", method="PATCH",
+              params={"id": f"eq.{member['id']}"},
+              data={
+                  "user_id": g.user_id,
+                  "status": "active",
+                  "joined_at": datetime.utcnow().isoformat(),
+              })
+
+    ws = _get_user_workspace(g.user_id, g.user_email)
+    return jsonify({"has_invite": True, "workspace": ws})
+
+
 @app.route("/api/stripe/webhook", methods=["POST"])
 def stripe_webhook():
     """Stripe отправляет сюда события подписок. Обновляем план в Supabase."""
