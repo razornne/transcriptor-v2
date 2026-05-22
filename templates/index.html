@@ -1153,6 +1153,14 @@
     }
     .sidebar-item:hover .sidebar-item-del { opacity: 1; }
     .sidebar-item-del:hover { color: var(--danger) !important; }
+    /* Workspace share button — sits left of the delete button */
+    .sidebar-item-share {
+      position: absolute; right: 28px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; padding: 2px 4px;
+      font-size: 12px; line-height: 1; cursor: pointer;
+      opacity: 0; transition: opacity .12s;
+    }
+    .sidebar-item:hover .sidebar-item-share { opacity: 1; }
 
     .sidebar-empty {
       font-size: 12.5px; color: var(--dim);
@@ -1475,6 +1483,13 @@
     <input id="historySearch" class="sidebar-search" type="text" data-i18n-ph="searchPh" placeholder="Search transcripts…">
   </div>
   <div class="sidebar-scroll">
+    <!-- Workspace Mine/Team filter — hidden until user joins a workspace -->
+    <div id="wsFilterBar" style="display:none;padding:0 12px 8px">
+      <div class="billing-toggle" id="wsFilterToggle" style="width:100%;justify-content:stretch">
+        <button class="billing-opt active" id="wsFilterMine" data-wsfilter="mine" data-i18n="wsMine" style="flex:1">Mine</button>
+        <button class="billing-opt" id="wsFilterTeam" data-wsfilter="team" data-i18n="wsTeam" style="flex:1">Team</button>
+      </div>
+    </div>
     <div class="history-tag-filters" id="historyTagFilters"></div>
     <div id="historyItems"></div>
   </div>
@@ -1743,6 +1758,51 @@
       </div>
     </div>
 
+    <!-- Workspace section — content set by renderWorkspaceSettings() -->
+    <div class="settings-section" id="workspaceSection">
+      <div class="settings-section-title" data-i18n="settingsWorkspace">Workspace</div>
+
+      <!-- No workspace state -->
+      <div id="wsNoWorkspace">
+        <p class="settings-help-text" data-i18n="wsHint" style="margin:0 0 10px;font-size:13px;color:var(--muted)">Invite teammates to collaborate on recordings.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <input id="wsCreateName" class="settings-input" placeholder="Workspace name" maxlength="64"
+                 style="flex:1;min-width:140px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);font-size:13px" />
+          <button id="wsCreateBtn" class="btn-ghost" style="font-size:12px;padding:6px 14px;white-space:nowrap"
+                  data-i18n="wsCreateBtn">Create workspace</button>
+        </div>
+        <button id="wsCheckInviteBtn" class="settings-link-btn"
+                style="background:none;border:none;cursor:pointer;color:var(--cta);font-size:12px;padding:0"
+                data-i18n="wsCheckInviteBtn">Check for pending invitation →</button>
+      </div>
+
+      <!-- In workspace state (owner or member) -->
+      <div id="wsInWorkspace" style="display:none">
+        <div class="settings-row">
+          <span class="settings-row-label" data-i18n="wsNameLabel">Name</span>
+          <span class="settings-row-value" id="wsNameDisplay">—</span>
+        </div>
+        <!-- Members list rendered by JS -->
+        <div id="wsMembersList" style="margin-top:8px"></div>
+        <!-- Invite row (owner only) -->
+        <div id="wsInviteRow" style="display:none;margin-top:10px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input id="wsInviteEmail" class="settings-input" type="email" placeholder="colleague@example.com"
+                   style="flex:1;min-width:160px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);font-size:13px" />
+            <button id="wsInviteBtn" class="btn-ghost" style="font-size:12px;padding:6px 14px;white-space:nowrap"
+                    data-i18n="wsInviteBtn">Invite</button>
+          </div>
+        </div>
+        <!-- Leave (member) / Delete (owner) -->
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+          <button id="wsLeaveBtn" class="settings-danger-btn" style="font-size:12px;display:none"
+                  data-i18n="wsLeaveBtn">Leave workspace</button>
+          <button id="wsDeleteBtn" class="settings-danger-btn" style="font-size:12px;display:none"
+                  data-i18n="wsDeleteBtn">Delete workspace</button>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-section">
       <div class="settings-section-title" data-i18n="settingsPreferences">Preferences</div>
       <div class="settings-row">
@@ -1910,6 +1970,22 @@ const T = {
     settingsEscHint: `Press ${_KBD('Esc')} to close`,
     settingsThemeLight: 'Light',
     settingsThemeDark: 'Dark',
+    // Workspace
+    settingsWorkspace: 'Workspace',
+    wsHint: 'Invite teammates to collaborate on recordings.',
+    wsCreateBtn: 'Create workspace',
+    wsCheckInviteBtn: 'Check for pending invitation →',
+    wsNameLabel: 'Name',
+    wsInviteBtn: 'Invite',
+    wsLeaveBtn: 'Leave workspace',
+    wsDeleteBtn: 'Delete workspace',
+    wsRoleOwner: 'owner',
+    wsRemoveBtn: 'Remove',
+    wsStatusInvited: 'invited',
+    wsShareTitle: 'Share with workspace',
+    wsUnshareTitle: 'Visible to workspace — click to make private',
+    wsMine: 'Mine',
+    wsTeam: 'Team',
     // Plans
     planFreeF1: '60 min/month',
     planFreeF2: 'Transcription only',
@@ -2059,6 +2135,22 @@ const T = {
     settingsEscHint: `Натисніть ${_KBD('Esc')} щоб закрити`,
     settingsThemeLight: 'Світла',
     settingsThemeDark: 'Темна',
+    // Workspace
+    settingsWorkspace: 'Workspace',
+    wsHint: 'Запросіть команду для спільної роботи з записами.',
+    wsCreateBtn: 'Створити workspace',
+    wsCheckInviteBtn: 'Перевірити запрошення →',
+    wsNameLabel: 'Назва',
+    wsInviteBtn: 'Запросити',
+    wsLeaveBtn: 'Покинути workspace',
+    wsDeleteBtn: 'Видалити workspace',
+    wsRoleOwner: 'власник',
+    wsRemoveBtn: 'Видалити',
+    wsStatusInvited: 'запрошено',
+    wsShareTitle: 'Поділитись у workspace',
+    wsUnshareTitle: 'Відкрито для workspace — клікніть, щоб зробити приватним',
+    wsMine: 'Мої',
+    wsTeam: 'Команда',
     // Plans
     planFreeF1: '60 хв/місяць',
     planFreeF2: 'Тільки транскрипція',
@@ -2201,6 +2293,11 @@ let currentPlan         = 'free';
 let currentMinutesUsed  = 0;
 let currentMinutesLimit = 60;
 
+// Workspace — подгружается через fetchWorkspace() после логина.
+// null = пользователь не состоит ни в одном workspace.
+let currentWorkspace  = null;  // {id, name, is_owner, members: [...]}
+let workspaceFilter   = 'mine'; // 'mine' | 'team'
+
 // Обёртка fetch — автоматически добавляет Authorization: Bearer <jwt>.
 // Используется для всех запросов к /api/*.
 async function authFetch(url, opts = {}) {
@@ -2281,6 +2378,229 @@ function _updatePlanUI() {
   // Show "Manage billing" row only for paid users (they have a Stripe subscription)
   const manageSubRow = document.getElementById('manageSubRow');
   if (manageSubRow) manageSubRow.style.display = isFree ? 'none' : '';
+}
+
+// ── Workspace ──────────────────────────────────────────────────
+
+async function fetchWorkspace() {
+  if (!currentUser) { currentWorkspace = null; return; }
+  try {
+    const res = await authFetch(`${API_BASE}/api/workspace`);
+    if (!res.ok) return;
+    const d = await res.json();
+    currentWorkspace = d.workspace || null;
+  } catch (e) {
+    console.warn('[workspace] fetch failed:', e);
+    currentWorkspace = null;
+  }
+  // Auto-accept pending invite (safe to call every login)
+  if (!currentWorkspace) {
+    try {
+      const res2 = await authFetch(`${API_BASE}/api/workspace/accept`, { method: 'POST' });
+      if (res2.ok) {
+        const d2 = await res2.json();
+        if (d2.has_invite && d2.workspace) {
+          currentWorkspace = d2.workspace;
+          const wname = d2.workspace.name || 'workspace';
+          alert(`You joined workspace: ${wname}`);
+        }
+      }
+    } catch (_) {}
+  }
+  _updateWorkspaceFilterBar();
+}
+
+function _updateWorkspaceFilterBar() {
+  const bar = document.getElementById('wsFilterBar');
+  if (!bar) return;
+  bar.style.display = currentWorkspace ? '' : 'none';
+  // Sync button active states
+  ['Mine', 'Team'].forEach(label => {
+    const btn = document.getElementById('wsFilter' + label);
+    if (btn) btn.classList.toggle('active', workspaceFilter === label.toLowerCase());
+  });
+}
+
+function renderWorkspaceSettings() {
+  const noWsEl = document.getElementById('wsNoWorkspace');
+  const inWsEl = document.getElementById('wsInWorkspace');
+  if (!noWsEl || !inWsEl) return;
+
+  if (!currentWorkspace) {
+    noWsEl.style.display = '';
+    inWsEl.style.display = 'none';
+    return;
+  }
+
+  noWsEl.style.display = 'none';
+  inWsEl.style.display = '';
+
+  const nameEl = document.getElementById('wsNameDisplay');
+  if (nameEl) nameEl.textContent = currentWorkspace.name;
+
+  const members = currentWorkspace.members || [];
+  const listEl = document.getElementById('wsMembersList');
+  if (listEl) {
+    listEl.innerHTML = '';
+    // Owner row
+    const ownerRow = document.createElement('div');
+    ownerRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;color:var(--muted)';
+    ownerRow.innerHTML = `<span style="flex:1">👑 ${currentUser?.email || 'you'}</span><span style="font-size:11px;color:var(--muted)">${t('wsRoleOwner')}</span>`;
+    listEl.appendChild(ownerRow);
+    // Member rows
+    members.forEach(m => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px';
+      const statusIcon = m.status === 'active' ? '👤' : '⏳';
+      const statusLabel = m.status === 'invited' ? ` <span style="font-size:11px;color:var(--muted)">(${t('wsStatusInvited')})</span>` : '';
+      row.innerHTML = `<span style="flex:1">${statusIcon} ${m.email}${statusLabel}</span>`;
+      if (currentWorkspace.is_owner) {
+        const rmBtn = document.createElement('button');
+        rmBtn.className = 'btn-ghost';
+        rmBtn.style.cssText = 'font-size:11px;padding:2px 8px;color:var(--danger,#e44)';
+        rmBtn.textContent = t('wsRemoveBtn');
+        rmBtn.addEventListener('click', async () => {
+          if (!confirm(`Remove ${m.email}?`)) return;
+          try {
+            const res = await authFetch(`${API_BASE}/api/workspace/members/${m.id}`, { method: 'DELETE' });
+            const d = await res.json();
+            if (res.ok) {
+              currentWorkspace.members = (currentWorkspace.members || []).filter(x => x.id !== m.id);
+              renderWorkspaceSettings();
+            } else {
+              alert(d.error || 'Failed');
+            }
+          } catch (err) { alert('Error: ' + err.message); }
+        });
+        row.appendChild(rmBtn);
+      }
+      listEl.appendChild(row);
+    });
+  }
+
+  const inviteRow = document.getElementById('wsInviteRow');
+  if (inviteRow) inviteRow.style.display = currentWorkspace.is_owner ? '' : 'none';
+  const leaveBtn  = document.getElementById('wsLeaveBtn');
+  const deleteBtn = document.getElementById('wsDeleteBtn');
+  if (leaveBtn)  leaveBtn.style.display  = currentWorkspace.is_owner ? 'none' : '';
+  if (deleteBtn) deleteBtn.style.display = currentWorkspace.is_owner ? '' : 'none';
+}
+
+// Workspace button handlers (wired after DOM ready, below settings modal init)
+function _initWorkspaceHandlers() {
+  document.getElementById('wsCreateBtn')?.addEventListener('click', async () => {
+    const nameInput = document.getElementById('wsCreateName');
+    const name = (nameInput?.value || '').trim();
+    if (!name) { nameInput?.focus(); return; }
+    try {
+      const res = await authFetch(`${API_BASE}/api/workspace`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const d = await res.json();
+      if (res.ok) {
+        currentWorkspace = d.workspace;
+        if (nameInput) nameInput.value = '';
+        renderWorkspaceSettings();
+        _updateWorkspaceFilterBar();
+      } else {
+        alert(d.error || 'Failed to create workspace');
+      }
+    } catch (err) { alert('Error: ' + err.message); }
+  });
+
+  document.getElementById('wsInviteBtn')?.addEventListener('click', async () => {
+    const emailInput = document.getElementById('wsInviteEmail');
+    const email = (emailInput?.value || '').trim();
+    if (!email) { emailInput?.focus(); return; }
+    try {
+      const res = await authFetch(`${API_BASE}/api/workspace/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const d = await res.json();
+      if (res.ok) {
+        if (emailInput) emailInput.value = '';
+        await fetchWorkspace();
+        renderWorkspaceSettings();
+        const msg = d.status === 'active'
+          ? `${email} added to workspace!`
+          : `Invitation saved for ${email}. They'll see it on next login.`;
+        alert(msg);
+      } else {
+        alert(d.error || 'Failed to invite');
+      }
+    } catch (err) { alert('Error: ' + err.message); }
+  });
+
+  document.getElementById('wsLeaveBtn')?.addEventListener('click', async () => {
+    if (!confirm('Leave this workspace? You will lose access to shared recordings.')) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/workspace/leave`, { method: 'POST' });
+      const d = await res.json();
+      if (res.ok) {
+        currentWorkspace = null;
+        workspaceFilter = 'mine';
+        renderWorkspaceSettings();
+        _updateWorkspaceFilterBar();
+        await refreshHistory();
+        renderHistory();
+      } else {
+        alert(d.error || 'Failed to leave workspace');
+      }
+    } catch (err) { alert('Error: ' + err.message); }
+  });
+
+  document.getElementById('wsDeleteBtn')?.addEventListener('click', async () => {
+    if (!confirm('Delete workspace? This will unshare all recordings and remove all members.')) return;
+    try {
+      const res = await authFetch(`${API_BASE}/api/workspace`, { method: 'DELETE' });
+      const d = await res.json();
+      if (res.ok) {
+        currentWorkspace = null;
+        workspaceFilter = 'mine';
+        renderWorkspaceSettings();
+        _updateWorkspaceFilterBar();
+        await refreshHistory();
+        renderHistory();
+      } else {
+        alert(d.error || 'Failed to delete workspace');
+      }
+    } catch (err) { alert('Error: ' + err.message); }
+  });
+
+  document.getElementById('wsCheckInviteBtn')?.addEventListener('click', async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/workspace/accept`, { method: 'POST' });
+      const d = await res.json();
+      if (res.ok && d.has_invite) {
+        currentWorkspace = d.workspace;
+        renderWorkspaceSettings();
+        _updateWorkspaceFilterBar();
+        await refreshHistory();
+        renderHistory();
+        alert('You joined workspace: ' + (d.workspace?.name || ''));
+      } else if (res.ok && !d.has_invite) {
+        alert('No pending invitation found for your email.');
+      } else {
+        alert(d.error || 'Failed to check invitations');
+      }
+    } catch (err) { alert('Error: ' + err.message); }
+  });
+
+  // Mine/Team filter toggle buttons
+  document.getElementById('wsFilterMine')?.addEventListener('click', () => {
+    workspaceFilter = 'mine';
+    _updateWorkspaceFilterBar();
+    renderHistory();
+  });
+  document.getElementById('wsFilterTeam')?.addEventListener('click', () => {
+    workspaceFilter = 'team';
+    _updateWorkspaceFilterBar();
+    renderHistory();
+  });
 }
 
 // ── Feature flags ─────────────────────────────────────────────
@@ -3747,6 +4067,7 @@ function getHistory() { return _historyCache; }
 function _rowToEntry(row) {
   return {
     id:           row.id,
+    userId:       row.user_id,
     date:         row.created_at,
     lang:         row.language || 'auto',
     segments:     row.segments || [],
@@ -3757,6 +4078,8 @@ function _rowToEntry(row) {
     aiResults:    row.ai_results || {},
     chatHistory:  row.chat_history || [],
     tags:         row.tags || [],
+    workspaceId:  row.workspace_id || null,
+    visibility:   row.visibility || 'private',
   };
 }
 
@@ -3921,8 +4244,19 @@ function formatDuration(segments) {
 }
 
 function filterHistory(history, query) {
-  // Сначала фильтр по активному тегу
+  // Workspace Mine/Team filter
   let result = history;
+  if (currentWorkspace) {
+    if (workspaceFilter === 'team') {
+      // Team: all workspace-shared transcripts (own + others)
+      result = result.filter(e => e.visibility === 'workspace');
+    } else {
+      // Mine: own transcripts only
+      result = result.filter(e => e.userId === currentUser?.id);
+    }
+  }
+
+  // Сначала фильтр по активному тегу
   if (activeTagFilter) {
     result = result.filter(entry => (entry.tags || []).includes(activeTagFilter));
   }
@@ -4044,6 +4378,35 @@ function renderHistory() {
 
       item.appendChild(titleEl);
       item.appendChild(metaEl);
+
+      // Workspace share toggle — own transcripts only, when in a workspace
+      if (currentWorkspace && entry.userId === currentUser?.id) {
+        const isShared = entry.visibility === 'workspace';
+        const shareBtn = document.createElement('button');
+        shareBtn.className = 'sidebar-item-share';
+        shareBtn.title = isShared ? t('wsUnshareTitle') : t('wsShareTitle');
+        shareBtn.textContent = isShared ? '👥' : '🔒';
+        shareBtn.addEventListener('click', async e2 => {
+          e2.stopPropagation();
+          const newVis = entry.visibility === 'workspace' ? 'private' : 'workspace';
+          try {
+            await _sbFetch(`/transcripts?id=eq.${entry.id}`, {
+              method: 'PATCH',
+              body: JSON.stringify({
+                visibility: newVis,
+                workspace_id: newVis === 'workspace' ? currentWorkspace.id : null,
+              }),
+            });
+            entry.visibility = newVis;
+            entry.workspaceId = newVis === 'workspace' ? currentWorkspace.id : null;
+            renderHistory();
+          } catch (err) {
+            console.error('[workspace share] failed:', err);
+          }
+        });
+        item.appendChild(shareBtn);
+      }
+
       item.appendChild(del);
 
       item.addEventListener('click', () => {
@@ -4585,7 +4948,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
     if (settingsEmailEl) settingsEmailEl.textContent = email;
     // Подгружаем историю юзера из БД при логине / refresh page
     if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-      await Promise.all([refreshHistory(), fetchProfile()]);
+      await Promise.all([refreshHistory(), fetchProfile(), fetchWorkspace()]);
       console.log('[auth] history loaded, items:', _historyCache.length);
       renderHistory();
     }
@@ -4595,6 +4958,9 @@ sb.auth.onAuthStateChange(async (event, session) => {
     signOutBtn.style.display = 'none';
     document.getElementById('sidebarUser').style.display = 'none';
     _historyCache = [];
+    currentWorkspace = null;
+    workspaceFilter = 'mine';
+    _updateWorkspaceFilterBar();
     renderHistory();
   }
 });
@@ -4605,11 +4971,13 @@ function openSettingsModal() {
   const email = currentUser?.email || '';
   document.getElementById('settingsEmail').textContent = email || '—';
   _updatePlanUI();
+  renderWorkspaceSettings();
   settingsModal.classList.remove('hidden');
 }
 function closeSettingsModal() { settingsModal.classList.add('hidden'); }
 
 document.getElementById('sidebarSettingsBtn').addEventListener('click', openSettingsModal);
+_initWorkspaceHandlers();
 
 // ── Sidebar toggle ─────────────────────────────────────────────
 const sidebarEl   = document.getElementById('sidebar');
