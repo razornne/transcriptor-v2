@@ -2128,6 +2128,7 @@ const T = {
     upgradeSeePlans: 'See plans →',
     upgradeLimitMsg: 'You\'ve reached your {limit} min/month limit.',
     upgradeAIMsg: 'AI tools (Summary, Actions) require a Pro plan.',
+    recordingLowMinsWarning: 'Only {remaining} min left this month. Recording will stop when the limit is reached. Start anyway?',
     // Processing screen
     procPill: 'PROCESSING',
     procFooterTab: 'safe to leave this tab',
@@ -2302,6 +2303,7 @@ const T = {
     upgradeSeePlans: 'Дивитись плани →',
     upgradeLimitMsg: 'Ви досягли ліміту {limit} хв/місяць.',
     upgradeAIMsg: 'ШІ-інструменти (Резюме, Завдання) потребують плану Pro.',
+    recordingLowMinsWarning: 'Залишилось лише {remaining} хв на цей місяць. Запис зупиниться при досягненні ліміту. Почати все одно?',
     // Processing screen
     procPill: 'ОБРОБКА',
     procFooterTab: 'можна закрити цю вкладку',
@@ -3882,6 +3884,25 @@ startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
   setStatus(t('statusPermissions'), 'working');
 
+  // Check plan limit before requesting any permissions
+  if (currentMinutesLimit > 0) {
+    const remaining = Math.floor(currentMinutesLimit - currentMinutesUsed);
+    if (remaining <= 0) {
+      startBtn.disabled = false;
+      setStatus(t('statusReady'));
+      if (window.posthog) posthog.capture('upgrade_prompt_shown', { reason: 'minutes_limit' });
+      showUpgradePrompt(tFmt('upgradeLimitMsg', { limit: currentMinutesLimit }));
+      return;
+    }
+    if (remaining <= 30) {
+      if (!confirm(tFmt('recordingLowMinsWarning', { remaining }))) {
+        startBtn.disabled = false;
+        setStatus(t('statusReady'));
+        return;
+      }
+    }
+  }
+
   // Предупреждаем если на батарее с низким зарядом
   const batteryWarning = await checkBatteryWarning();
   if (batteryWarning) {
@@ -4129,7 +4150,7 @@ function showUpgradePrompt(reason) {
 
   const box = document.createElement('div');
   box.id = 'upgradePrompt';
-  box.style.cssText = 'background:var(--surface);border:1px solid var(--accent);border-radius:10px;padding:16px 20px;margin-top:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap';
+  box.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:10px;padding:16px 20px;margin-top:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;box-shadow:0 2px 10px rgba(0,0,0,.08)';
 
   const txt = document.createElement('div');
   txt.style.cssText = 'flex:1;min-width:0';
