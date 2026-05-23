@@ -31,6 +31,11 @@
       api_host: window.__POSTHOG_API_HOST__,
       ui_host:  window.__POSTHOG_UI_HOST__,
       person_profiles: 'identified_only',
+      session_recording: {
+        maskAllInputs: true,
+        // Block transcript and AI result content from session replays (privacy)
+        blockSelector: '#transcript, .ai-result-content',
+      },
     });
   </script>
 
