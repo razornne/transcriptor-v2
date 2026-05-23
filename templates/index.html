@@ -513,6 +513,7 @@
       animation: spin .8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeInUp { from { opacity:0; transform:translateX(-50%) translateY(8px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
 
     .ai-template-select {
       padding: 8px 12px; font-size: 12px; font-weight: 500;
@@ -3611,12 +3612,15 @@ async function submitJob(url, body, isFormData = false) {
     opts.body = JSON.stringify(body);
   }
   const res = await authFetch(url, opts);
-  const data = await safeJson(res);
+  // Check 402 BEFORE safeJson — a non-JSON body (proxy error page) would throw
+  // from safeJson and mask upgradeRequired, showing a generic error instead of upgrade prompt
   if (res.status === 402) {
-    const err = new Error(data.error || 'plan limit reached');
+    const err = new Error('plan limit reached');
     err.upgradeRequired = true;
+    try { const d = await res.json(); if (d?.error) err.message = d.error; } catch {}
     throw err;
   }
+  const data = await safeJson(res);
   if (!res.ok) throw new Error(data.error || 'submit failed');
   if (!data.job_id) throw new Error('expected job_id in response');
   return data.job_id;
@@ -4349,15 +4353,96 @@ async function updateHistoryEntry(id) {
   renderHistory();
 }
 
+let _pendingDelete = null;
+
 async function deleteFromHistory(id) {
   if (!currentUser || !id) return;
-  try {
-    await _sbFetch(`/transcripts?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' });
-  } catch (e) {
-    console.error('[history] delete failed:', e);
-  }
-  await refreshHistory();
+  const idx = _historyCache.findIndex(e => e.id === id);
+  if (idx === -1) return;
+  const entry = _historyCache[idx];
+
+  // Remove from cache immediately — instant UI feedback
+  _historyCache.splice(idx, 1);
   renderHistory();
+
+  // If another delete was pending, fire it immediately before starting new one
+  if (_pendingDelete) {
+    clearTimeout(_pendingDelete.timer);
+    const prevId = _pendingDelete.id;
+    _pendingDelete = null;
+    _sbFetch(`/transcripts?id=eq.${encodeURIComponent(prevId)}`, { method: 'DELETE' })
+      .catch(e => console.error('[history] delete failed:', e));
+  }
+
+  // Actual DB delete fires after 7s unless user hits Undo
+  _pendingDelete = {
+    id,
+    entry,
+    timer: setTimeout(async () => {
+      _pendingDelete = null;
+      try {
+        await _sbFetch(`/transcripts?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' });
+      } catch (e) {
+        console.error('[history] delete failed:', e);
+      }
+    }, 7000),
+  };
+  showUndoToast(entry.title || 'Transcript');
+}
+
+function showUndoToast(label) {
+  const existing = document.getElementById('undoToast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'undoToast';
+  toast.style.cssText = [
+    'position:fixed;bottom:24px;left:50%;transform:translateX(-50%)',
+    'background:var(--text);color:var(--bg)',
+    'padding:11px 16px;border-radius:8px',
+    'display:flex;align-items:center;gap:12px',
+    'font-size:13px;z-index:9999',
+    'box-shadow:0 4px 16px rgba(0,0,0,.3)',
+    'animation:fadeInUp .2s ease;white-space:nowrap',
+  ].join(';');
+
+  const displayLabel = (label || 'Transcript').slice(0, 40);
+  const msg = document.createElement('span');
+  msg.textContent = `"${displayLabel}" deleted`;
+
+  const undoBtn = document.createElement('button');
+  undoBtn.textContent = 'Undo';
+  undoBtn.style.cssText = 'background:none;border:none;color:var(--accent);font-weight:700;cursor:pointer;font-size:13px;padding:0;text-decoration:underline';
+  undoBtn.addEventListener('click', () => {
+    if (_pendingDelete) {
+      clearTimeout(_pendingDelete.timer);
+      _historyCache.unshift(_pendingDelete.entry);
+      _pendingDelete = null;
+      renderHistory();
+    }
+    toast.remove();
+  });
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '×';
+  closeBtn.style.cssText = 'background:none;border:none;color:inherit;opacity:.55;cursor:pointer;font-size:17px;line-height:1;padding:0 0 0 4px';
+  closeBtn.addEventListener('click', () => {
+    if (_pendingDelete) {
+      clearTimeout(_pendingDelete.timer);
+      const pendingId = _pendingDelete.id;
+      _pendingDelete = null;
+      _sbFetch(`/transcripts?id=eq.${encodeURIComponent(pendingId)}`, { method: 'DELETE' })
+        .catch(e => console.error('[history] delete failed:', e));
+    }
+    toast.remove();
+  });
+
+  toast.appendChild(msg);
+  toast.appendChild(undoBtn);
+  toast.appendChild(closeBtn);
+  document.body.appendChild(toast);
+
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 7000);
 }
 
 async function clearHistory() {
@@ -4543,7 +4628,25 @@ function renderHistory() {
       del.className = 'sidebar-item-del';
       del.title = 'Delete';
       del.textContent = '×';
-      del.addEventListener('click', e => { e.stopPropagation(); deleteFromHistory(entry.id); });
+      del.addEventListener('click', e => {
+        e.stopPropagation();
+        if (del.dataset.confirming) {
+          clearTimeout(del._confirmTimer);
+          delete del.dataset.confirming;
+          del.textContent = '×';
+          del.style.color = '';
+          deleteFromHistory(entry.id);
+        } else {
+          del.dataset.confirming = '1';
+          del.textContent = 'Delete?';
+          del.style.color = '#e55';
+          del._confirmTimer = setTimeout(() => {
+            del.textContent = '×';
+            del.style.color = '';
+            delete del.dataset.confirming;
+          }, 3000);
+        }
+      });
 
       item.appendChild(titleEl);
       item.appendChild(metaEl);
