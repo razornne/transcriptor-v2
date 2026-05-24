@@ -15,29 +15,12 @@
 
 **Сложность:** ~1-2 часа.
 
-### Publish OAuth consent screen
-**Зачем:** сейчас Google login только для добавленных test users (max 100). Чтобы любой Google-юзер мог войти — нужно опубликовать app.
-
-**Требования:**
-- Privacy Policy URL (страница в landing)
-- Terms of Service URL (страница в landing)
-- Возможно verification от Google (sensitive scopes у нас нет — должно пройти автоматом)
-
-**Сложность:** ~1-2 часа (большая часть — написать копи для Privacy/Terms).
-
 ### Mobile responsive polish
 **Зачем:** базовый mobile sweep сделан, но визуально не идеально. Юзеры на iPhone/Android должны получить нормальный экспириенс.
 
 **Как:** реальное тестирование на телефоне, точечные фиксы CSS под виды боли. Особенно — hero, app mockup, pricing на узких экранах.
 
 **Сложность:** ~2-4 часа.
-
-### Cache headers на Modal HTML
-**Зачем:** Vercel может кэшировать `/app` HTML с Modal на edge. Когда деплою Modal — юзеры видят старую версию.
-
-**Как:** `Cache-Control: no-cache, max-age=0` на Flask response для HTML.
-
-**Сложность:** 5 минут.
 
 ---
 
@@ -161,6 +144,15 @@ LLM авто-генерит 2-4 тега категории (sales / hiring / br
 ---
 
 ## 📝 Done so far (changelog highlights)
+
+### Analytics + UX polish (2026-05)
+- ✅ PostHog Session Replay включён + privacy masking (`maskAllInputs`, `blockSelector` на `.transcript` и `.ai-result-content`) — тексты созвонов не пишутся в replay
+- ✅ PostHog dashboards настроены: Activation funnel, Retention (weekly), Free→Paid conversion funnel, Skriptly Operations dashboard
+- ✅ Upgrade prompt надёжность: 402 проверяется до `safeJson` — prompt гарантированно показывается даже при нестандартном теле ответа
+- ✅ Проверка лимита до записи: кнопка Start сразу блокируется если лимит исчерпан; предупреждение если осталось ≤30 мин
+- ✅ Delete с undo toast: двойное подтверждение (first click → "Delete?" на 3с), затем 7-секундный undo toast — реальный DELETE в Supabase идёт только после таймера
+- ✅ Publish OAuth consent screen + Privacy Policy / Terms of Service страницы на лендинге — Google login открыт для всех
+- ✅ Cache headers на Modal HTML (`Cache-Control: no-cache`) — Vercel не кеширует старый `/app`
 
 ### Stage 2C — Landing + production domain (just shipped)
 - ✅ Next.js 15 лендинг на `skriptly.io` (Vercel), порт из Claude Design прототипа
