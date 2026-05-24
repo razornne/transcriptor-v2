@@ -70,20 +70,36 @@ Supabase Postgres
 
 ---
 
+## Планы и биллинг
+
+| План | Цена | Минуты/мес | Диаризация | AI tools |
+|------|------|-----------|-----------|---------|
+| **Free** | $0 | 60 мин | ❌ | ❌ |
+| **Pro** | $15/мес | 600 мин | ✅ | ✅ |
+| **Max** | $29/мес | 2000 мин | ✅ | ✅ + Best Quality (Whisper large-v3) |
+
+Минуты считаются по реальной длительности аудио. Сбрасываются 1-го числа каждого месяца.
+Биллинг через Stripe. Подробнее — см. **[BILLING.md](./BILLING.md)**.
+
+---
+
 ## Что отличается от v1
 
 | | v1 | v2 |
 |---|---|---|
-| Whisper | OpenAI API | Modal A10G (large-v3-turbo) |
-| LLM | OpenAI API | Modal A10G (Qwen2.5-7B-Instruct) |
-| Диаризация | ❌ | ✅ pyannote-3.1 + word alignment |
-| Аутентификация | ❌ | Supabase Auth (Google + magic link) |
+| Whisper | OpenAI API | Modal A10G (large-v3-turbo + large-v3) |
+| LLM | OpenAI API | Qwen2.5-7B (title) + Gemini 2.5 Flash/Pro |
+| STT correction | ❌ | ✅ Gemini 2.5 Flash (world knowledge + boundary fix) |
+| Диаризация | ❌ | ✅ pyannote-3.1 + word-level alignment |
+| Авто-словарь | ❌ | ✅ авто-обучается из Gemini corrections |
+| Аутентификация | ❌ | ✅ Supabase Auth (Google + magic link) |
 | Хранение истории | localStorage | Supabase Postgres (sync между устройствами) |
 | Хостинг | Railway | Modal serverless (pay-per-use, idle = $0) |
+| Лендинг | ❌ | ✅ Next.js на skriptly.io (Vercel) |
+| Аналитика | ❌ | ✅ PostHog (events + funnels + session replay) |
+| Биллинг | ❌ | ✅ Stripe (Pro / Max подписки) |
 | Стоимость на час аудио | ~$0.30 | ~$0.05-0.10 |
 | Качество на UA/RU | хорошее | очень хорошее |
-| AI-фичи (саммари, action items, chat) | ❌ | ✅ |
-| Custom domain | — | skriptly.io (готовится) |
 
 ---
 
@@ -119,10 +135,23 @@ Supabase Postgres
 modal deploy modal_app.py
 ```
 
-Modal Secret (один раз):
+Modal Secret (все ключи разом, `--force` заменяет целиком):
 ```powershell
-modal secret create transcriptor-secrets HF_TOKEN=hf_... SUPABASE_URL=https://YOUR_PROJECT.supabase.co --force
+modal secret create transcriptor-secrets `
+  HF_TOKEN=hf_... `
+  SUPABASE_URL=https://bmonakhktbaliwgobrxv.supabase.co `
+  SUPABASE_SERVICE_ROLE_KEY=eyJ... `
+  GEMINI_API_KEY=AIza... `
+  STRIPE_SECRET_KEY=sk_live_... `
+  STRIPE_WEBHOOK_SECRET=whsec_... `
+  STRIPE_PRO_MONTHLY_PRICE=price_... `
+  STRIPE_PRO_ANNUAL_PRICE=price_... `
+  STRIPE_MAX_MONTHLY_PRICE=price_... `
+  STRIPE_MAX_ANNUAL_PRICE=price_... `
+  --force
 ```
+
+См. `.env.example` — полный список переменных с комментариями.
 
 ### Локальный dev (без Modal)
 
@@ -195,21 +224,22 @@ python app.py
 ```
 modal_app.py         — Modal app: Transcriptor cls (A10G GPU) + flask_app wsgi
 app.py               — Flask backend: эндпоинты, JWT validation, async jobs,
-                       language detection для autodetect режима
+                       Stripe биллинг, usage tracking, language detection
 transcriber.py       — local mode: faster-whisper wrapper
 diarizer.py          — local mode: pyannote wrapper
 merger.py            — word-level speaker alignment (общий)
-templates/index.html — UI приложения (single-file, ~3000 строк)
+templates/index.html — UI приложения (single-file, ~5200 строк)
 
 landing/             — Next.js лендинг на skriptly.io (Vercel)
 ├── app/             — App Router (layout, page, globals.css)
 ├── components/      — Nav, Hero, Features, Pricing, и т.д.
 ├── lib/             — content.ts (EN/UA), hooks.ts
-└── next.config.mjs  — Vercel rewrites на Modal
+└── next.config.mjs  — Vercel rewrites на Modal + PostHog reverse proxy
 
 requirements.txt
-.env.example
+.env.example         — все env переменные с комментариями
 ROADMAP.md           — план следующих шагов
+BILLING.md           — планы, лимиты, Stripe flow, usage tracking
 CLAUDE.md            — техническая документация для Claude / future-devs
 ```
 
@@ -219,8 +249,9 @@ CLAUDE.md            — техническая документация для 
 
 - **Поддерживается только GPU** в production (Modal A10G). Локальный режим — только NVIDIA CUDA.
 - **Supabase free tier**: 500 MB БД, 50K MAU, 4 magic link emails в час (custom SMTP снимает лимит).
-- **Google OAuth в testing mode**: только добавленные test users могут логиниться через Google (max 100). Для широкой публики — нужно publish app в Google Cloud Console.
-- **Web-only frontend**. Native (Electron / iOS / Android) — на будущее, когда уйдут проблемы с background-вкладками.
+- **Google OAuth** опубликован — любой Google-юзер может войти.
+- **Stripe**: тестовые карты `4242 4242 4242 4242` для dev, live ключи для прода.
+- **Web-only frontend**. Native (Electron / iOS / Android) — на будущее.
 
 ---
 

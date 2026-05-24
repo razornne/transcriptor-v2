@@ -15,6 +15,16 @@
 
 **Сложность:** ~1-2 часа.
 
+### GDPR compliance (минимум)
+**Зачем:** работаем с EU юзерами и аудио созвонов — это чувствительные данные. Нужно до публичного запуска.
+
+**Что нужно:**
+- Страница Privacy Policy актуальна и точно описывает что храним (аудио не храним, только транскрипты в Supabase)
+- Кнопка "Delete my account + all data" в Settings
+- Уведомление о cookies / PostHog в footer (минимальный banner)
+
+**Сложность:** ~2-3 часа.
+
 ### Mobile responsive polish
 **Зачем:** базовый mobile sweep сделан, но визуально не идеально. Юзеры на iPhone/Android должны получить нормальный экспириенс.
 
@@ -46,9 +56,18 @@
 - До записи можно выбрать «Sales call mode» / «1-on-1» / «Stand-up»
 - После Stop **автоматически** запускается генерация Summary с правильным шаблоном
 
-### Pricing model
-Когда будет понятен реальный паттерн использования. Варианты:
-- Per-seat subscription (B2B), per-minute pay-as-you-go (B2C), Freemium, Workspace plans
+### Stripe — subscription.updated pro/max разграничение
+Сейчас `customer.subscription.updated` webhook всегда ставит `plan=pro` при активной подписке, не различает pro/max. Нужно читать price_id из объекта подписки и маппить на план.
+
+### Stripe — server-side PostHog events
+`subscription_activated` / `subscription_cancelled` из webhook — надёжнее чем client-side `payment_started` (юзер может закрыть вкладку до callback'а).
+
+### Pricing model (решено)
+~~Когда будет понятен паттерн~~ — уже определились:
+- **Free** $0 / 60 мин / без диаризации и AI
+- **Pro** $15/мес ($12 annual) / 600 мин / всё включено
+- **Max** $29/мес ($23 annual) / 2000 мин / + Best Quality (large-v3)
+- **Team** $14/чел/мес (workspace plans) — в планах, не реализован
 
 ---
 
