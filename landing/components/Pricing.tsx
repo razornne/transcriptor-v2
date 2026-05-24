@@ -14,6 +14,17 @@ function TweenedPrice({ target }: { target: number }) {
 
 type Billing = "monthly" | "annual";
 
+// Map plan name → /app URL with upgrade intent.
+// Free → just /app (sign up, no checkout). Team → mailto (no Stripe product yet).
+// Pro/Max → /app?upgrade=<plan>&billing=<period> — picked up after sign-in
+// to auto-trigger Stripe Checkout.
+function planHref(name: string, billing: Billing): string {
+  const n = name.toLowerCase();
+  if (n === "free") return "/app";
+  if (n === "team") return "mailto:hello@skriptly.io?subject=Team plan inquiry";
+  return `/app?upgrade=${n}&billing=${billing}`;
+}
+
 export function Pricing({ t }: { t: Copy }) {
   const [billing, setBilling] = useState<Billing>("monthly");
   const annual = billing === "annual";
@@ -69,7 +80,7 @@ export function Pricing({ t }: { t: Copy }) {
                 <div>
                   <a
                     className={"btn " + (p.ctaKind === "primary" ? "btn-primary" : "btn-ghost")}
-                    href="/app"
+                    href={planHref(p.name, billing)}
                     style={{ width: "100%", justifyContent: "center" }}
                   >
                     {p.cta}

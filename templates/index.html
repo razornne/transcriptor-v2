@@ -2391,6 +2391,23 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 
+// ── Pricing CTA from landing — capture upgrade intent ─────────────
+// Landing pricing buttons link to /app?upgrade=pro&billing=monthly etc.
+// Save in sessionStorage so we can auto-trigger Stripe Checkout after sign-in.
+// Cleaned from URL so refresh doesn't re-trigger.
+(function captureUpgradeIntent() {
+  const params = new URLSearchParams(window.location.search);
+  const plan = (params.get('upgrade') || '').toLowerCase();
+  if (plan !== 'pro' && plan !== 'max') return;
+  const billing = (params.get('billing') || 'monthly').toLowerCase() === 'annual' ? 'annual' : 'monthly';
+  sessionStorage.setItem('skriptly-upgrade-intent', JSON.stringify({ plan, billing, ts: Date.now() }));
+  // Strip query so refresh / share doesn't re-fire
+  params.delete('upgrade');
+  params.delete('billing');
+  const qs = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+})();
+
 // Текущая сессия — обновляется в onAuthStateChange.
 // JWT отсюда уходит в Authorization-header при запросах к нашему бэку.
 let currentSession = null;
@@ -5302,6 +5319,44 @@ sb.auth.onAuthStateChange(async (event, session) => {
         // person properties — для фильтрации/сегментации в PostHog UI
         if (posthog.setPersonProperties) posthog.setPersonProperties(props);
         if (event === 'SIGNED_IN') posthog.capture('sign_in', { method: session.user.app_metadata?.provider || 'unknown' });
+      }
+      // Auto-trigger Stripe Checkout if user came from landing pricing CTA.
+      // Intent was saved in sessionStorage by captureUpgradeIntent() on page load.
+      const intentRaw = sessionStorage.getItem('skriptly-upgrade-intent');
+      if (intentRaw) {
+        sessionStorage.removeItem('skriptly-upgrade-intent');
+        try {
+          const intent = JSON.parse(intentRaw);
+          // Ignore stale intents (>10 min old) — user probably abandoned and came back
+          if (Date.now() - (intent.ts || 0) < 10 * 60 * 1000 && (intent.plan === 'pro' || intent.plan === 'max')) {
+            // Skip if user already on or above the plan
+            const planRank = { free: 0, pro: 1, max: 2 };
+            if ((planRank[currentPlan] || 0) < (planRank[intent.plan] || 0)) {
+              if (typeof applyBilling === 'function') applyBilling(intent.billing);
+              setStatus(uiLang === 'ua' ? 'Перехід до оплати…' : 'Redirecting to checkout…', 'working');
+              if (window.posthog) posthog.capture('payment_started', { plan: intent.plan, billing: intent.billing, source: 'landing' });
+              try {
+                const res = await authFetch(`${API_BASE}/api/stripe/checkout`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ plan: intent.plan, billing: intent.billing }),
+                });
+                const data = await res.json();
+                if (data.url) {
+                  window.location.href = data.url;
+                  return;
+                }
+                console.error('[upgrade] checkout failed:', data.error);
+                setStatus(t('statusReady'));
+              } catch (e) {
+                console.error('[upgrade] checkout error:', e);
+                setStatus(t('statusReady'));
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[upgrade] intent parse failed:', e);
+        }
       }
     }
   } else {
