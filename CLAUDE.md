@@ -220,13 +220,14 @@ python app.py
 - `_sbFetch(path, opts)` — обёртка над `fetch` к `${SUPABASE_URL}/rest/v1`. Добавляет `apikey` и `Authorization: Bearer <user_jwt>`. Для POST/PATCH ставит `Prefer: return=representation`
 - `_historyCache` — массив в памяти. `getHistory()` синхронна, возвращает кэш. Обновляется через `refreshHistory()` после login и любой мутации
 - CRUD: `saveToHistory`, `updateHistoryEntry`, `deleteFromHistory`, `clearHistory` — все async, идут через `_sbFetch`. Маппинг между DB-форматом (snake_case) и JS-форматом (camelCase) через `_rowToEntry()`
+- **Delete UX — двойное подтверждение + undo:** первый клик на `×` меняет кнопку на `Delete?` (красный) на 3с. Второй клик → запись убирается из `_historyCache` и UI мгновенно, показывается `showUndoToast`. Реальный `DELETE` в Supabase идёт через 7 секунд (`_pendingDelete.timer`). Клик Undo — `clearTimeout` + `_historyCache.unshift(entry)` + `renderHistory()`, в DB ничего не летит. Клик `×` на тосте — немедленный DELETE без ожидания.
 
 ### Запись
 - **Один MediaRecorder** (`fullRecorder`) на mix микрофона + getDisplayMedia через AudioContext. `start(5000)` timeslice → каждый chunk в IndexedDB (см. Audio safety net)
 - На Stop: blob → `/api/transcribe` (multipart form) → async job → poll → segments
 
 ### Job polling
-- `submitJob(url, body, isFormData)` — POST через `authFetch`, возвращает `job_id`
+- `submitJob(url, body, isFormData)` — POST через `authFetch`, возвращает `job_id`. **Важно:** 402 проверяется ДО `safeJson(res)` — иначе нестандартное тело ответа (HTML страница ошибки от прокси) роняет `safeJson` и `upgradeRequired` никогда не ставится, юзер видит generic error вместо upgrade prompt.
 - `pollJob(jobId, onProgress)` — каждые 2с GET `/api/jobs/<id>` через `authFetch`. На done — возвращает result. **Прогресс сейчас не работает в Modal-режиме** (только `processing` без granular статуса) — UX-косметика, можно вернуть через `modal.Dict` если нужно
 
 ### Tab keep-alive (для долгих созвонов в background-вкладке)
@@ -234,6 +235,7 @@ python app.py
 - **Wake Lock API** — `navigator.wakeLock.request('screen')` на старте, re-acquire на `visibilitychange`
 - **OS Notifications** — `Notification.requestPermission()` + `notify(title, body)` для started/ready/failed
 - **Battery warning** — confirm если не charging + level<40%
+- **Pre-recording limit check** — первым делом в `startBtn` handler: если `currentMinutesUsed >= currentMinutesLimit` → блокируем запись, показываем upgrade prompt (без запроса разрешений). Если осталось ≤30 мин → confirm с предупреждением. `upgrade_prompt_shown` стреляет в PostHog в обоих случаях.
 
 ### Audio safety net (3 уровня)
 - `lastRecordingBlob` — после Stop держим blob в памяти. Если /api/transcribe упал → recovery box: Retry / Download / Discard
@@ -432,17 +434,23 @@ posthog.setPersonProperties(props);
 | `workspace_invite_accepted` | Member принял | `workspace_name` |
 | `best_quality_toggled` | Max включает large-v3 | `enabled` (bool) |
 
-### Что НЕ настроено (TODO)
-- **Server-side events** из Stripe webhook (`subscription_activated`, `subscription_cancelled`) — было бы надёжнее чем client-side `payment_started` (юзер может закрыть вкладку до webhook'а)
-- **Session Replay** — фича включается в PostHog UI, требует privacy masking (нужно замаскировать `.transcript`, `.ai-result-content`, `#notesArea`, `#contextPrompt`, `#loginEmailInput` — иначе записываются тексты созвонов)
-- **Error tracking** через `posthog.init({capture_exceptions: true})` — заменит ручной `transcription_failed`
+### Session Replay (включён)
+Privacy masking настроен в `posthog.init` в `templates/index.html`:
+- `session_recording: { maskAllInputs: true }` — все input/textarea замаскированы
+- `blockSelector: '#transcript, .ai-result-content'` — блоки с текстом транскрипта и AI-результатов не пишутся в replay
 
-### Какие dashboards / insights рекомендованы (в PostHog UI)
+Без этого PostHog записывал бы тексты всех созвонов — privacy disaster. **Не убирать эти настройки.**
+
+### Настроенные dashboards / insights (в PostHog UI)
 - **Activation funnel**: `sign_in → transcription_started → transcription_completed → summary_generated|export_clicked` (24h window)
 - **Conversion funnel**: `sign_in → transcription_completed → upgrade_prompt_shown → payment_started` (30d)
-- **Retention** на `transcription_completed`, weekly
-- **Cohorts**: Active free, Pro near limit, Workspace owners
-- **Daily ops dashboard**: new users / transcriptions / failures / upgrade prompts / best_quality usage
+- **Retention** на `transcription_completed`, weekly — показывает W1/W2/... retention
+- **Dashboard "Skriptly Operations"**: new users/day, transcriptions/day, failures/day (красный), upgrade prompts breakdown, best_quality usage breakdown
+
+### Что НЕ настроено (TODO)
+- **Server-side events** из Stripe webhook (`subscription_activated`, `subscription_cancelled`) — надёжнее чем client-side `payment_started`
+- **Error tracking** через `posthog.init({capture_exceptions: true})` — заменит ручной `transcription_failed`
+- **Cohorts**: Active free, Pro near limit, Workspace owners — создать вручную в PostHog UI
 
 ---
 
