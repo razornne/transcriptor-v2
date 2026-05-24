@@ -14,6 +14,13 @@ export const metadata: Metadata = {
     url: "https://skriptly.io",
     siteName: "Skriptly",
     type: "website",
+    locale: "en_US",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Skriptly — Every call, word for word.",
+    description:
+      "Best-in-class Ukrainian and English transcription. Audio is processed and deleted — never stored.",
   },
 };
 
