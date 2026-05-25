@@ -42,6 +42,12 @@ MODELS_DIR = "/models"
 
 # Modal Secret с HF_TOKEN (создать: modal secret create transcriptor-secrets HF_TOKEN=hf_...)
 hf_secret = modal.Secret.from_name("transcriptor-secrets")
+# Separate secret for Notion integration so we don't have to --force the
+# main secret every time we add an OAuth integration. Optional — if missing,
+# Notion endpoints return 503 'not configured'.
+notion_secret = modal.Secret.from_name("notion-secrets", required_keys=[
+    "NOTION_OAUTH_CLIENT_ID", "NOTION_OAUTH_CLIENT_SECRET",
+])
 
 # Образ контейнера — собирается один раз, кэшируется Modal'ом.
 # Используем CUDA 12.4 base image чтобы libcublas.so.12 и libcudnn были
@@ -775,7 +781,7 @@ def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: flo
 
 @app.function(
     image=web_image,
-    secrets=[hf_secret],         # USE_MODAL и т.п. — через переменные среды
+    secrets=[hf_secret, notion_secret],   # main secrets + Notion OAuth creds
     timeout=120,                 # на сам HTTP запрос (spawn моментален)
     scaledown_window=60,         # держим тёплым 1 мин между запросами
     min_containers=0,            # скейл в ноль когда idle = бесплатно
