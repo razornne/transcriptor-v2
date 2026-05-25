@@ -1300,8 +1300,33 @@
       border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
       border-radius: 4px;
       padding: 1px 6px;
-      display: inline-block; margin-top: 2px;
+      display: inline-block;
     }
+    .sidebar-plan-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 6px; margin-top: 4px;
+    }
+    .sidebar-usage-text {
+      font-size: 10px; color: var(--dim);
+      font-family: var(--mono, monospace);
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+    .sidebar-usage-bar {
+      height: 3px; border-radius: 2px;
+      background: var(--border);
+      overflow: hidden;
+      margin-top: 5px;
+      cursor: help;
+    }
+    .sidebar-usage-fill {
+      height: 100%; width: 0%;
+      background: var(--accent);
+      transition: width 360ms ease, background-color 240ms ease;
+      border-radius: 2px;
+    }
+    .sidebar-usage-fill.warn { background: #d49a3c; }
+    .sidebar-usage-fill.danger { background: #e55; }
     .sidebar-settings-btn {
       background: none; border: none; padding: 6px;
       color: var(--dim); cursor: pointer;
@@ -1583,7 +1608,13 @@
       <div class="sidebar-avatar" id="sidebarAvatar"></div>
       <div class="sidebar-user-info">
         <div class="sidebar-user-email" id="sidebarEmail"></div>
-        <span class="sidebar-plan-badge" id="sidebarPlan">Free</span>
+        <div class="sidebar-plan-row">
+          <span class="sidebar-plan-badge" id="sidebarPlan">Free</span>
+          <span class="sidebar-usage-text" id="sidebarUsageText" title="Usage this month">— / — min</span>
+        </div>
+        <div class="sidebar-usage-bar" id="sidebarUsageBar" title="Usage this month">
+          <div class="sidebar-usage-fill" id="sidebarUsageFill"></div>
+        </div>
       </div>
       <button class="sidebar-settings-btn" id="sidebarSettingsBtn" title="Settings">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2637,9 +2668,25 @@ function _updatePlanUI() {
   const badge = document.getElementById('sidebarPlan');
   if (badge) badge.textContent = PLAN_LABELS[currentPlan] || currentPlan;
 
-  // Usage row
+  // Usage row (in Settings modal) + always-visible bar in sidebar
+  const used = +currentMinutesUsed || 0;
+  const limit = +currentMinutesLimit || 0;
+  const usedDisplay = used < 10 ? used.toFixed(1).replace(/\.0$/, '') : Math.round(used);
+  const usageLabel = limit > 0 ? `${usedDisplay} / ${limit} min` : `${usedDisplay} min`;
+
   const usageEl = document.getElementById('settingsUsage');
-  if (usageEl) usageEl.textContent = `${currentMinutesUsed} / ${currentMinutesLimit} min`;
+  if (usageEl) usageEl.textContent = usageLabel;
+
+  const sidebarUsageText = document.getElementById('sidebarUsageText');
+  const sidebarUsageFill = document.getElementById('sidebarUsageFill');
+  if (sidebarUsageText) sidebarUsageText.textContent = usageLabel;
+  if (sidebarUsageFill && limit > 0) {
+    const pct = Math.min(100, (used / limit) * 100);
+    sidebarUsageFill.style.width = pct.toFixed(1) + '%';
+    sidebarUsageFill.classList.remove('warn', 'danger');
+    if (pct >= 95) sidebarUsageFill.classList.add('danger');
+    else if (pct >= 80) sidebarUsageFill.classList.add('warn');
+  }
 
   // Plan card highlights + button states
   ['free', 'pro', 'max'].forEach(plan => {
