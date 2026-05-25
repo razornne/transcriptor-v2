@@ -508,6 +508,32 @@ def _ensure_referral_code(user_id: str, profile: dict) -> dict:
     return profile  # gave up; non-fatal — UI will just not show invite link
 
 
+def _maybe_notify_signup(profile: dict):
+    """Fire admin signup ping ONCE per user. Profile can be created either by
+    our backend or by a Supabase trigger before we see the user — flag check
+    decouples notification from creation path."""
+    if not profile or profile.get("signup_notified_at"):
+        return
+    user_id = profile.get("id")
+    if not user_id:
+        return
+    try:
+        email = getattr(g, "user_email", None) or "(unknown)"
+        ref_code = profile.get("referral_code") or "?"
+        _notify_admin(
+            f"🎉 <b>New Skriptly signup</b>\n\n"
+            f"📧 {email}\n"
+            f"🆔 <code>{user_id}</code>\n"
+            f"🔗 ref code: <code>{ref_code}</code>"
+        )
+        # Mark as notified so we never double-ping (even if user logs out / back in)
+        _sb_admin("user_profiles", method="PATCH",
+                  params={"id": f"eq.{user_id}"},
+                  data={"signup_notified_at": datetime.utcnow().isoformat()})
+    except Exception as e:
+        print(f"[admin-notify] signup ping failed: {e}", flush=True)
+
+
 def _get_user_profile(user_id: str) -> dict:
     """Читает профиль, сбрасывает счётчик если новый месяц, создаёт если нет."""
     from datetime import timezone
@@ -530,26 +556,17 @@ def _get_user_profile(user_id: str) -> dict:
         # Lazy-backfill referral code for legacy profiles
         if not profile.get("referral_code"):
             profile = _ensure_referral_code(user_id, profile)
+        # Fire signup ping if we haven't yet (covers trigger-created profiles)
+        _maybe_notify_signup(profile)
         return profile
     # Создаём профиль если не существует — сразу с реф-кодом
     code = _generate_referral_code(user_id)
     rows = _sb_admin("user_profiles", method="POST",
                      data={"id": user_id, "referral_code": code})
-    # First time we see this user → ping admin
-    try:
-        email = (g.user_email or "(unknown)") if hasattr(g, "user_email") else "(unknown)"
-        ref_used = ""
-        # If user has a referred_by set already, mention it. Usually not yet
-        # at first profile creation, but redeem might race.
-        _notify_admin(
-            f"🎉 <b>New Skriptly signup</b>\n\n"
-            f"📧 {email}\n"
-            f"🆔 <code>{user_id}</code>\n"
-            f"🔗 ref code: <code>{code}</code>{ref_used}"
-        )
-    except Exception as e:
-        print(f"[admin-notify] signup ping failed: {e}", flush=True)
-    return rows[0] if rows else {"plan": "free", "minutes_used": 0, "referral_code": code}
+    if rows:
+        _maybe_notify_signup(rows[0])
+        return rows[0]
+    return {"plan": "free", "minutes_used": 0, "referral_code": code}
 
 
 def _add_minutes(user_id: str, minutes: float):
