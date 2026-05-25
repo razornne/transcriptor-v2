@@ -1898,6 +1898,23 @@
       </div>
     </div>
 
+    <div class="settings-section" id="referralSection" style="display:none">
+      <div class="settings-section-title" data-i18n="settingsReferral">Invite friends, get free minutes</div>
+      <p class="settings-help-text" data-i18n="referralHint" style="margin:0 0 10px;font-size:13px;color:var(--muted)">
+        Share this link. Both you and your friend get +60 minutes when they sign up.
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <input id="referralLinkInput" type="text" readonly
+               style="flex:1;min-width:200px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);font-size:13px;font-family:var(--mono,monospace)" />
+        <button id="referralCopyBtn" class="btn-ghost" style="font-size:12px;padding:7px 14px;white-space:nowrap"
+                data-i18n="referralCopy">Copy link</button>
+      </div>
+      <div class="settings-row" style="font-size:13px;color:var(--muted)">
+        <span><span data-i18n="referralStatsInvites">Invited</span>: <b id="referralCountDisplay" style="color:var(--ink)">0</b></span>
+        <span><span data-i18n="referralStatsBonus">Bonus minutes</span>: <b id="referralBonusDisplay" style="color:var(--ink)">0</b></span>
+      </div>
+    </div>
+
     <div class="settings-section">
       <div class="settings-section-title" data-i18n="settingsActions">Actions</div>
       <button id="settingsSignOutBtn" class="settings-danger-btn" style="margin-bottom:8px" data-i18n="settingsSignOut">Sign out</button>
@@ -2068,6 +2085,12 @@ const T = {
     settingsSignOut: 'Sign out',
     settingsManageSub: 'Subscription',
     settingsManageSubBtn: 'Manage billing →',
+    settingsReferral: 'Invite friends, get free minutes',
+    referralHint: 'Share this link. Both you and your friend get +60 minutes when they sign up.',
+    referralCopy: 'Copy link',
+    referralCopied: 'Copied!',
+    referralStatsInvites: 'Invited',
+    referralStatsBonus: 'Bonus minutes',
     settingsDangerZone: 'Danger zone',
     deleteAccountHint: 'Permanently delete your account and all transcripts. This cannot be undone.',
     deleteAccountBtn: 'Delete my account…',
@@ -2254,6 +2277,12 @@ const T = {
     settingsSignOut: 'Вийти',
     settingsManageSub: 'Підписка',
     settingsManageSubBtn: 'Керувати білінгом →',
+    settingsReferral: 'Запроси друзів — отримай безкоштовні хвилини',
+    referralHint: 'Поділись цим посиланням. Ти і друг отримаєте +60 хв коли він зареєструється.',
+    referralCopy: 'Скопіювати',
+    referralCopied: 'Скопійовано!',
+    referralStatsInvites: 'Запрошено',
+    referralStatsBonus: 'Бонусні хвилини',
     settingsDangerZone: 'Небезпечна зона',
     deleteAccountHint: 'Видалити акаунт і всі транскрипти без можливості відновлення.',
     deleteAccountBtn: 'Видалити мій акаунт…',
@@ -2424,6 +2453,21 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
 });
 
+// ── Referral code from landing — capture for auto-redeem on signup ───
+// Landing has share link like skriptly.io?ref=abc12345. Save until after
+// SIGNED_IN so the backend can credit both sides.
+(function captureRefCode() {
+  const params = new URLSearchParams(window.location.search);
+  const ref = (params.get('ref') || '').toLowerCase().trim();
+  if (!ref || ref.length < 4 || ref.length > 32) return;
+  // Use localStorage (not sessionStorage) — magic link round-trip via email
+  // opens a fresh tab, sessionStorage wouldn't survive.
+  localStorage.setItem('skriptly-ref-code', ref);
+  params.delete('ref');
+  const qs = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+})();
+
 // ── Pricing CTA from landing — capture upgrade intent ─────────────
 // Landing pricing buttons link to /app?upgrade=pro&billing=monthly etc.
 // Save in sessionStorage so we can auto-trigger Stripe Checkout after sign-in.
@@ -2475,16 +2519,26 @@ const PLAN_DESCS  = {
   team: '600 min/user/month · workspace',
 };
 
+let currentReferralCode = null;
+let currentBonusMinutes = 0;
+let currentReferralCount = 0;
+let currentWasReferred = false;
+
 async function fetchProfile() {
   if (!currentUser) return;
   try {
     const res = await authFetch(`${API_BASE}/api/profile`);
     if (!res.ok) return;
     const data = await res.json();
-    currentPlan         = data.plan         || 'free';
-    currentMinutesUsed  = data.minutes_used  || 0;
-    currentMinutesLimit = data.minutes_limit || 60;
+    currentPlan          = data.plan          || 'free';
+    currentMinutesUsed   = data.minutes_used  || 0;
+    currentMinutesLimit  = data.minutes_limit || 60;
+    currentReferralCode  = data.referral_code || null;
+    currentBonusMinutes  = data.bonus_minutes || 0;
+    currentReferralCount = data.referral_count || 0;
+    currentWasReferred   = !!data.was_referred;
     _updatePlanUI();
+    renderReferralSection();
   } catch (e) {
     console.warn('[profile] fetch failed:', e);
   }
@@ -5337,6 +5391,26 @@ sb.auth.onAuthStateChange(async (event, session) => {
       await Promise.all([refreshHistory(), fetchProfile(), fetchWorkspace()]);
       console.log('[auth] history loaded, items:', _historyCache.length);
       renderHistory();
+      // Try redeeming any pending referral code captured at landing-time.
+      // Safe to call always: backend no-ops if user was already referred or
+      // if no code is stored. Refresh profile after to update bonus_minutes.
+      if (event === 'SIGNED_IN') {
+        const refCode = localStorage.getItem('skriptly-ref-code');
+        if (refCode) {
+          localStorage.removeItem('skriptly-ref-code');
+          try {
+            const res = await authFetch(`${API_BASE}/api/referral/redeem`, {
+              method: 'POST', headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({ code: refCode }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.bonus && !data.already_redeemed) {
+              if (window.posthog) posthog.capture('referral_redeemed', { bonus: data.bonus });
+              setTimeout(() => fetchProfile(), 300);  // re-fetch with new bonus
+            }
+          } catch (e) { console.warn('[referral] redeem failed:', e); }
+        }
+      }
       // PostHog: identify user, set persistent properties, fire sign_in event
       if (window.posthog) {
         const props = {
@@ -5459,6 +5533,39 @@ document.getElementById('settingsSignOutBtn').addEventListener('click', async ()
   closeSettingsModal();
   await sb.auth.signOut();
 });
+
+// ── Referral UI ───────────────────────────────────────────────
+function renderReferralSection() {
+  const section = document.getElementById('referralSection');
+  if (!section) return;
+  if (!currentReferralCode) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = '';
+  const link = `https://skriptly.io?ref=${currentReferralCode}`;
+  document.getElementById('referralLinkInput').value = link;
+  document.getElementById('referralCountDisplay').textContent = currentReferralCount;
+  document.getElementById('referralBonusDisplay').textContent = currentBonusMinutes;
+}
+
+document.getElementById('referralCopyBtn').addEventListener('click', async () => {
+  const input = document.getElementById('referralLinkInput');
+  const btn = document.getElementById('referralCopyBtn');
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch {
+    input.select();
+    document.execCommand('copy');
+  }
+  const orig = btn.textContent;
+  btn.textContent = t('referralCopied');
+  if (window.posthog) posthog.capture('referral_link_copied');
+  setTimeout(() => { btn.textContent = orig; }, 1500);
+});
+
+// Also let user click the input to select-all (easier on mobile)
+document.getElementById('referralLinkInput').addEventListener('click', e => e.target.select());
 
 // ── Delete account (GDPR) ──────────────────────────────────────
 // Two-step confirmation: type DELETE → POST /api/account/delete →
