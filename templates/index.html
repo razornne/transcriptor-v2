@@ -2218,6 +2218,10 @@ const T = {
     settingsSignOut: 'Sign out',
     settingsManageSub: 'Subscription',
     settingsManageSubBtn: 'Manage billing →',
+    // Demo transcript banner
+    demoBannerTitle: 'This is a demo transcript',
+    demoBannerSub: 'Click around — open Summary or Actions, rename speakers, edit text. Then record your own.',
+    demoBannerTryBtn: 'Try with my own call →',
     // Notion integration
     settingsIntegrations: 'Integrations',
     notionConnect: 'Connect',
@@ -2444,6 +2448,10 @@ const T = {
     settingsSignOut: 'Вийти',
     settingsManageSub: 'Підписка',
     settingsManageSubBtn: 'Керувати білінгом →',
+    // Demo transcript banner
+    demoBannerTitle: 'Це демо-транскрипт',
+    demoBannerSub: 'Потицяй — відкрий Summary або Actions, переймейнуй спікерів, відредагуй текст. Потім запиши свій.',
+    demoBannerTryBtn: 'Спробувати на своєму дзвінку →',
     // Notion integration
     settingsIntegrations: 'Інтеграції',
     notionConnect: 'Підключити',
@@ -4293,6 +4301,13 @@ function _renderPipelineStages(currentIdx, elapsed) {
 
 startBtn.addEventListener('click', async () => {
   setError('');
+  // If user is currently looking at the demo, clear it before recording —
+  // otherwise the demo would silently get overwritten with real data and
+  // it looks broken.
+  if (isDemoMode) {
+    if (window.posthog) posthog.capture('demo_dismissed', { action: 'start_recording' });
+    clearDemoTranscript();
+  }
   startBtn.disabled = true;
   setStatus(t('statusPermissions'), 'working');
 
@@ -5115,6 +5130,8 @@ function renderHistory() {
       item.appendChild(del);
 
       item.addEventListener('click', () => {
+        // Clear demo state if user picks a real transcript from history
+        if (isDemoMode) { isDemoMode = false; hideDemoBanner(); }
         currentSpeakerNames = { ...(entry.speakerNames || {}) };
         currentHistoryId = entry.id;
         currentTitle = entry.title || null;
@@ -5881,14 +5898,167 @@ function dismissWelcomeModal() {
 document.getElementById('welcomeGotItBtn').addEventListener('click', () => {
   if (window.posthog) posthog.capture('welcome_modal_dismissed', { action: 'got_it' });
   dismissWelcomeModal();
+  // Load demo transcript right after welcome so user immediately
+  // sees what a finished result looks like instead of an empty page
+  maybeLoadDemoTranscript();
 });
 // Click backdrop to dismiss too
 document.getElementById('welcomeModal').addEventListener('click', e => {
   if (e.target.id === 'welcomeModal') {
     if (window.posthog) posthog.capture('welcome_modal_dismissed', { action: 'backdrop' });
     dismissWelcomeModal();
+    maybeLoadDemoTranscript();
   }
 });
+
+// ── Demo transcript onboarding ────────────────────────────────
+// On first signup (no transcripts in history) we pre-load a finished
+// transcript so the user immediately sees what the product produces:
+// speaker-separated dialogue, Summary tab, Action items tab, inline
+// editing. Lets them feel value in 5 seconds instead of having to
+// record a real call first.
+//
+// Demo lives in-memory only — never saved to Supabase. Cleared on:
+//   • Click Start recording  • Click 'Try with my own call' banner button
+//   • localStorage flag so it doesn't re-appear after they have transcripts
+
+const DEMO_SEGMENTS = [
+  { start: 4,  end: 11, speaker: "SPEAKER_00", text: "Okay — can everyone hear me? Let me share my screen real quick." },
+  { start: 11, end: 14, speaker: "SPEAKER_01", text: "Yeah, you're coming through clean. Go ahead." },
+  { start: 14, end: 28, speaker: "SPEAKER_00", text: "Alright. The main thing I want to walk through today is the onboarding redesign — specifically the empty state and the first-run prompt." },
+  { start: 28, end: 32, speaker: "SPEAKER_01", text: "Right. So we landed on the three-step version, didn't we?" },
+  { start: 32, end: 41, speaker: "SPEAKER_00", text: "For now, yes. But I want to come back to it after we see retention next week." },
+  { start: 41, end: 44, speaker: "SPEAKER_02", text: "Sorry — just joined. Did we already cover the analytics piece?" },
+  { start: 44, end: 51, speaker: "SPEAKER_00", text: "Not yet — analytics is item three. We're on the empty state first." },
+  { start: 51, end: 54, speaker: "SPEAKER_02", text: "Got it. I'll hold my questions." },
+];
+const DEMO_SPEAKER_NAMES = { SPEAKER_00: "Eli", SPEAKER_01: "Sasha", SPEAKER_02: "Niko" };
+const DEMO_TITLE = "Onboarding redesign sync — demo";
+const DEMO_SUMMARY_EN = `## Key points
+- **Onboarding redesign** is the main topic; team aligned on a **three-step version** as the starting baseline.
+- Final decision deferred until **retention data is available next week** — Eli wants to confirm with numbers before committing long-term.
+- Analytics discussion is queued as item three and was not yet covered.
+- Niko joined late and will hold questions until the empty-state discussion wraps.
+
+## Context
+This is the first sync after the prior week's empty-state explorations. The three-step flow was the consensus winner from earlier mockups; this session is mostly about locking it in until retention numbers come back.`;
+const DEMO_ACTIONS_EN = `- [ ] **Eli** — review retention data next week and confirm three-step onboarding direction
+- [ ] **Sasha** — finalize three-step empty-state mock for review
+- [ ] **Niko** — prepare analytics overview for item three of next sync
+- [ ] **Eli** — set up next sync once retention data is in`;
+
+let isDemoMode = false;
+
+function maybeLoadDemoTranscript() {
+  if (!currentUser) return;
+  const flagKey = 'skriptly-demo-seen-' + currentUser.id;
+  if (localStorage.getItem(flagKey)) return;
+  if (_historyCache && _historyCache.length > 0) {
+    // User already has real transcripts — never show demo
+    localStorage.setItem(flagKey, '1');
+    return;
+  }
+  loadDemoTranscript();
+  if (window.posthog) posthog.capture('demo_transcript_loaded');
+}
+
+function loadDemoTranscript() {
+  isDemoMode = true;
+  // Mark as seen — even if user just scrolls away we don't re-show
+  if (currentUser) localStorage.setItem('skriptly-demo-seen-' + currentUser.id, '1');
+
+  // Populate transcript state — exactly as if we just got it from /api/transcribe
+  currentSpeakerNames = { ...DEMO_SPEAKER_NAMES };
+  currentTitle = DEMO_TITLE;
+  currentTitleIsAuto = false;
+  currentDate = new Date().toISOString();
+  currentNotes = '';
+  currentAIResults = {
+    summary: DEMO_SUMMARY_EN,
+    actions: DEMO_ACTIONS_EN,
+  };
+  currentChatHistory = [];
+  currentTags = [];
+  currentTab = 'transcript';
+  currentHistoryId = null;
+
+  renderTranscript(DEMO_SEGMENTS);
+  renderChatMessages();
+  renderTags();
+  showDemoBanner();
+}
+
+function clearDemoTranscript() {
+  if (!isDemoMode) return;
+  isDemoMode = false;
+  currentSegments = null;
+  currentSpeakerNames = {};
+  currentTitle = '';
+  currentAIResults = {};
+  currentChatHistory = [];
+  currentTags = [];
+  currentNotes = '';
+  hideDemoBanner();
+  // Re-render empty state
+  if (typeof renderTranscript === 'function') {
+    transcriptEl.innerHTML = '<div class="transcript-empty">' +
+      t('transcriptEmpty') + '</div>';
+  }
+  if (typeof updateSectionsVisibility === 'function') updateSectionsVisibility();
+}
+
+function showDemoBanner() {
+  let banner = document.getElementById('demoBanner');
+  if (banner) { banner.style.display = ''; return; }
+  banner = document.createElement('div');
+  banner.id = 'demoBanner';
+  banner.style.cssText = [
+    'background:color-mix(in srgb, var(--accent) 9%, var(--surface))',
+    'border:1px solid color-mix(in srgb, var(--accent) 24%, transparent)',
+    'border-left:3px solid var(--accent)',
+    'border-radius:10px',
+    'padding:12px 16px;margin-bottom:14px',
+    'display:flex;align-items:center;gap:14px;flex-wrap:wrap',
+  ].join(';');
+
+  const txt = document.createElement('div');
+  txt.style.cssText = 'flex:1;min-width:0;font-size:13px;line-height:1.5';
+  txt.innerHTML = `<b style="color:var(--text)">${t('demoBannerTitle')}</b> <span style="color:var(--muted)">— ${t('demoBannerSub')}</span>`;
+
+  const tryBtn = document.createElement('button');
+  tryBtn.className = 'btn-primary';
+  tryBtn.style.cssText = 'font-size:13px;padding:7px 14px;white-space:nowrap';
+  tryBtn.textContent = t('demoBannerTryBtn');
+  tryBtn.addEventListener('click', () => {
+    if (window.posthog) posthog.capture('demo_dismissed', { action: 'try_own' });
+    clearDemoTranscript();
+    startBtn.focus();
+    startBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  const close = document.createElement('button');
+  close.style.cssText = 'background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0 0 0 4px';
+  close.textContent = '×';
+  close.title = 'Dismiss';
+  close.addEventListener('click', () => {
+    if (window.posthog) posthog.capture('demo_dismissed', { action: 'close' });
+    clearDemoTranscript();
+  });
+
+  banner.appendChild(txt);
+  banner.appendChild(tryBtn);
+  banner.appendChild(close);
+
+  // Insert before transcript element (above the cards)
+  if (transcriptEl && transcriptEl.parentNode) {
+    transcriptEl.parentNode.insertBefore(banner, transcriptEl);
+  }
+}
+
+function hideDemoBanner() {
+  const banner = document.getElementById('demoBanner');
+  if (banner) banner.remove();
+}
 
 // ── Referral UI ───────────────────────────────────────────────
 function renderReferralSection() {
