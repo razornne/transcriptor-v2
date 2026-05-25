@@ -867,6 +867,94 @@ def stripe_portal():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Delete account (GDPR) ──────────────────────────────────────
+@app.route("/api/account/delete", methods=["POST"])
+def account_delete():
+    """Permanently delete user account + all associated data.
+    Required for GDPR compliance.
+
+    Order matters:
+    1. Cancel Stripe subscription (if active) — releases the customer's payment
+       method and stops future charges. We don't delete the Stripe Customer
+       itself — keeping it preserves invoice history for accounting.
+    2. Delete transcripts (cascade — RLS only allows the user's own rows)
+    3. Leave or delete workspace if owner / member
+    4. Delete user_profiles row
+    5. Delete Supabase auth.user (Admin API) — this revokes all sessions
+
+    No undo. Frontend MUST require explicit confirmation before calling.
+    """
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+    if not SUPABASE_SERVICE_ROLE_KEY or not SUPABASE_URL:
+        return jsonify({"error": "service unavailable"}), 503
+
+    user_id = g.user_id
+    print(f"[delete-account] start user_id={user_id}", flush=True)
+
+    # 1. Cancel Stripe subscription if any
+    try:
+        rows = _sb_admin("user_profiles",
+                         params={"id": f"eq.{user_id}",
+                                 "select": "stripe_subscription_id,stripe_customer_id"})
+        sub_id = (rows[0].get("stripe_subscription_id") if rows else "") or ""
+        if sub_id and STRIPE_SECRET_KEY:
+            try:
+                import stripe as _stripe
+                _stripe.api_key = STRIPE_SECRET_KEY
+                _stripe.Subscription.cancel(sub_id)
+                print(f"[delete-account] stripe sub {sub_id} cancelled", flush=True)
+            except Exception as e:
+                # Sub might already be cancelled, expired, etc — don't block deletion
+                print(f"[delete-account] stripe cancel non-fatal: {e}", flush=True)
+    except Exception as e:
+        print(f"[delete-account] stripe lookup failed: {e}", flush=True)
+
+    # 2. Delete transcripts (own only — RLS via service role can bulk delete)
+    try:
+        _sb_admin("transcripts", method="DELETE",
+                  params={"user_id": f"eq.{user_id}"})
+    except Exception as e:
+        print(f"[delete-account] transcripts delete failed: {e}", flush=True)
+
+    # 3. Handle workspace membership
+    try:
+        # Remove memberships
+        _sb_admin("workspace_members", method="DELETE",
+                  params={"user_id": f"eq.{user_id}"})
+        # If user owned any workspaces, delete them (members cleaned via cascade)
+        _sb_admin("workspaces", method="DELETE",
+                  params={"owner_id": f"eq.{user_id}"})
+    except Exception as e:
+        print(f"[delete-account] workspace cleanup failed: {e}", flush=True)
+
+    # 4. Delete user_profile
+    try:
+        _sb_admin("user_profiles", method="DELETE",
+                  params={"id": f"eq.{user_id}"})
+    except Exception as e:
+        print(f"[delete-account] profile delete failed: {e}", flush=True)
+
+    # 5. Delete Supabase auth user (revokes all sessions)
+    try:
+        r = requests.delete(
+            f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            },
+            timeout=10,
+        )
+        if r.status_code not in (200, 204):
+            print(f"[delete-account] auth delete returned {r.status_code}: {r.text}", flush=True)
+    except Exception as e:
+        print(f"[delete-account] auth delete failed: {e}", flush=True)
+        return jsonify({"error": "Account data wiped but auth user deletion failed. Contact support.", "partial": True}), 500
+
+    print(f"[delete-account] done user_id={user_id}", flush=True)
+    return jsonify({"ok": True})
+
+
 # ── Workspace ──────────────────────────────────────────────────
 # Workspace = collaboration layer. Each user belongs to at most ONE workspace
 # (either as owner or as active member — not both, not multiple).
