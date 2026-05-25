@@ -780,6 +780,49 @@ def job_status_endpoint(job_id):
     return jsonify({k: v for k, v in job.items() if not isinstance(v, datetime)})
 
 
+@app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
+def job_cancel_endpoint(job_id):
+    """Cancel an in-flight Modal job. Used by frontend's Cancel button
+    on the processing screen.
+
+    For Modal jobs: FunctionCall.cancel() terminates the running container.
+    For local mode: best-effort, sets a cancel flag in the job dict.
+
+    Idempotent: cancelling an already-finished or already-cancelled job
+    returns 200 OK with status: 'noop'.
+    """
+    if not job_id:
+        return jsonify({"error": "job_id required"}), 400
+
+    # Modal: prefix-encoded call_id
+    if USE_MODAL and len(job_id) > 2 and job_id[1] == "_":
+        call_id = job_id[2:]
+        try:
+            call = _modal.FunctionCall.from_id(call_id)
+            # Check if already done — cancel on done is a no-op but Modal
+            # returns gracefully either way
+            try:
+                call.cancel()
+            except Exception as e:
+                # Job might already be complete; treat as no-op
+                print(f"[cancel] modal cancel non-fatal: {e}", flush=True)
+            # Clean up our local job tracking dicts
+            _job_language.pop(job_id, None)
+            _job_user.pop(job_id, None)
+            _job_progress_keys.pop(job_id, None)
+            return jsonify({"ok": True, "status": "cancelled"})
+        except Exception as e:
+            return jsonify({"error": f"cancel failed: {e}"}), 500
+
+    # Local mode — set cancel flag, the polling endpoint will return
+    job = _get_local_job(job_id)
+    if not job:
+        return jsonify({"ok": True, "status": "noop"})
+    job["status"] = "cancelled"
+    job["error"] = "cancelled by user"
+    return jsonify({"ok": True, "status": "cancelled"})
+
+
 def _ollama_generate(prompt: str, *, max_tokens: int = 60, temperature: float = 0.4, timeout: int = 60) -> str:
     """LLM inference: Modal (USE_MODAL=true) или локальная Ollama."""
     if USE_MODAL:

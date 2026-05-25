@@ -1559,6 +1559,17 @@
       display: flex; gap: 5px; align-items: center;
     }
     .processing-footer-dot { opacity: .5; }
+    .processing-cancel-btn {
+      background: none; border: 1px solid var(--border); color: var(--muted);
+      cursor: pointer; padding: 3px 10px; border-radius: 4px;
+      font: inherit; font-size: 11px;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .processing-cancel-btn:hover {
+      color: #e55; border-color: #e55;
+      background: color-mix(in srgb, #e55 8%, transparent);
+    }
+    .processing-cancel-btn:disabled { opacity: .5; cursor: default; }
   </style>
 </head>
 <body>
@@ -1718,6 +1729,8 @@
       <span id="processingEta">Estimating time…</span>
       <span class="processing-footer-dot">·</span>
       <span id="processingTabHint">safe to leave this tab</span>
+      <span class="processing-footer-dot">·</span>
+      <button id="processingCancelBtn" class="processing-cancel-btn" data-i18n="processingCancel">Cancel</button>
     </div>
   </div>
 
@@ -2348,6 +2361,10 @@ const T = {
     // Processing screen
     procPill: 'PROCESSING',
     procFooterTab: 'safe to leave this tab',
+    processingCancel: 'Cancel',
+    processingCancelConfirm: 'Cancel transcription? Your recording will be discarded.',
+    processingCancelled: 'Transcription cancelled.',
+    processingCancelling: 'Cancelling…',
     procPipelineTitle: 'PIPELINE · {n} STAGES',
     procEtaEst: 'Estimating time…',
     procEtaSecs: 'ETA · {s}s',
@@ -2578,6 +2595,10 @@ const T = {
     // Processing screen
     procPill: 'ОБРОБКА',
     procFooterTab: 'можна закрити цю вкладку',
+    processingCancel: 'Скасувати',
+    processingCancelConfirm: 'Скасувати обробку? Запис буде втрачено.',
+    processingCancelled: 'Обробку скасовано.',
+    processingCancelling: 'Скасовуємо…',
     procPipelineTitle: 'ЕТАПИ · {n}',
     procEtaEst: 'Оцінка часу…',
     procEtaSecs: 'Залишилось · {s}с',
@@ -4048,17 +4069,25 @@ async function submitJob(url, body, isFormData = false) {
   return data.job_id;
 }
 
+// Active transcription job ID — set by transcribeBlob, used by Cancel button
+// to identify which Modal call to cancel. Reset to null when polling ends.
+let activeTranscribeJobId = null;
+let pollCancelled = false;  // flipped by Cancel button to break out of pollJob
+
 async function pollJob(jobId, onProgress, maxWaitMs = 22 * 60 * 1000) {
   let waitMs = 0;
   const deadline = Date.now() + maxWaitMs;
+  pollCancelled = false;
   while (true) {
     if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+    if (pollCancelled) { const e = new Error('cancelled by user'); e.cancelled = true; throw e; }
     if (Date.now() > deadline) throw new Error('Transcription timed out after 22 minutes. Try a shorter recording.');
     const res = await authFetch(`${API_BASE}/api/jobs/${jobId}`);
     const data = await safeJson(res);
     if (!res.ok) throw new Error(data.error || 'poll failed');
-    if (data.status === 'done')  return data;
-    if (data.status === 'error') throw new Error(data.error || 'job failed');
+    if (data.status === 'done')      return data;
+    if (data.status === 'cancelled') { const e = new Error('cancelled by user'); e.cancelled = true; throw e; }
+    if (data.status === 'error')     throw new Error(data.error || 'job failed');
     if (onProgress && data.progress) onProgress(data.progress);
     waitMs = 2000;
   }
@@ -4187,10 +4216,32 @@ function showProcessingScreen(audioDurSec) {
 function hideProcessingScreen() {
   if (_procTimer) { clearInterval(_procTimer); _procTimer = null; }
   document.getElementById('processingState').style.display = 'none';
+  // Reset cancel button in case last hide was via Cancel
+  const cb = document.getElementById('processingCancelBtn');
+  if (cb) { cb.disabled = false; cb.textContent = t('processingCancel'); }
   // contentTabs visibility is controlled by updateSectionsVisibility() after renderTranscript
   transcriptEl.style.display = '';
   document.querySelector('.transcript-footer').style.display = '';
 }
+
+// Cancel button on processing screen — POST /api/jobs/{id}/cancel,
+// flip pollCancelled so pollJob bails on next tick.
+document.getElementById('processingCancelBtn').addEventListener('click', async () => {
+  if (!confirm(t('processingCancelConfirm'))) return;
+  const btn = document.getElementById('processingCancelBtn');
+  btn.disabled = true;
+  btn.textContent = t('processingCancelling');
+  // 1. Flip flag so pollJob throws cancelled error immediately (next 2s tick)
+  pollCancelled = true;
+  // 2. Tell backend to actually cancel the Modal call — releases GPU faster
+  if (activeTranscribeJobId) {
+    try {
+      await authFetch(`${API_BASE}/api/jobs/${activeTranscribeJobId}/cancel`, { method: 'POST' });
+    } catch (e) {
+      console.warn('[cancel] backend cancel failed (non-fatal):', e);
+    }
+  }
+});
 
 function _tickProcessing() {
   const elapsed = (Date.now() - _procStartMs) / 1000;
@@ -4496,6 +4547,7 @@ async function transcribeBlob(blob) {
     if (qualityToggle && qualityToggle.checked) fd.append('quality', 'best');
 
     const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd, true);
+    activeTranscribeJobId = jobId;
     if (window.posthog) posthog.capture('transcription_started', {
       language: langSel.value || 'auto',
       duration_sec: recordingDurationSec || null,
@@ -4505,6 +4557,7 @@ async function transcribeBlob(blob) {
       // Real backend stage signal — advance ring to confirmed position
       if (progress && progress.stage) _applyRealStage(progress.stage);
     });
+    activeTranscribeJobId = null;
     const segments = result.segments || [];
 
     // Успех — можем отпустить blob и почистить IDB-сессию
@@ -4543,7 +4596,16 @@ async function transcribeBlob(blob) {
     setStatus(t('statusReady'));
   } catch (e) {
     hideProcessingScreen();
-    if (e.upgradeRequired) {
+    if (e.cancelled) {
+      // User clicked Cancel — discard recording, no error message
+      setStatus(t('processingCancelled'));
+      hintEl.style.display = '';
+      lastRecordingBlob = null;
+      if (currentSessionId) { idbDeleteSession(currentSessionId).catch(() => {}); currentSessionId = null; }
+      if (window.posthog) posthog.capture('transcription_cancelled', {
+        duration_sec: recordingDurationSec || null,
+      });
+    } else if (e.upgradeRequired) {
       setError('');
       setStatus(t('statusReady'));
       hintEl.style.display = '';
@@ -4563,6 +4625,7 @@ async function transcribeBlob(blob) {
     }
   } finally {
     waitingForFull = false;
+    activeTranscribeJobId = null;
     startBtn.disabled = false;
     langSel.disabled  = false;
     numSpeakersEl.disabled = false;
