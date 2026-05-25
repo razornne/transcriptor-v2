@@ -5724,6 +5724,12 @@ sb.auth.onAuthStateChange(async (event, session) => {
       console.log('[auth] history loaded, items:', _historyCache.length);
       renderHistory();
       maybeShowWelcomeModal();
+      // Also try loading the demo transcript. If welcome modal is currently
+      // open, maybeLoadDemoTranscript will skip (we don't want both showing
+      // at once) and the demo will fire later from the Got it / dismiss
+      // handler. If welcome was already seen on a previous visit, demo
+      // loads right here.
+      maybeLoadDemoTranscript();
       // Try redeeming any pending referral code captured at landing-time.
       // Safe to call always: backend no-ops if user was already referred or
       // if no code is stored. Refresh profile after to update bonus_minutes.
@@ -5951,6 +5957,9 @@ let isDemoMode = false;
 
 function maybeLoadDemoTranscript() {
   if (!currentUser) return;
+  // If welcome modal is currently visible, defer — it'll re-trigger on dismiss
+  const wm = document.getElementById('welcomeModal');
+  if (wm && !wm.classList.contains('hidden')) return;
   const flagKey = 'skriptly-demo-seen-' + currentUser.id;
   if (localStorage.getItem(flagKey)) return;
   if (_historyCache && _historyCache.length > 0) {
