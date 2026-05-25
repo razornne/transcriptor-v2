@@ -402,18 +402,28 @@ STRIPE_PRO_MONTHLY_PRICE  = os.environ.get("STRIPE_PRO_MONTHLY_PRICE", "")
 STRIPE_PRO_ANNUAL_PRICE   = os.environ.get("STRIPE_PRO_ANNUAL_PRICE", "")
 STRIPE_MAX_MONTHLY_PRICE  = os.environ.get("STRIPE_MAX_MONTHLY_PRICE", "")
 STRIPE_MAX_ANNUAL_PRICE   = os.environ.get("STRIPE_MAX_ANNUAL_PRICE", "")
+# Team plan: per-seat pricing. Subscription quantity = workspace.seats
+STRIPE_TEAM_MONTHLY_PRICE = os.environ.get("STRIPE_TEAM_MONTHLY_PRICE", "")
+STRIPE_TEAM_ANNUAL_PRICE  = os.environ.get("STRIPE_TEAM_ANNUAL_PRICE", "")
 
 STRIPE_PRICE_MAP = {
     ("pro",  "monthly"): lambda: STRIPE_PRO_MONTHLY_PRICE,
     ("pro",  "annual"):  lambda: STRIPE_PRO_ANNUAL_PRICE,
     ("max",  "monthly"): lambda: STRIPE_MAX_MONTHLY_PRICE,
     ("max",  "annual"):  lambda: STRIPE_MAX_ANNUAL_PRICE,
+    ("team", "monthly"): lambda: STRIPE_TEAM_MONTHLY_PRICE,
+    ("team", "annual"):  lambda: STRIPE_TEAM_ANNUAL_PRICE,
 }
+
+TEAM_MIN_SEATS = 2  # Minimum seats at upgrade (owner + at least 1 invitee)
 
 PLAN_LIMITS = {
     "free": {"minutes": 60,   "diarization": False, "ai": False, "history": 5},
     "pro":  {"minutes": 600,  "diarization": True,  "ai": True,  "history": None},
     "max":  {"minutes": 2000, "diarization": True,  "ai": True,  "history": None},
+    # Team: per-seat plan. Each seat gets the same allowance as Pro, billed
+    # to workspace owner (~$14/seat/mo, $11 annual).
+    "team": {"minutes": 600,  "diarization": True,  "ai": True,  "history": None},
 }
 
 _tracked_jobs: set = set()  # job_ids уже учтённые в minutes_used (in-memory, ок для MVP)
@@ -816,7 +826,8 @@ def profile_endpoint():
                         "bonus_minutes": 0, "referral_code": None})
     try:
         profile = _get_user_profile(g.user_id)
-        plan = profile.get("plan", "free")
+        # Effective plan considers Team workspace membership
+        plan = _get_effective_plan(g.user_id, g.user_email, profile)
         limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
         bonus = int(profile.get("bonus_minutes") or 0)
         # Count successful referrals (people who used this user's code)
@@ -1119,6 +1130,104 @@ def _get_user_workspace(user_id: str, user_email: str | None = None) -> dict | N
     return None
 
 
+def _count_workspace_seats(workspace_id: str) -> int:
+    """Count current seats for a workspace = owner (always 1) + active members + invited members.
+    Pending invites count because billing happens on invite send.
+    Returns at least 1 (the owner)."""
+    try:
+        rows = _sb_admin("workspace_members", params={
+            "workspace_id": f"eq.{workspace_id}",
+            "status": "in.(active,invited)",
+            "select": "id",
+        })
+        return 1 + len(rows or [])
+    except Exception as e:
+        print(f"[team] seat count failed: {e}", flush=True)
+        return 1
+
+
+def _update_stripe_team_seats(workspace_id: str, new_qty: int) -> bool:
+    """Update Stripe subscription quantity for a workspace's Team plan.
+    Returns True on success, False otherwise (logged but non-fatal).
+
+    Stripe handles proration automatically — owner sees a prorated invoice
+    line on their next bill. We don't change workspaces.seats here; the
+    webhook (customer.subscription.updated) will reflect it back.
+    """
+    if not STRIPE_SECRET_KEY:
+        return False
+    try:
+        rows = _sb_admin("workspaces", params={
+            "id": f"eq.{workspace_id}",
+            "select": "stripe_subscription_id,plan",
+        })
+        if not rows:
+            return False
+        sub_id = rows[0].get("stripe_subscription_id")
+        if not sub_id or rows[0].get("plan") != "team":
+            # Workspace isn't on Team plan — no Stripe sync needed
+            return False
+        new_qty = max(TEAM_MIN_SEATS, int(new_qty))
+
+        import stripe as _stripe
+        _stripe.api_key = STRIPE_SECRET_KEY
+        sub = _stripe.Subscription.retrieve(sub_id)
+        item_id = sub["items"]["data"][0]["id"]
+        _stripe.Subscription.modify(sub_id, items=[{"id": item_id, "quantity": new_qty}],
+                                    proration_behavior="create_prorations")
+        print(f"[team] stripe seats updated: ws={workspace_id} qty={new_qty}", flush=True)
+        return True
+    except Exception as e:
+        print(f"[team] stripe seats sync failed: {e}", flush=True)
+        return False
+
+
+def _get_effective_plan(user_id: str, user_email: str | None = None,
+                        own_profile: dict | None = None) -> str:
+    """Return the plan that's actually in effect for this user.
+
+    Resolution order:
+    1. If user belongs to a Team workspace (owner or active member) → 'team'
+    2. Otherwise → user_profiles.plan (own subscription, default 'free')
+
+    Pending invites do NOT grant team access — only accepted ones do.
+    """
+    # Quick path: own paid plan beats workspace if we already know it
+    own_plan = (own_profile or {}).get("plan", "free")
+
+    # Owner of a Team workspace?
+    try:
+        rows = _sb_admin("workspaces", params={
+            "owner_id": f"eq.{user_id}",
+            "plan": "eq.team",
+            "select": "id", "limit": "1",
+        })
+        if rows:
+            return "team"
+    except Exception as e:
+        print(f"[plan] team owner lookup failed: {e}", flush=True)
+
+    # Active member of a Team workspace?
+    try:
+        rows = _sb_admin("workspace_members", params={
+            "user_id": f"eq.{user_id}",
+            "status": "eq.active",
+            "select": "workspace_id", "limit": "1",
+        })
+        if rows:
+            ws_rows = _sb_admin("workspaces", params={
+                "id": f"eq.{rows[0]['workspace_id']}",
+                "plan": "eq.team",
+                "select": "id", "limit": "1",
+            })
+            if ws_rows:
+                return "team"
+    except Exception as e:
+        print(f"[plan] team member lookup failed: {e}", flush=True)
+
+    return own_plan
+
+
 def _lookup_user_id_by_email(email: str) -> str | None:
     """Looks up a registered user's ID by email via Supabase Admin API."""
     if not SUPABASE_SERVICE_ROLE_KEY or not SUPABASE_URL:
@@ -1177,13 +1286,27 @@ def workspace_create():
 
 @app.route("/api/workspace", methods=["DELETE"])
 def workspace_delete():
-    """Delete workspace entirely. Owner only. Unshares all transcripts."""
+    """Delete workspace entirely. Owner only. Unshares all transcripts.
+    Cancels any active Stripe Team subscription (keeps Customer record)."""
     ws_rows = _sb_admin("workspaces", params={
-        "owner_id": f"eq.{g.user_id}", "select": "id"
+        "owner_id": f"eq.{g.user_id}",
+        "select": "id,stripe_subscription_id,plan",
     })
     if not ws_rows:
         return jsonify({"error": "You don't own a workspace."}), 404
     ws_id = ws_rows[0]["id"]
+
+    # Cancel active Team subscription so owner stops being billed
+    sub_id = ws_rows[0].get("stripe_subscription_id")
+    if sub_id and STRIPE_SECRET_KEY:
+        try:
+            import stripe as _stripe
+            _stripe.api_key = STRIPE_SECRET_KEY
+            _stripe.Subscription.cancel(sub_id)
+            print(f"[team] cancelled sub {sub_id} on workspace delete", flush=True)
+        except Exception as e:
+            # Sub might already be cancelled — don't block workspace deletion
+            print(f"[team] cancel sub non-fatal: {e}", flush=True)
 
     # Unshare all transcripts that belonged to this workspace
     try:
@@ -1196,6 +1319,93 @@ def workspace_delete():
     # Delete workspace — members cascade via FK
     _sb_admin("workspaces", method="DELETE", params={"id": f"eq.{ws_id}"})
     return jsonify({"ok": True})
+
+
+@app.route("/api/workspace/upgrade-team", methods=["POST"])
+def workspace_upgrade_team():
+    """Start Stripe Checkout for upgrading a workspace to Team plan.
+
+    Body (JSON): {billing: "monthly" | "annual"}
+    Owner only. Minimum quantity is TEAM_MIN_SEATS (currently 2).
+    On webhook completion, workspaces.plan='team' + stripe ids are saved.
+    Returns: {url: "https://checkout.stripe.com/..."}
+    """
+    import stripe as _stripe
+    _stripe.api_key = STRIPE_SECRET_KEY
+    if not STRIPE_SECRET_KEY:
+        return jsonify({"error": "Stripe not configured"}), 503
+
+    ws_rows = _sb_admin("workspaces", params={
+        "owner_id": f"eq.{g.user_id}", "select": "id,name,plan"
+    })
+    if not ws_rows:
+        return jsonify({"error": "You must own a workspace to upgrade it."}), 403
+    ws = ws_rows[0]
+    if ws.get("plan") == "team":
+        return jsonify({"error": "Workspace is already on Team plan."}), 409
+
+    data = request.get_json(silent=True) or {}
+    billing = (data.get("billing") or "monthly").lower()
+    if billing not in ("monthly", "annual"):
+        billing = "monthly"
+    price_id = STRIPE_PRICE_MAP.get(("team", billing), lambda: "")()
+    if not price_id:
+        return jsonify({"error": f"Team {billing} price not configured"}), 500
+
+    # Initial quantity = max(min, current seat count). Owner alone → use min.
+    current_seats = _count_workspace_seats(ws["id"])
+    qty = max(TEAM_MIN_SEATS, current_seats)
+
+    origin = request.headers.get("Origin", "https://skriptly.io")
+    try:
+        session = _stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[{"price": price_id, "quantity": qty}],
+            success_url=origin + "/app?team_subscribed=1",
+            cancel_url=origin + "/app?team_subscribed=0",
+            customer_email=g.user_email or None,
+            client_reference_id=ws["id"],
+            metadata={"type": "workspace_team", "workspace_id": ws["id"],
+                      "billing": billing, "owner_id": g.user_id},
+            subscription_data={
+                "metadata": {"type": "workspace_team", "workspace_id": ws["id"],
+                             "billing": billing}
+            },
+            allow_promotion_codes=True,
+        )
+        return jsonify({"url": session.url, "qty": qty})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/workspace/billing-portal", methods=["POST"])
+def workspace_billing_portal():
+    """Open Stripe Customer Portal for the workspace's owner. Owner only."""
+    import stripe as _stripe
+    _stripe.api_key = STRIPE_SECRET_KEY
+    if not STRIPE_SECRET_KEY:
+        return jsonify({"error": "Stripe not configured"}), 503
+
+    ws_rows = _sb_admin("workspaces", params={
+        "owner_id": f"eq.{g.user_id}",
+        "select": "id,stripe_customer_id,plan",
+    })
+    if not ws_rows:
+        return jsonify({"error": "You must own a workspace."}), 403
+    customer_id = ws_rows[0].get("stripe_customer_id")
+    if not customer_id:
+        return jsonify({"error": "No active Team subscription found.",
+                        "no_subscription": True}), 404
+
+    origin = request.headers.get("Origin", "https://skriptly.io")
+    try:
+        session = _stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=origin + "/app?portal=team_return",
+        )
+        return jsonify({"url": session.url})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/workspace/invite", methods=["POST"])
@@ -1258,6 +1468,11 @@ def workspace_invite():
     if not rows:
         return jsonify({"error": "failed to create invite"}), 500
 
+    # If workspace is on Team plan, bump Stripe seat count (bill on invite send).
+    # _update_stripe_team_seats is no-op for free workspaces.
+    new_qty = _count_workspace_seats(ws_id)
+    _update_stripe_team_seats(ws_id, new_qty)
+
     status = invite_data["status"]
     return jsonify({"member": rows[0], "status": status}), 201
 
@@ -1279,6 +1494,8 @@ def workspace_remove_member(member_id):
         return jsonify({"error": "Member not found in your workspace."}), 404
 
     _sb_admin("workspace_members", method="DELETE", params={"id": f"eq.{member_id}"})
+    # Decrement Stripe seat count if Team plan (Stripe enforces TEAM_MIN_SEATS floor)
+    _update_stripe_team_seats(ws_id, _count_workspace_seats(ws_id))
     return jsonify({"ok": True})
 
 
@@ -1286,12 +1503,16 @@ def workspace_remove_member(member_id):
 def workspace_leave():
     """Leave workspace. Member only (owner must delete instead)."""
     rows = _sb_admin("workspace_members", params={
-        "user_id": f"eq.{g.user_id}", "status": "eq.active", "select": "id"
+        "user_id": f"eq.{g.user_id}", "status": "eq.active",
+        "select": "id,workspace_id"
     })
     if not rows:
         return jsonify({"error": "You are not a member of any workspace."}), 404
+    ws_id = rows[0]["workspace_id"]
 
     _sb_admin("workspace_members", method="DELETE", params={"id": f"eq.{rows[0]['id']}"})
+    # Free up a seat on the owner's Team subscription
+    _update_stripe_team_seats(ws_id, _count_workspace_seats(ws_id))
     return jsonify({"ok": True})
 
 
@@ -1357,11 +1578,45 @@ def stripe_webhook():
         except Exception:
             return default
 
+    def _meta_get(o, key):
+        m = _g(o, "metadata") or {}
+        if isinstance(m, dict):
+            return m.get(key)
+        return getattr(m, key, None)
+
     if etype == "checkout.session.completed":
+        meta_type = _meta_get(obj, "type") or ""
+        # ── Workspace Team subscription ─────────────────────────────
+        if meta_type == "workspace_team":
+            workspace_id = _meta_get(obj, "workspace_id")
+            billing      = (_meta_get(obj, "billing") or "monthly")
+            customer     = _g(obj, "customer")
+            sub_id       = _g(obj, "subscription")
+            # Fetch subscription to get quantity (seat count)
+            qty = TEAM_MIN_SEATS
+            try:
+                import stripe as _stripe
+                _stripe.api_key = STRIPE_SECRET_KEY
+                sub = _stripe.Subscription.retrieve(sub_id)
+                qty = sub["items"]["data"][0].get("quantity", TEAM_MIN_SEATS)
+            except Exception as e:
+                print(f"[webhook] team sub retrieve failed: {e}", flush=True)
+            if workspace_id:
+                _sb_admin("workspaces", method="PATCH",
+                          params={"id": f"eq.{workspace_id}"},
+                          data={
+                              "plan": "team",
+                              "billing": billing,
+                              "stripe_customer_id": customer,
+                              "stripe_subscription_id": sub_id,
+                              "seats": int(qty),
+                          })
+                print(f"[webhook] workspace {workspace_id} → team, seats={qty}", flush=True)
+            return jsonify({"ok": True})
+
+        # ── Personal subscription (Pro/Max) ──────────────────────────
         user_id = _g(obj, "client_reference_id")
-        # Read plan from metadata (set at checkout creation), default pro
-        meta = _g(obj, "metadata") or {}
-        plan_name = (meta.get("plan") if isinstance(meta, dict) else getattr(meta, "plan", "pro")) or "pro"
+        plan_name = _meta_get(obj, "plan") or "pro"
         if plan_name not in ("pro", "max"):
             plan_name = "pro"
         print(f"[webhook] checkout.session.completed user_id={user_id} plan={plan_name}", flush=True)
@@ -1377,6 +1632,39 @@ def stripe_webhook():
             print(f"[webhook] plan updated to {plan_name} + minutes reset for {user_id}", flush=True)
 
     elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
+        meta_type = _meta_get(obj, "type") or ""
+        # ── Workspace Team subscription updates (seat changes, cancellations) ──
+        if meta_type == "workspace_team":
+            sub_id = _g(obj, "id")
+            ws_rows = _sb_admin("workspaces", params={
+                "stripe_subscription_id": f"eq.{sub_id}", "select": "id",
+            })
+            if ws_rows:
+                ws_id = ws_rows[0]["id"]
+                if etype == "customer.subscription.deleted":
+                    _sb_admin("workspaces", method="PATCH",
+                              params={"id": f"eq.{ws_id}"},
+                              data={"plan": "free", "seats": 1,
+                                    "stripe_subscription_id": None})
+                    print(f"[webhook] team sub deleted → workspace {ws_id} downgraded to free", flush=True)
+                else:
+                    status = _g(obj, "status")
+                    qty = 1
+                    try:
+                        items = _g(obj, "items")
+                        data_arr = items.get("data") if isinstance(items, dict) else items.data
+                        qty = (data_arr[0].get("quantity") if isinstance(data_arr[0], dict)
+                               else data_arr[0].quantity)
+                    except Exception:
+                        pass
+                    new_plan = "team" if status in ("active", "trialing") else "free"
+                    _sb_admin("workspaces", method="PATCH",
+                              params={"id": f"eq.{ws_id}"},
+                              data={"plan": new_plan, "seats": int(qty)})
+                    print(f"[webhook] team sub {etype} → workspace {ws_id} plan={new_plan} seats={qty}", flush=True)
+            return jsonify({"ok": True})
+
+        # ── Personal subscription updates ────────────────────────────
         customer_id = _g(obj, "customer")
         rows = _sb_admin("user_profiles",
                          params={"stripe_customer_id": f"eq.{customer_id}", "select": "id"})
@@ -1732,7 +2020,7 @@ def transcribe_endpoint():
     if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
         try:
             profile = _get_user_profile(g.user_id)
-            plan = profile.get("plan", "free")
+            plan = _get_effective_plan(g.user_id, g.user_email, profile)
             limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
             effective_limit = limits["minutes"] + int(profile.get("bonus_minutes") or 0)
             if profile.get("minutes_used", 0) >= effective_limit:
@@ -1742,8 +2030,10 @@ def transcribe_endpoint():
                 }), 402
             if not limits["diarization"]:
                 num_speakers = 1  # Free: транскрипция без разделения по спикерам
-            # Best Quality (large-v3) — только для Max плана
-            if quality == "best" and plan != "max":
+            # Best Quality (large-v3) — только для Max плана. Effective Team plan
+            # ≠ Max, but personal Max subscription always overrides.
+            own_plan = profile.get("plan", "free")
+            if quality == "best" and plan != "max" and own_plan != "max":
                 quality = "fast"
             # Personal vocabulary — у всех залогиненных юзеров
             vocab_items = profile.get("vocabulary") or []

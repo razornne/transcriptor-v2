@@ -1918,6 +1918,25 @@
           <span class="settings-row-label" data-i18n="wsNameLabel">Name</span>
           <span class="settings-row-value" id="wsNameDisplay">—</span>
         </div>
+        <!-- Team plan / billing (owner only) -->
+        <div id="wsBillingBox" style="display:none;margin-top:10px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+            <div>
+              <span class="settings-row-label" style="font-weight:600" id="wsPlanLabel" data-i18n="wsPlanFree">Free plan</span>
+              <span id="wsSeatsLabel" style="font-size:12px;color:var(--muted);margin-left:6px"></span>
+            </div>
+            <button id="wsUpgradeTeamBtn" class="btn-primary" style="font-size:12px;padding:6px 14px;display:none"
+                    data-i18n="wsUpgradeTeamBtn">Upgrade to Team</button>
+            <button id="wsTeamPortalBtn" class="btn-ghost" style="font-size:12px;padding:6px 14px;display:none"
+                    data-i18n="wsTeamPortalBtn">Manage team billing →</button>
+          </div>
+          <p class="settings-help-text" id="wsPlanHint" style="margin:0;font-size:12px;color:var(--muted);line-height:1.4"
+             data-i18n="wsPlanFreeHint">Upgrade to charge one invoice for the whole team. $14/seat/month, min 2 seats.</p>
+          <div id="wsBillingToggle" style="display:none;margin-top:8px;gap:6px">
+            <button class="billing-opt ws-billing-opt active" data-ws-billing="monthly" data-i18n="planMonthly">Monthly</button>
+            <button class="billing-opt ws-billing-opt" data-ws-billing="annual" data-i18n="planAnnual">Annual (-20%)</button>
+          </div>
+        </div>
         <!-- Members list rendered by JS -->
         <div id="wsMembersList" style="margin-top:8px"></div>
         <!-- Invite row (owner only) -->
@@ -2218,6 +2237,17 @@ const T = {
     wsInviteBtn: 'Invite',
     wsLeaveBtn: 'Leave workspace',
     wsDeleteBtn: 'Delete workspace',
+    wsPlanFree: 'Free plan',
+    wsPlanTeam: 'Team plan',
+    wsUpgradeTeamBtn: 'Upgrade to Team',
+    wsTeamPortalBtn: 'Manage team billing →',
+    wsPlanFreeHint: 'Upgrade to charge one invoice for the whole team. $14/seat/month (annual: $11/seat/month), min 2 seats.',
+    wsPlanTeamHint: 'You\'re paying for {n} seats. Adding a teammate adds a prorated charge to your next invoice.',
+    wsSeatsLabel: '{used} of {paid} seats used',
+    wsUpgradeRedirecting: 'Redirecting to checkout…',
+    wsTeamPortalRedirecting: 'Opening portal…',
+    planMonthly: 'Monthly',
+    planAnnual: 'Annual (-20%)',
     wsRoleOwner: 'owner',
     wsRemoveBtn: 'Remove',
     wsStatusInvited: 'invited',
@@ -2420,6 +2450,17 @@ const T = {
     wsInviteBtn: 'Запросити',
     wsLeaveBtn: 'Покинути workspace',
     wsDeleteBtn: 'Видалити workspace',
+    wsPlanFree: 'Безкоштовний план',
+    wsPlanTeam: 'Тариф Team',
+    wsUpgradeTeamBtn: 'Перейти на Team',
+    wsTeamPortalBtn: 'Білінг команди →',
+    wsPlanFreeHint: 'Перейди на Team щоб мати один рахунок на всю команду. $14/місце/міс (річно: $11/місце/міс), мінімум 2 місця.',
+    wsPlanTeamHint: 'Ти оплачуєш {n} місць. Запрошення колеги додає пропорційну суму до наступного рахунку.',
+    wsSeatsLabel: 'Використано {used} з {paid} місць',
+    wsUpgradeRedirecting: 'Перехід до оплати…',
+    wsTeamPortalRedirecting: 'Відкриття порталу…',
+    planMonthly: 'Помісячно',
+    planAnnual: 'Річно (-20%)',
     wsRoleOwner: 'власник',
     wsRemoveBtn: 'Видалити',
     wsStatusInvited: 'запрошено',
@@ -2831,7 +2872,91 @@ function renderWorkspaceSettings() {
   const deleteBtn = document.getElementById('wsDeleteBtn');
   if (leaveBtn)  leaveBtn.style.display  = currentWorkspace.is_owner ? 'none' : '';
   if (deleteBtn) deleteBtn.style.display = currentWorkspace.is_owner ? '' : 'none';
+
+  renderWorkspaceBilling();
 }
+
+function renderWorkspaceBilling() {
+  const box = document.getElementById('wsBillingBox');
+  if (!box) return;
+  // Billing UI only visible to owner — members don't manage payments
+  if (!currentWorkspace || !currentWorkspace.is_owner) {
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = '';
+
+  const plan = currentWorkspace.plan || 'free';
+  const paidSeats = currentWorkspace.seats || 1;
+  // Actual seat usage = owner + invited + active members
+  const usedSeats = 1 + (currentWorkspace.members || [])
+    .filter(m => m.status === 'invited' || m.status === 'active').length;
+
+  const planLabel = document.getElementById('wsPlanLabel');
+  const seatsLabel = document.getElementById('wsSeatsLabel');
+  const hintEl = document.getElementById('wsPlanHint');
+  const upgradeBtn = document.getElementById('wsUpgradeTeamBtn');
+  const portalBtn = document.getElementById('wsTeamPortalBtn');
+  const toggleEl = document.getElementById('wsBillingToggle');
+
+  if (plan === 'team') {
+    if (planLabel) planLabel.textContent = t('wsPlanTeam');
+    if (seatsLabel) seatsLabel.textContent = tFmt('wsSeatsLabel', { used: usedSeats, paid: paidSeats });
+    if (hintEl) hintEl.textContent = tFmt('wsPlanTeamHint', { n: paidSeats });
+    if (upgradeBtn) upgradeBtn.style.display = 'none';
+    if (portalBtn) portalBtn.style.display = '';
+    if (toggleEl) toggleEl.style.display = 'none';
+  } else {
+    if (planLabel) planLabel.textContent = t('wsPlanFree');
+    if (seatsLabel) seatsLabel.textContent = '';
+    if (hintEl) hintEl.textContent = t('wsPlanFreeHint');
+    if (upgradeBtn) upgradeBtn.style.display = '';
+    if (portalBtn) portalBtn.style.display = 'none';
+    if (toggleEl) toggleEl.style.display = 'flex';
+  }
+}
+
+let _wsBilling = 'monthly';
+document.querySelectorAll('.ws-billing-opt').forEach(b => {
+  b.addEventListener('click', () => {
+    _wsBilling = b.dataset.wsBilling;
+    document.querySelectorAll('.ws-billing-opt').forEach(x => x.classList.toggle('active', x === b));
+  });
+});
+
+document.getElementById('wsUpgradeTeamBtn')?.addEventListener('click', async () => {
+  const btn = document.getElementById('wsUpgradeTeamBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = t('wsUpgradeRedirecting');
+  if (window.posthog) posthog.capture('team_upgrade_started', { billing: _wsBilling });
+  try {
+    const res = await authFetch(`${API_BASE}/api/workspace/upgrade-team`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ billing: _wsBilling }),
+    });
+    const d = await res.json();
+    if (d.url) { window.location.href = d.url; return; }
+    alert(d.error || 'Could not start checkout.');
+  } catch (e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.textContent = orig;
+});
+
+document.getElementById('wsTeamPortalBtn')?.addEventListener('click', async () => {
+  const btn = document.getElementById('wsTeamPortalBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = t('wsTeamPortalRedirecting');
+  try {
+    const res = await authFetch(`${API_BASE}/api/workspace/billing-portal`, { method: 'POST' });
+    const d = await res.json();
+    if (d.url) { window.location.href = d.url; return; }
+    alert(d.error || 'Could not open portal.');
+  } catch (e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+  btn.textContent = orig;
+});
 
 // Workspace button handlers (wired after DOM ready, below settings modal init)
 function _initWorkspaceHandlers() {
