@@ -435,6 +435,40 @@ def _sb_admin(path: str, method: str = "GET", data: dict = None, params: dict = 
     return r.json() if r.content else []
 
 
+def _generate_referral_code(user_id: str) -> str:
+    """Short, URL-safe, human-readable referral code. Collision-resistant enough
+    for our scale (deriving from uuid + secrets gives ~10^9 unique codes)."""
+    import secrets, hashlib
+    # Mix user_id with random salt so codes are stable per attempt but unique per user
+    h = hashlib.sha256((user_id + secrets.token_hex(4)).encode()).hexdigest()
+    # 8 chars from a friendly alphabet (no 0/O/1/l/I to avoid copy confusion)
+    alphabet = "23456789abcdefghjkmnpqrstuvwxyz"
+    out = ""
+    for i in range(0, 8):
+        out += alphabet[int(h[i*2:i*2+2], 16) % len(alphabet)]
+    return out
+
+
+def _ensure_referral_code(user_id: str, profile: dict) -> dict:
+    """Lazily generate referral code if missing (also covers profiles created
+    before migration 003). Retries on rare UNIQUE collision."""
+    if profile.get("referral_code"):
+        return profile
+    for _ in range(5):
+        code = _generate_referral_code(user_id)
+        try:
+            updated = _sb_admin("user_profiles", method="PATCH",
+                                params={"id": f"eq.{user_id}"},
+                                data={"referral_code": code})
+            if updated:
+                return updated[0]
+        except Exception as e:
+            # Likely UNIQUE constraint violation — try a fresh code
+            if "duplicate" not in str(e).lower():
+                print(f"[referral] code generation failed: {e}", flush=True)
+    return profile  # gave up; non-fatal — UI will just not show invite link
+
+
 def _get_user_profile(user_id: str) -> dict:
     """Читает профиль, сбрасывает счётчик если новый месяц, создаёт если нет."""
     from datetime import timezone
@@ -454,10 +488,15 @@ def _get_user_profile(user_id: str) -> dict:
                 profile["minutes_used"] = 0
         except Exception:
             pass
+        # Lazy-backfill referral code for legacy profiles
+        if not profile.get("referral_code"):
+            profile = _ensure_referral_code(user_id, profile)
         return profile
-    # Создаём профиль если не существует
-    rows = _sb_admin("user_profiles", method="POST", data={"id": user_id})
-    return rows[0] if rows else {"plan": "free", "minutes_used": 0}
+    # Создаём профиль если не существует — сразу с реф-кодом
+    code = _generate_referral_code(user_id)
+    rows = _sb_admin("user_profiles", method="POST",
+                     data={"id": user_id, "referral_code": code})
+    return rows[0] if rows else {"plan": "free", "minutes_used": 0, "referral_code": code}
 
 
 def _add_minutes(user_id: str, minutes: float):
@@ -773,19 +812,97 @@ def _llm_correct_segments(segments: list[dict], language: str | None) -> list[di
 def profile_endpoint():
     """Возвращает план и использованные минуты для текущего пользователя."""
     if not g.user_id or not SUPABASE_SERVICE_ROLE_KEY:
-        return jsonify({"plan": "free", "minutes_used": 0, "minutes_limit": 60})
+        return jsonify({"plan": "free", "minutes_used": 0, "minutes_limit": 60,
+                        "bonus_minutes": 0, "referral_code": None})
     try:
         profile = _get_user_profile(g.user_id)
         plan = profile.get("plan", "free")
         limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+        bonus = int(profile.get("bonus_minutes") or 0)
+        # Count successful referrals (people who used this user's code)
+        ref_count = 0
+        try:
+            refs = _sb_admin("user_profiles",
+                             params={"referred_by": f"eq.{g.user_id}", "select": "id"})
+            ref_count = len(refs or [])
+        except Exception:
+            pass
         return jsonify({
             "plan": plan,
             "minutes_used": profile.get("minutes_used", 0),
-            "minutes_limit": limits["minutes"],
+            "minutes_limit": limits["minutes"] + bonus,  # effective limit
+            "minutes_limit_base": limits["minutes"],
+            "bonus_minutes": bonus,
+            "referral_code": profile.get("referral_code"),
+            "referral_count": ref_count,
+            "was_referred": bool(profile.get("referred_by")),
         })
     except Exception as e:
         print(f"[profile] error: {e}")
-        return jsonify({"plan": "free", "minutes_used": 0, "minutes_limit": 60})
+        return jsonify({"plan": "free", "minutes_used": 0, "minutes_limit": 60,
+                        "bonus_minutes": 0, "referral_code": None})
+
+
+# ── Referral redeem ────────────────────────────────────────────
+REFERRAL_BONUS_MINUTES = 60  # awarded to BOTH inviter and invitee
+
+
+@app.route("/api/referral/redeem", methods=["POST"])
+def referral_redeem():
+    """Apply a referral code to the current user (one-time only).
+
+    Front-end calls this once after signup if a ?ref=CODE was captured at
+    landing-time. Awards REFERRAL_BONUS_MINUTES to both sides.
+    Body: {code: "abc12345"}.
+    Idempotent: silently no-ops if user already has referred_by set.
+    """
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        return jsonify({"error": "service unavailable"}), 503
+
+    data = request.get_json(silent=True) or {}
+    code = (data.get("code") or "").strip().lower()
+    if not code or len(code) < 4 or len(code) > 32:
+        return jsonify({"error": "invalid code"}), 400
+
+    # 1. Current user — must not already be referred (one-time bonus)
+    profile = _get_user_profile(g.user_id)
+    if profile.get("referred_by"):
+        return jsonify({"ok": True, "already_redeemed": True})
+
+    # 2. Find inviter by code
+    try:
+        rows = _sb_admin("user_profiles",
+                         params={"referral_code": f"eq.{code}", "select": "id,bonus_minutes"})
+    except Exception as e:
+        print(f"[referral] lookup failed: {e}")
+        return jsonify({"error": "lookup failed"}), 500
+    if not rows:
+        return jsonify({"error": "code not found"}), 404
+    inviter_id = rows[0]["id"]
+    if inviter_id == g.user_id:
+        return jsonify({"error": "cannot use own code"}), 400
+
+    # 3. Atomically award bonus to both
+    bonus = REFERRAL_BONUS_MINUTES
+    try:
+        # Invitee — set referred_by + bonus
+        _sb_admin("user_profiles", method="PATCH",
+                  params={"id": f"eq.{g.user_id}"},
+                  data={"referred_by": inviter_id,
+                        "bonus_minutes": int(profile.get("bonus_minutes") or 0) + bonus})
+        # Inviter — bump bonus
+        inviter_bonus = int(rows[0].get("bonus_minutes") or 0) + bonus
+        _sb_admin("user_profiles", method="PATCH",
+                  params={"id": f"eq.{inviter_id}"},
+                  data={"bonus_minutes": inviter_bonus})
+        print(f"[referral] redeem ok: invitee={g.user_id} inviter={inviter_id} +{bonus} each", flush=True)
+    except Exception as e:
+        print(f"[referral] redeem failed: {e}")
+        return jsonify({"error": "redeem failed"}), 500
+
+    return jsonify({"ok": True, "bonus": bonus})
 
 
 @app.route("/api/stripe/checkout", methods=["POST"])
@@ -1617,9 +1734,10 @@ def transcribe_endpoint():
             profile = _get_user_profile(g.user_id)
             plan = profile.get("plan", "free")
             limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-            if profile.get("minutes_used", 0) >= limits["minutes"]:
+            effective_limit = limits["minutes"] + int(profile.get("bonus_minutes") or 0)
+            if profile.get("minutes_used", 0) >= effective_limit:
                 return jsonify({
-                    "error": f"Monthly limit reached ({limits['minutes']} min). Upgrade to continue.",
+                    "error": f"Monthly limit reached ({effective_limit} min). Upgrade to continue.",
                     "upgrade_required": True,
                 }), 402
             if not limits["diarization"]:

@@ -38,6 +38,8 @@ export const viewport: Viewport = {
 
 // Inline скрипт применяет сохранённую тему ДО первого рендера,
 // чтобы не было flash-of-wrong-theme.
+// Also captures ?ref=CODE into localStorage so the referral survives
+// landing → /app navigation. /app's captureRefCode reads from localStorage.
 const themeBootstrap = `
 (function() {
   try {
@@ -48,6 +50,12 @@ const themeBootstrap = `
     var lang = localStorage.getItem('skriptly-lang') || 'en';
     document.documentElement.setAttribute('data-lang', lang);
     document.documentElement.lang = lang === 'ua' ? 'uk' : 'en';
+    // Referral code persistence — see app captureRefCode for redeem flow
+    var params = new URLSearchParams(window.location.search);
+    var ref = (params.get('ref') || '').toLowerCase().trim();
+    if (ref && ref.length >= 4 && ref.length <= 32) {
+      localStorage.setItem('skriptly-ref-code', ref);
+    }
   } catch (e) {}
 })();
 `;
