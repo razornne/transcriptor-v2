@@ -1307,10 +1307,11 @@
       gap: 6px; margin-top: 4px;
     }
     .sidebar-usage-text {
-      font-size: 10px; color: var(--dim);
-      font-family: var(--mono, monospace);
+      font-size: 11px; color: var(--dim);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
       letter-spacing: -0.01em;
       white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }
     .sidebar-usage-bar {
       height: 3px; border-radius: 2px;
@@ -1980,7 +1981,7 @@
       </p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
         <input id="referralLinkInput" type="text" readonly
-               style="flex:1;min-width:200px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);font-size:13px;font-family:var(--mono,monospace)" />
+               style="flex:1;min-width:200px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);font-size:13px;font-family:'JetBrains Mono',ui-monospace,monospace" />
         <button id="referralCopyBtn" class="btn-ghost" style="font-size:12px;padding:7px 14px;white-space:nowrap"
                 data-i18n="referralCopy">Copy link</button>
       </div>
