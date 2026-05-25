@@ -813,11 +813,13 @@ button { font: inherit; cursor: pointer; }
 }
 
 /* ─── Section ─── */
-section.s { padding: clamp(80px, 10vw, 140px) 0; }
+/* Section padding kept compact — wider gaps on huge desktops felt empty,
+   especially between How-it-works and Features (no visual break in between). */
+section.s { padding: clamp(64px, 6.5vw, 96px) 0; }
 .s-head {
   display: grid; gap: 14px;
   max-width: 720px;
-  margin-bottom: clamp(40px, 5vw, 64px);
+  margin-bottom: clamp(36px, 4vw, 52px);
 }
 
 /* ─── How it works ─── */
