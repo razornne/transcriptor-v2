@@ -318,6 +318,31 @@
     .hint b { color: var(--text); font-weight: 600; }
     .hint .accent { color: var(--accent); }
 
+    /* ── Welcome (first-run) modal ── */
+    .welcome-step {
+      display: flex; gap: 14px; align-items: flex-start;
+      padding: 14px 0;
+      border-top: 1px solid var(--border);
+    }
+    .welcome-step:first-of-type { border-top: none; padding-top: 0; }
+    .welcome-step-num {
+      flex: 0 0 28px; height: 28px;
+      border-radius: 50%;
+      background: var(--surface-2, var(--surface));
+      border: 1px solid var(--border);
+      display: inline-flex; align-items: center; justify-content: center;
+      font-family: var(--mono, monospace); font-size: 13px; font-weight: 600;
+      color: var(--text);
+    }
+    .welcome-step-key .welcome-step-num {
+      background: var(--accent); color: white; border-color: var(--accent);
+    }
+    .welcome-step-key .welcome-step-h { color: var(--accent); }
+    .welcome-step-body { flex: 1; min-width: 0; }
+    .welcome-step-h { font-size: 14.5px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+    .welcome-step-p { font-size: 13px; color: var(--muted); line-height: 1.55; }
+    .welcome-step-p b { color: var(--text); font-weight: 600; }
+
     /* ── TRANSCRIPT ── */
     .section-title {
       font-size: 10.5px; font-weight: 600;
@@ -1935,6 +1960,44 @@
   </div>
 </div>
 
+<!-- First-run welcome modal — shown once after signup, before first recording -->
+<div id="welcomeModal" class="modal-backdrop hidden">
+  <div class="modal-card" style="max-width:560px">
+    <div class="modal-title" data-i18n="welcomeTitle" style="margin-bottom:6px">Welcome to Skriptly 👋</div>
+    <p style="color:var(--muted);margin:0 0 22px;font-size:14px;line-height:1.5" data-i18n="welcomeSub">
+      Record any call right in your browser. Here's the 30-second tour:
+    </p>
+
+    <div class="welcome-step">
+      <div class="welcome-step-num">1</div>
+      <div class="welcome-step-body">
+        <div class="welcome-step-h" data-i18n="welcomeStep1H">Click Start recording</div>
+        <div class="welcome-step-p" data-i18n="welcomeStep1P">Allow microphone access when your browser asks.</div>
+      </div>
+    </div>
+
+    <div class="welcome-step welcome-step-key">
+      <div class="welcome-step-num">2</div>
+      <div class="welcome-step-body">
+        <div class="welcome-step-h" data-i18n="welcomeStep2H">Pick the call tab — and check "Share audio"</div>
+        <div class="welcome-step-p" data-i18n="welcomeStep2P">This is the most-missed step. In the Chrome picker, click the tab with your call (Meet / Zoom / Teams) and <b>turn on the "Share audio" toggle</b> in the bottom-left corner. Without it we won't hear the other speakers.</div>
+      </div>
+    </div>
+
+    <div class="welcome-step">
+      <div class="welcome-step-num">3</div>
+      <div class="welcome-step-body">
+        <div class="welcome-step-h" data-i18n="welcomeStep3H">Hit Stop when done</div>
+        <div class="welcome-step-p" data-i18n="welcomeStep3P">Transcript with speakers + auto-summary appears in ~1-2 min.</div>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;margin-top:24px">
+      <button id="welcomeGotItBtn" class="btn-primary" data-i18n="welcomeGotIt" style="padding:10px 24px">Got it, let's go →</button>
+    </div>
+  </div>
+</div>
+
 <div id="shortcutsModal" class="modal-backdrop hidden">
   <div class="modal-card">
     <div class="modal-title" data-i18n="shortcutsTitle">Keyboard shortcuts</div>
@@ -2085,6 +2148,16 @@ const T = {
     settingsSignOut: 'Sign out',
     settingsManageSub: 'Subscription',
     settingsManageSubBtn: 'Manage billing →',
+    // Welcome (first-run) modal
+    welcomeTitle: 'Welcome to Skriptly 👋',
+    welcomeSub: 'Record any call right in your browser. Here\'s the 30-second tour:',
+    welcomeStep1H: 'Click Start recording',
+    welcomeStep1P: 'Allow microphone access when your browser asks.',
+    welcomeStep2H: 'Pick the call tab — and check "Share audio"',
+    welcomeStep2P: 'This is the most-missed step. In the Chrome picker, click the tab with your call (Meet / Zoom / Teams) and <b>turn on the "Share audio" toggle</b> in the bottom-left corner. Without it we won\'t hear the other speakers.',
+    welcomeStep3H: 'Hit Stop when done',
+    welcomeStep3P: 'Transcript with speakers + auto-summary appears in ~1-2 min.',
+    welcomeGotIt: 'Got it, let\'s go →',
     settingsReferral: 'Invite friends, get free minutes',
     referralHint: 'Share this link. Both you and your friend get +60 minutes when they sign up.',
     referralCopy: 'Copy link',
@@ -2277,6 +2350,16 @@ const T = {
     settingsSignOut: 'Вийти',
     settingsManageSub: 'Підписка',
     settingsManageSubBtn: 'Керувати білінгом →',
+    // Welcome (first-run) modal
+    welcomeTitle: 'Вітаємо у Skriptly 👋',
+    welcomeSub: 'Записуй будь-який дзвінок прямо в браузері. 30 секунд про головне:',
+    welcomeStep1H: 'Натисни «Почати запис»',
+    welcomeStep1P: 'Дозволь мікрофон коли браузер запитає.',
+    welcomeStep2H: 'Обери вкладку дзвінка — і ввімкни «Share audio»',
+    welcomeStep2P: 'Це найчастіша помилка. У вікні Chrome обери вкладку з дзвінком (Meet / Zoom / Teams) та <b>увімкни перемикач «Share audio»</b> внизу зліва. Без нього ми не почуємо інших учасників.',
+    welcomeStep3H: 'Натисни «Стоп» коли закінчиш',
+    welcomeStep3P: 'Транскрипт зі спікерами + авто-підсумок з\'явиться через 1-2 хв.',
+    welcomeGotIt: 'Зрозуміло, поїхали →',
     settingsReferral: 'Запроси друзів — отримай безкоштовні хвилини',
     referralHint: 'Поділись цим посиланням. Ти і друг отримаєте +60 хв коли він зареєструється.',
     referralCopy: 'Скопіювати',
@@ -5214,6 +5297,13 @@ window.addEventListener('keydown', (e) => {
 
   // Escape — закрывает модалку или снимает фокус с поля
   if (e.key === 'Escape') {
+    const welcomeModalEl = document.getElementById('welcomeModal');
+    if (welcomeModalEl && !welcomeModalEl.classList.contains('hidden')) {
+      e.preventDefault();
+      if (window.posthog) posthog.capture('welcome_modal_dismissed', { action: 'escape' });
+      dismissWelcomeModal();
+      return;
+    }
     if (!settingsModal.classList.contains('hidden')) {
       e.preventDefault();
       closeSettingsModal();
@@ -5391,6 +5481,7 @@ sb.auth.onAuthStateChange(async (event, session) => {
       await Promise.all([refreshHistory(), fetchProfile(), fetchWorkspace()]);
       console.log('[auth] history loaded, items:', _historyCache.length);
       renderHistory();
+      maybeShowWelcomeModal();
       // Try redeeming any pending referral code captured at landing-time.
       // Safe to call always: backend no-ops if user was already referred or
       // if no code is stored. Refresh profile after to update bonus_minutes.
@@ -5532,6 +5623,46 @@ syncSettingsThemeBtn();
 document.getElementById('settingsSignOutBtn').addEventListener('click', async () => {
   closeSettingsModal();
   await sb.auth.signOut();
+});
+
+// ── First-run welcome modal ────────────────────────────────────
+// Shows once per user when they sign in with no transcripts yet.
+// Dismissal is per-user (key includes user id) so multi-account doesn't
+// hide the modal for the second person on the same browser.
+function maybeShowWelcomeModal() {
+  if (!currentUser) return;
+  const flagKey = 'skriptly-welcome-seen-' + currentUser.id;
+  if (localStorage.getItem(flagKey)) return;          // already dismissed
+  if ((_historyCache && _historyCache.length) > 0) {  // not new — has transcripts
+    // Still mark as seen so we never show it later
+    localStorage.setItem(flagKey, '1');
+    return;
+  }
+  const modal = document.getElementById('welcomeModal');
+  if (!modal) return;
+  modal.classList.remove('hidden');
+  if (window.posthog) posthog.capture('welcome_modal_shown');
+}
+
+function dismissWelcomeModal() {
+  const modal = document.getElementById('welcomeModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  if (currentUser) {
+    localStorage.setItem('skriptly-welcome-seen-' + currentUser.id, '1');
+  }
+}
+
+document.getElementById('welcomeGotItBtn').addEventListener('click', () => {
+  if (window.posthog) posthog.capture('welcome_modal_dismissed', { action: 'got_it' });
+  dismissWelcomeModal();
+});
+// Click backdrop to dismiss too
+document.getElementById('welcomeModal').addEventListener('click', e => {
+  if (e.target.id === 'welcomeModal') {
+    if (window.posthog) posthog.capture('welcome_modal_dismissed', { action: 'backdrop' });
+    dismissWelcomeModal();
+  }
 });
 
 // ── Referral UI ───────────────────────────────────────────────
