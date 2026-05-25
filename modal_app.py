@@ -74,7 +74,8 @@ image = (
         "torch",
         "torchaudio",
         # LLM (transformers + 4-bit quantization)
-        "transformers>=4.45.0",
+        # >=4.55 for gpt-oss harmony chat template + native MXFP4 quantization
+        "transformers>=4.55.0",
         "accelerate",
         "bitsandbytes",
         "huggingface_hub",
@@ -695,6 +696,140 @@ class Transcriptor:
 
         response = self.llm_tokenizer.decode(output[0][input_len:], skip_special_tokens=True)
         return response.strip()
+
+
+# ── Lab models — side-by-side quality comparison ────────────────
+# Candidates for Privacy Mode (Max + Team gated feature) where we replace
+# Gemini with a fully self-hosted LLM on Modal GPU. Each class loads ONE
+# model and exposes a generic .generate(prompt) method so the comparison
+# endpoint can hit them with identical prompts.
+#
+# Cost notes:
+#  • All Lab classes use A10G — same GPU as production Transcriptor, no
+#    new GPU type needed. Both quantized to 4-bit (bitsandbytes) so they
+#    fit in 24 GB alongside Whisper + pyannote if we ever stack them.
+#  • Scale-to-zero with scaledown_window=120 (shorter than prod 300 since
+#    these are only used for testing, no need to keep warm).
+
+
+def _llm_chat_generate(model, tokenizer, prompt: str, max_tokens: int, temperature: float) -> str:
+    """Shared inference helper for any chat-tuned LLM loaded via transformers.
+    Wraps prompt as a single user turn and runs greedy/sampled decode."""
+    import torch
+    messages = [{"role": "user", "content": prompt}]
+    try:
+        result = tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True, return_tensors="pt",
+        )
+    except Exception:
+        result = tokenizer(prompt, return_tensors="pt")
+    if isinstance(result, torch.Tensor):
+        encoded = {"input_ids": result.to("cuda")}
+    else:
+        encoded = {k: v.to("cuda") for k, v in result.items()}
+    input_len = encoded["input_ids"].shape[-1]
+    with torch.no_grad():
+        output = model.generate(
+            **encoded,
+            max_new_tokens=max_tokens,
+            do_sample=temperature > 0,
+            temperature=max(temperature, 1e-6) if temperature > 0 else 1.0,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    return tokenizer.decode(output[0][input_len:], skip_special_tokens=True).strip()
+
+
+@app.cls(
+    image=image,
+    gpu="A10G",
+    volumes={MODELS_DIR: volume},
+    secrets=[hf_secret],
+    timeout=600,
+    scaledown_window=120,
+    min_containers=0,
+)
+class LabQwen32B:
+    """Qwen 2.5 32B Instruct loaded with bitsandbytes int4 (~18 GB on A10G).
+    Strong on Russian/Ukrainian; primary candidate for Privacy Mode."""
+
+    @modal.enter()
+    def load_model(self):
+        import os, torch
+        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+        from huggingface_hub import login
+
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            try: login(token=hf_token)
+            except Exception: pass
+
+        model_id = "Qwen/Qwen2.5-32B-Instruct"
+        print(f"[lab/qwen32b] loading {model_id}...", flush=True)
+        bnb = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,   # extra ~0.4 bits saving, ~5% slower
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_id, cache_dir=f"{MODELS_DIR}/lab", token=hf_token,
+        )
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_id, quantization_config=bnb, device_map="cuda",
+            cache_dir=f"{MODELS_DIR}/lab", token=hf_token,
+        )
+        self.model.eval()
+        print("[lab/qwen32b] ready", flush=True)
+
+    @modal.method()
+    def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:
+        return _llm_chat_generate(self.model, self.tokenizer, prompt, max_tokens, temperature)
+
+
+@app.cls(
+    image=image,
+    gpu="A10G",
+    volumes={MODELS_DIR: volume},
+    secrets=[hf_secret],
+    timeout=600,
+    scaledown_window=120,
+    min_containers=0,
+)
+class LabGPTOSS20B:
+    """OpenAI gpt-oss-20b — 21B MoE, ~5B active params per token.
+    Strong reasoning, English-centric but uses Whisper-friendly tokenizer."""
+
+    @modal.enter()
+    def load_model(self):
+        import os, torch
+        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+        from huggingface_hub import login
+
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            try: login(token=hf_token)
+            except Exception: pass
+
+        model_id = "openai/gpt-oss-20b"
+        print(f"[lab/gptoss20b] loading {model_id}...", flush=True)
+        # gpt-oss ships in MXFP4 natively; transformers>=4.55 loads it as-is.
+        # On A10G that's ~12 GB. We do NOT layer bitsandbytes on top.
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_id, cache_dir=f"{MODELS_DIR}/lab", token=hf_token,
+        )
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16,
+            device_map="cuda",
+            cache_dir=f"{MODELS_DIR}/lab",
+            token=hf_token,
+        )
+        self.model.eval()
+        print("[lab/gptoss20b] ready", flush=True)
+
+    @modal.method()
+    def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:
+        return _llm_chat_generate(self.model, self.tokenizer, prompt, max_tokens, temperature)
 
 
 # ── External LLM (Gemini) ────────────────────────────────────────

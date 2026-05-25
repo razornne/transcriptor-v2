@@ -1755,6 +1755,7 @@
       <button id="copyBtn" class="btn-ghost" data-i18n="copyBtn">Copy</button>
       <button id="downloadBtn" class="btn-ghost" data-i18n="downloadBtn">Download .md</button>
       <button id="sendNotionBtn" class="btn-ghost" style="display:none" data-i18n="sendNotionBtn">Send to Notion</button>
+      <button id="labCompareBtn" class="btn-ghost" style="display:none" title="Admin: compare LLMs side-by-side">⚗ Compare models</button>
     </div>
     <div id="error" class="error"></div>
     <div id="recoveryBox" class="recovery-box" style="display:none">
@@ -2038,6 +2039,38 @@
         Delete my account…
       </button>
     </div>
+
+    <div class="modal-footer" data-i18n-html="settingsEscHint">Press <kbd>Esc</kbd> to close</div>
+  </div>
+</div>
+
+<!-- Lab: model comparison modal (admin only) -->
+<div id="labModal" class="modal-backdrop hidden">
+  <div class="modal-card" style="max-width:1200px;max-height:90vh;display:flex;flex-direction:column">
+    <div class="modal-title" style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      ⚗ Model comparison <span style="font-size:11px;color:var(--muted);font-weight:400">— admin lab</span>
+    </div>
+    <p style="color:var(--muted);margin:0 0 14px;font-size:13px;line-height:1.45">
+      Run the current transcript through multiple LLMs with the same prompt. Pick which one to ship in Privacy Mode.
+    </p>
+
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:14px;align-items:flex-start">
+      <div>
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px">Task</div>
+        <select id="labTaskSelect" class="settings-input" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--ink);font-size:13px"></select>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px">Models</div>
+        <div id="labModelChecks" style="display:flex;flex-direction:column;gap:6px;font-size:13px"></div>
+      </div>
+      <div style="margin-left:auto;align-self:flex-end">
+        <button id="labRunBtn" class="btn-primary" style="font-size:13px;padding:8px 18px">Run comparison</button>
+      </div>
+    </div>
+
+    <div id="labStatus" style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
+
+    <div id="labResults" style="flex:1;overflow-y:auto;display:grid;gap:14px;grid-template-columns:1fr"></div>
 
     <div class="modal-footer" data-i18n-html="settingsEscHint">Press <kbd>Esc</kbd> to close</div>
   </div>
@@ -2755,6 +2788,7 @@ let currentReferralCount = 0;
 let currentWasReferred = false;
 let currentNotionConnected = false;
 let currentNotionWorkspace = null;
+let currentIsAdmin = false;
 
 async function fetchProfile() {
   if (!currentUser) return;
@@ -2771,9 +2805,11 @@ async function fetchProfile() {
     currentWasReferred   = !!data.was_referred;
     currentNotionConnected = !!data.notion_connected;
     currentNotionWorkspace = data.notion_workspace_name || null;
+    currentIsAdmin = !!data.is_admin;
     _updatePlanUI();
     renderReferralSection();
     renderNotionSection();
+    renderLabButton();
   } catch (e) {
     console.warn('[profile] fetch failed:', e);
   }
@@ -3696,6 +3732,7 @@ function renderTranscript(segments, highlightQuery) {
   renderAIResults();
   // Sync Notion button visibility — appears only when both connected AND segments present
   if (typeof renderNotionSection === 'function') renderNotionSection();
+  if (typeof renderLabButton    === 'function') renderLabButton();
   renderChatMessages();
   renderTags();
 
@@ -5602,6 +5639,12 @@ window.addEventListener('keydown', (e) => {
 
   // Escape — закрывает модалку или снимает фокус с поля
   if (e.key === 'Escape') {
+    const labModalEl = document.getElementById('labModal');
+    if (labModalEl && !labModalEl.classList.contains('hidden') && !_labRunning) {
+      e.preventDefault();
+      closeLabModal();
+      return;
+    }
     const welcomeModalEl = document.getElementById('welcomeModal');
     if (welcomeModalEl && !welcomeModalEl.classList.contains('hidden')) {
       e.preventDefault();
@@ -6257,6 +6300,139 @@ document.getElementById('sendNotionBtn').addEventListener('click', async () => {
   }
   btn.textContent = orig;
   btn.disabled = false;
+});
+
+// ── Lab: model comparison (admin only) ────────────────────────
+let _labInfo = null;   // {models, tasks} — fetched lazily from /api/lab/info
+let _labRunning = false;
+
+function renderLabButton() {
+  const btn = document.getElementById('labCompareBtn');
+  if (!btn) return;
+  // Show only for admins, with a real (saved) transcript loaded
+  const hasReal = currentSegments && currentSegments.length > 0
+                  && currentHistoryId && !isDemoMode;
+  btn.style.display = (currentIsAdmin && hasReal) ? '' : 'none';
+}
+
+async function openLabModal() {
+  const modal = document.getElementById('labModal');
+  if (!modal) return;
+  if (!currentHistoryId) {
+    alert('Save the transcript first (auto-saves on completion) — Lab needs a transcript_id.');
+    return;
+  }
+  // Fetch info once
+  if (!_labInfo) {
+    try {
+      const res = await authFetch(`${API_BASE}/api/lab/info`);
+      if (!res.ok) { alert('Lab unavailable'); return; }
+      _labInfo = await res.json();
+    } catch (e) { alert('Lab error: ' + e.message); return; }
+  }
+  // Populate task dropdown
+  const taskSel = document.getElementById('labTaskSelect');
+  taskSel.innerHTML = '';
+  (_labInfo.tasks || []).forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t; opt.textContent = t;
+    taskSel.appendChild(opt);
+  });
+  taskSel.value = 'summary';
+  // Populate model checkboxes
+  const modelBox = document.getElementById('labModelChecks');
+  modelBox.innerHTML = '';
+  (_labInfo.models || []).forEach(m => {
+    const id = 'lab-m-' + m.key;
+    const lbl = document.createElement('label');
+    lbl.style.cssText = 'display:flex;gap:6px;align-items:center;cursor:pointer';
+    lbl.innerHTML = `<input type="checkbox" id="${id}" data-model="${m.key}" checked> <span>${m.label}</span>`;
+    modelBox.appendChild(lbl);
+  });
+  document.getElementById('labStatus').textContent = '';
+  document.getElementById('labResults').innerHTML = '';
+  modal.classList.remove('hidden');
+}
+
+function closeLabModal() {
+  const modal = document.getElementById('labModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+document.getElementById('labCompareBtn').addEventListener('click', openLabModal);
+document.getElementById('labModal').addEventListener('click', e => {
+  if (e.target.id === 'labModal' && !_labRunning) closeLabModal();
+});
+
+document.getElementById('labRunBtn').addEventListener('click', async () => {
+  if (_labRunning) return;
+  const task = document.getElementById('labTaskSelect').value;
+  const models = Array.from(document.querySelectorAll('#labModelChecks input:checked'))
+                      .map(el => el.dataset.model);
+  if (!models.length) { alert('Pick at least one model'); return; }
+
+  _labRunning = true;
+  const runBtn = document.getElementById('labRunBtn');
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running…';
+
+  const statusEl = document.getElementById('labStatus');
+  statusEl.textContent = `Spawning ${models.length} model(s)… first cold start can take 3-5 min for 32B.`;
+  const resBox = document.getElementById('labResults');
+  // Pre-render skeleton columns so user sees progress
+  resBox.style.gridTemplateColumns = `repeat(${models.length}, minmax(0, 1fr))`;
+  resBox.innerHTML = '';
+  const cards = {};
+  models.forEach(m => {
+    const c = document.createElement('div');
+    c.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;min-height:200px;display:flex;flex-direction:column;gap:8px';
+    c.innerHTML = `
+      <div style="font-weight:600;font-size:13px">${(_labInfo.models.find(x=>x.key===m) || {}).label || m}</div>
+      <div style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace">⏳ waiting…</div>
+      <div class="lab-text" style="font-size:12.5px;line-height:1.55;white-space:pre-wrap;color:var(--text);overflow-y:auto;max-height:55vh"></div>
+    `;
+    cards[m] = c;
+    resBox.appendChild(c);
+  });
+
+  try {
+    const res = await authFetch(`${API_BASE}/api/lab/compare`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transcript_id: currentHistoryId,
+        task,
+        models,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.textContent = '❌ ' + (data.error || 'failed');
+      return;
+    }
+    statusEl.textContent = `✅ Done in ${(data.wall_ms/1000).toFixed(1)}s — ${data.segments_count} segments, ${data.input_chars} chars input`;
+    for (const m of models) {
+      const r = data.results[m] || {};
+      const card = cards[m];
+      const meta = card.children[1];
+      const text = card.querySelector('.lab-text');
+      if (r.error) {
+        meta.textContent = `❌ ${r.time_ms}ms — error`;
+        meta.style.color = '#e55';
+        text.textContent = r.error;
+      } else {
+        meta.textContent = `✓ ${(r.time_ms/1000).toFixed(1)}s · ${r.char_count} chars output`;
+        text.textContent = r.text || '(empty)';
+      }
+    }
+    if (window.posthog) posthog.capture('lab_compare_ran', { task, models: models.join(','), wall_ms: data.wall_ms });
+  } catch (e) {
+    statusEl.textContent = '❌ ' + e.message;
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run comparison';
+    _labRunning = false;
+  }
 });
 
 // Handle ?notion=connected|error in URL after OAuth callback redirect
