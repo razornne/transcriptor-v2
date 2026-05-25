@@ -1903,6 +1903,17 @@
       <button id="settingsSignOutBtn" class="settings-danger-btn" style="margin-bottom:8px" data-i18n="settingsSignOut">Sign out</button>
     </div>
 
+    <div class="settings-section">
+      <div class="settings-section-title" data-i18n="settingsDangerZone" style="color:#e55">Danger zone</div>
+      <p class="settings-help-text" data-i18n="deleteAccountHint" style="margin:0 0 10px;font-size:13px;color:var(--muted)">
+        Permanently delete your account and all transcripts. This cannot be undone.
+      </p>
+      <button id="settingsDeleteAccountBtn" class="settings-danger-btn"
+              style="border-color:#e55;color:#e55" data-i18n="deleteAccountBtn">
+        Delete my account…
+      </button>
+    </div>
+
     <div class="modal-footer" data-i18n-html="settingsEscHint">Press <kbd>Esc</kbd> to close</div>
   </div>
 </div>
@@ -2057,6 +2068,17 @@ const T = {
     settingsSignOut: 'Sign out',
     settingsManageSub: 'Subscription',
     settingsManageSubBtn: 'Manage billing →',
+    settingsDangerZone: 'Danger zone',
+    deleteAccountHint: 'Permanently delete your account and all transcripts. This cannot be undone.',
+    deleteAccountBtn: 'Delete my account…',
+    deleteAccountConfirmTitle: 'Delete account?',
+    deleteAccountConfirmBody: 'This will permanently delete:\\n• Your account and login\\n• All saved transcripts ({n})\\n• Your active subscription (if any)\\n\\nType DELETE below to confirm:',
+    deleteAccountConfirmInput: 'Type DELETE',
+    deleteAccountConfirmBtn: 'Delete forever',
+    deleteAccountCancel: 'Cancel',
+    deleteAccountInProgress: 'Deleting…',
+    deleteAccountSuccess: 'Your account has been deleted. Goodbye 👋',
+    deleteAccountError: 'Could not delete account. Please contact hello@skriptly.io',
     settingsEscHint: `Press ${_KBD('Esc')} to close`,
     settingsThemeLight: 'Light',
     settingsThemeDark: 'Dark',
@@ -2232,6 +2254,17 @@ const T = {
     settingsSignOut: 'Вийти',
     settingsManageSub: 'Підписка',
     settingsManageSubBtn: 'Керувати білінгом →',
+    settingsDangerZone: 'Небезпечна зона',
+    deleteAccountHint: 'Видалити акаунт і всі транскрипти без можливості відновлення.',
+    deleteAccountBtn: 'Видалити мій акаунт…',
+    deleteAccountConfirmTitle: 'Видалити акаунт?',
+    deleteAccountConfirmBody: 'Це назавжди видалить:\\n• Ваш акаунт і вхід\\n• Усі збережені транскрипти ({n})\\n• Активну підписку (якщо є)\\n\\nНапишіть DELETE для підтвердження:',
+    deleteAccountConfirmInput: 'Напишіть DELETE',
+    deleteAccountConfirmBtn: 'Видалити назавжди',
+    deleteAccountCancel: 'Скасувати',
+    deleteAccountInProgress: 'Видалення…',
+    deleteAccountSuccess: 'Ваш акаунт видалено. До зустрічі 👋',
+    deleteAccountError: 'Не вдалося видалити акаунт. Напишіть на hello@skriptly.io',
     settingsEscHint: `Натисніть ${_KBD('Esc')} щоб закрити`,
     settingsThemeLight: 'Світла',
     settingsThemeDark: 'Темна',
@@ -5425,6 +5458,46 @@ syncSettingsThemeBtn();
 document.getElementById('settingsSignOutBtn').addEventListener('click', async () => {
   closeSettingsModal();
   await sb.auth.signOut();
+});
+
+// ── Delete account (GDPR) ──────────────────────────────────────
+// Two-step confirmation: type DELETE → POST /api/account/delete →
+// backend cancels Stripe sub, wipes transcripts/workspace/profile/auth user.
+// On success: sign out + show goodbye, since the JWT is now invalid anyway.
+document.getElementById('settingsDeleteAccountBtn').addEventListener('click', () => {
+  const transcriptCount = _historyCache.length;
+  const bodyMsg = tFmt('deleteAccountConfirmBody', { n: transcriptCount }).replace(/\\n/g, '\n');
+  const input = prompt(`${t('deleteAccountConfirmTitle')}\n\n${bodyMsg}`, '');
+  if (input === null) return;                  // Cancel
+  if (input.trim() !== 'DELETE') {
+    alert(t('deleteAccountCancel') + ' — typed text did not match.');
+    return;
+  }
+
+  const btn = document.getElementById('settingsDeleteAccountBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = t('deleteAccountInProgress');
+
+  (async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/account/delete`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      // Success — auth session is already invalidated server-side
+      alert(t('deleteAccountSuccess'));
+      // Local cleanup: clear cache + sign out (Supabase will gracefully no-op since user is gone)
+      _historyCache = [];
+      try { await sb.auth.signOut(); } catch (_) {}
+      // Hard reload — clears any in-memory state
+      window.location.href = '/app';
+    } catch (e) {
+      console.error('[delete-account]', e);
+      alert(t('deleteAccountError') + '\n\n' + (e.message || ''));
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  })();
 });
 
 // ── Billing toggle ────────────────────────────────────────────
