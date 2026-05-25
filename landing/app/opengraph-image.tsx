@@ -30,8 +30,8 @@ export default function OpengraphImage() {
             style={{
               width: 64,
               height: 64,
-              background: "#1A1814",
-              color: "#EDE8E0",
+              background: "#1a1a1a",
+              color: "#ffffff",
               borderRadius: 14,
               display: "flex",
               alignItems: "center",
