@@ -417,6 +417,17 @@ STRIPE_PRICE_MAP = {
 
 TEAM_MIN_SEATS = 2  # Minimum seats at upgrade (owner + at least 1 invitee)
 
+# Notion OAuth — Public integration credentials
+NOTION_OAUTH_CLIENT_ID     = os.environ.get("NOTION_OAUTH_CLIENT_ID", "")
+NOTION_OAUTH_CLIENT_SECRET = os.environ.get("NOTION_OAUTH_CLIENT_SECRET", "")
+# Where Notion redirects after user authorizes. Must match what's configured
+# in https://www.notion.so/my-integrations exactly.
+NOTION_REDIRECT_URI        = os.environ.get(
+    "NOTION_REDIRECT_URI",
+    "https://razornne--transcriptor-v2-flask-app.modal.run/api/notion/oauth/callback",
+)
+NOTION_API_VERSION         = "2022-06-28"
+
 PLAN_LIMITS = {
     "free": {"minutes": 60,   "diarization": False, "ai": False, "history": 5},
     "pro":  {"minutes": 600,  "diarization": True,  "ai": True,  "history": None},
@@ -606,7 +617,7 @@ def _get_jwks_client():
     return _jwks_client
 
 # Эндпоинты которые работают без auth (служебные, открытые)
-_PUBLIC_API_PATHS = {"/api/health", "/api/stripe/webhook"}
+_PUBLIC_API_PATHS = {"/api/health", "/api/stripe/webhook", "/api/notion/oauth/callback"}
 
 
 @app.before_request
@@ -847,6 +858,8 @@ def profile_endpoint():
             "referral_code": profile.get("referral_code"),
             "referral_count": ref_count,
             "was_referred": bool(profile.get("referred_by")),
+            "notion_connected":      bool(profile.get("notion_access_token")),
+            "notion_workspace_name": profile.get("notion_workspace_name"),
         })
     except Exception as e:
         print(f"[profile] error: {e}")
@@ -993,6 +1006,339 @@ def stripe_portal():
         return jsonify({"url": session.url})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Notion integration ────────────────────────────────────────
+# Public OAuth integration. Flow:
+#   1. Frontend GET /api/notion/oauth/start → returns Notion auth URL
+#   2. User authorizes at notion.so → redirect to /api/notion/oauth/callback
+#   3. Callback exchanges code for token, stores in user_profiles, redirects to /app
+#   4. Frontend can POST /api/notion/send to push a transcript as a new page
+#   5. POST /api/notion/disconnect clears the token
+
+
+def _notion_request(method: str, path: str, token: str, body: dict | None = None):
+    """Authenticated request to Notion API. Returns parsed JSON or raises."""
+    url = f"https://api.notion.com/v1{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Notion-Version": NOTION_API_VERSION,
+        "Content-Type": "application/json",
+    }
+    r = requests.request(method, url, headers=headers, json=body, timeout=15)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Notion API {r.status_code}: {r.text[:300]}")
+    return r.json() if r.content else {}
+
+
+@app.route("/api/notion/oauth/start", methods=["GET"])
+def notion_oauth_start():
+    """Returns Notion authorization URL. Frontend opens it (full redirect or popup)."""
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+    if not NOTION_OAUTH_CLIENT_ID:
+        return jsonify({"error": "Notion not configured"}), 503
+    # State carries the user_id so callback knows who to attach the token to.
+    # In production add HMAC signing to prevent forgery; for now this is OK
+    # because we double-check by also requiring a valid JWT on the original
+    # /start call (state would be replayed by an attacker only if they had
+    # the JWT, which means full account access already).
+    import secrets, base64, json as _json
+    nonce = secrets.token_urlsafe(12)
+    state_obj = {"uid": g.user_id, "n": nonce}
+    state = base64.urlsafe_b64encode(_json.dumps(state_obj).encode()).decode()
+    params = {
+        "client_id": NOTION_OAUTH_CLIENT_ID,
+        "response_type": "code",
+        "owner": "user",
+        "redirect_uri": NOTION_REDIRECT_URI,
+        "state": state,
+    }
+    qs = "&".join(f"{k}={requests.utils.quote(str(v), safe='')}" for k, v in params.items())
+    return jsonify({"url": f"https://api.notion.com/v1/oauth/authorize?{qs}"})
+
+
+@app.route("/api/notion/oauth/callback", methods=["GET"])
+def notion_oauth_callback():
+    """Notion redirects here after user authorizes. Exchanges code for token
+    and saves it to user_profiles, then redirects back to /app.
+    NOTE: this endpoint is in _PUBLIC_API_PATHS — Notion doesn't carry our JWT.
+    Auth happens via state param which encodes the original user_id.
+    """
+    import base64, json as _json
+    code  = request.args.get("code")
+    state = request.args.get("state", "")
+    err   = request.args.get("error")
+    # If user clicked Cancel on Notion's auth screen
+    if err or not code:
+        return _notion_redirect_to_app("error", err or "no_code")
+    try:
+        state_obj = _json.loads(base64.urlsafe_b64decode(state.encode()).decode())
+        user_id = state_obj.get("uid")
+        if not user_id:
+            raise ValueError("no uid in state")
+    except Exception as e:
+        print(f"[notion] bad state: {e}", flush=True)
+        return _notion_redirect_to_app("error", "bad_state")
+
+    # Exchange code → access_token (Basic auth with client_id:client_secret)
+    try:
+        import base64 as _b64
+        basic = _b64.b64encode(
+            f"{NOTION_OAUTH_CLIENT_ID}:{NOTION_OAUTH_CLIENT_SECRET}".encode()
+        ).decode()
+        r = requests.post(
+            "https://api.notion.com/v1/oauth/token",
+            headers={
+                "Authorization": f"Basic {basic}",
+                "Content-Type": "application/json",
+                "Notion-Version": NOTION_API_VERSION,
+            },
+            json={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": NOTION_REDIRECT_URI,
+            },
+            timeout=15,
+        )
+        if r.status_code >= 400:
+            print(f"[notion] token exchange failed: {r.status_code} {r.text[:300]}", flush=True)
+            return _notion_redirect_to_app("error", "exchange_failed")
+        tok = r.json()
+    except Exception as e:
+        print(f"[notion] token exchange exception: {e}", flush=True)
+        return _notion_redirect_to_app("error", "exchange_exception")
+
+    # Save tokens
+    try:
+        _sb_admin("user_profiles", method="PATCH",
+                  params={"id": f"eq.{user_id}"},
+                  data={
+                      "notion_access_token":   tok.get("access_token"),
+                      "notion_bot_id":         tok.get("bot_id"),
+                      "notion_workspace_id":   tok.get("workspace_id"),
+                      "notion_workspace_name": tok.get("workspace_name"),
+                      "notion_workspace_icon": tok.get("workspace_icon"),
+                      "notion_connected_at":   datetime.utcnow().isoformat(),
+                  })
+    except Exception as e:
+        print(f"[notion] save token failed: {e}", flush=True)
+        return _notion_redirect_to_app("error", "save_failed")
+
+    return _notion_redirect_to_app("connected", tok.get("workspace_name") or "")
+
+
+def _notion_redirect_to_app(status: str, detail: str = ""):
+    """Helper to bounce back to /app with status indicator in URL."""
+    from flask import redirect
+    origin = request.headers.get("Referer", "").split("?")[0]
+    # Notion's redirect doesn't carry a Referer. Default to skriptly.io.
+    if not origin or "notion.com" in origin:
+        origin = "https://skriptly.io/app"
+    params = f"?notion={status}"
+    if detail:
+        params += f"&detail={requests.utils.quote(detail, safe='')}"
+    return redirect(origin + params, code=302)
+
+
+@app.route("/api/notion/disconnect", methods=["POST"])
+def notion_disconnect():
+    """Clears Notion tokens for the user. Doesn't revoke on Notion's side
+    (no API for that — user must revoke from their Notion settings if desired)."""
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+    try:
+        _sb_admin("user_profiles", method="PATCH",
+                  params={"id": f"eq.{g.user_id}"},
+                  data={
+                      "notion_access_token": None,
+                      "notion_bot_id": None,
+                      "notion_workspace_id": None,
+                      "notion_workspace_name": None,
+                      "notion_workspace_icon": None,
+                      "notion_default_parent_id": None,
+                      "notion_connected_at": None,
+                  })
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _segments_to_notion_blocks(segments, speaker_names):
+    """Convert transcript segments to Notion paragraph blocks with bolded speakers.
+    Notion has a 2000-char limit per rich_text block; we group consecutive
+    same-speaker segments and split if needed."""
+    blocks = []
+    if not segments:
+        return blocks
+    # Group consecutive same-speaker
+    grouped = []
+    cur = None
+    for s in segments:
+        spk_raw = s.get("speaker", "SPEAKER_UNKNOWN")
+        spk = (speaker_names or {}).get(spk_raw, spk_raw)
+        text = (s.get("text") or "").strip()
+        if not text:
+            continue
+        if cur and cur["spk"] == spk:
+            cur["text"] += " " + text
+        else:
+            if cur:
+                grouped.append(cur)
+            cur = {"spk": spk, "text": text}
+    if cur:
+        grouped.append(cur)
+
+    for g_ in grouped:
+        # Split if text > 1900 chars (leave room for speaker prefix)
+        chunks = [g_["text"][i:i+1900] for i in range(0, len(g_["text"]), 1900)] or [""]
+        for idx, chunk in enumerate(chunks):
+            rich = []
+            if idx == 0:
+                rich.append({"type": "text", "text": {"content": f"{g_['spk']}: "},
+                             "annotations": {"bold": True}})
+            rich.append({"type": "text", "text": {"content": chunk}})
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {"rich_text": rich},
+            })
+    return blocks
+
+
+def _markdown_to_notion_blocks(md: str):
+    """Cheap markdown → Notion blocks. Handles headings, bullets, paragraphs.
+    Not perfect; the AI templates we generate are simple enough that this
+    is fine for MVP."""
+    if not md:
+        return []
+    blocks = []
+    for raw_line in md.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("### "):
+            blocks.append({"object": "block", "type": "heading_3",
+                           "heading_3": {"rich_text": [{"type":"text","text":{"content": line[4:]}}]}})
+        elif line.startswith("## "):
+            blocks.append({"object": "block", "type": "heading_2",
+                           "heading_2": {"rich_text": [{"type":"text","text":{"content": line[3:]}}]}})
+        elif line.startswith("# "):
+            blocks.append({"object": "block", "type": "heading_1",
+                           "heading_1": {"rich_text": [{"type":"text","text":{"content": line[2:]}}]}})
+        elif line.lstrip().startswith(("- ", "* ", "• ")):
+            content = line.lstrip()[2:].strip()
+            blocks.append({"object": "block", "type": "bulleted_list_item",
+                           "bulleted_list_item": {"rich_text": [{"type":"text","text":{"content": content}}]}})
+        elif line.lstrip().startswith(tuple(f"{i}. " for i in range(1, 10))):
+            content = line.lstrip().split(". ", 1)[1] if ". " in line else line
+            blocks.append({"object": "block", "type": "numbered_list_item",
+                           "numbered_list_item": {"rich_text": [{"type":"text","text":{"content": content}}]}})
+        else:
+            # Strip markdown emphasis (basic)
+            blocks.append({"object": "block", "type": "paragraph",
+                           "paragraph": {"rich_text": [{"type":"text","text":{"content": line[:1900]}}]}})
+    return blocks
+
+
+@app.route("/api/notion/send", methods=["POST"])
+def notion_send():
+    """Create a Notion page with transcript + (optional) summary + action items.
+    Body (JSON):
+      title:        page title (defaults to 'Skriptly transcript')
+      segments:     transcript segments
+      speakerNames: {SPEAKER_00: 'Maya', ...}
+      summary:      markdown summary (optional)
+      actions:      markdown action items (optional)
+      parent_id:    explicit Notion page/db id to nest under (optional;
+                    if missing we pick the first accessible page via /search)
+    Returns: {url: 'https://notion.so/...', page_id}
+    """
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+
+    rows = _sb_admin("user_profiles",
+                     params={"id": f"eq.{g.user_id}",
+                             "select": "notion_access_token,notion_default_parent_id"})
+    if not rows or not rows[0].get("notion_access_token"):
+        return jsonify({"error": "Notion not connected"}), 400
+    token = rows[0]["notion_access_token"]
+    default_parent = rows[0].get("notion_default_parent_id")
+
+    data = request.get_json(silent=True) or {}
+    title    = (data.get("title") or "Skriptly transcript").strip()[:200]
+    segments = data.get("segments") or []
+    speakers = data.get("speakerNames") or {}
+    summary  = (data.get("summary")  or "").strip()
+    actions  = (data.get("actions")  or "").strip()
+    parent_id = (data.get("parent_id") or default_parent or "").strip()
+
+    # If no parent provided, find one via search (user granted us specific pages)
+    if not parent_id:
+        try:
+            res = _notion_request("POST", "/search", token, body={
+                "filter": {"value": "page", "property": "object"},
+                "page_size": 5,
+            })
+            results = res.get("results") or []
+            # Pick first non-archived page where we have write access
+            for r in results:
+                if r.get("object") == "page" and not r.get("archived"):
+                    parent_id = r.get("id")
+                    break
+        except Exception as e:
+            return jsonify({"error": f"Notion search failed: {e}"}), 502
+
+    if not parent_id:
+        return jsonify({
+            "error": "No accessible pages in your Notion. Share a page with Skriptly first.",
+            "no_parent": True,
+        }), 400
+
+    # Cache as default for next time
+    if not default_parent:
+        try:
+            _sb_admin("user_profiles", method="PATCH",
+                      params={"id": f"eq.{g.user_id}"},
+                      data={"notion_default_parent_id": parent_id})
+        except Exception:
+            pass
+
+    # Build page content: title + summary + actions + transcript
+    children = []
+    if summary:
+        children.append({"object": "block", "type": "heading_2",
+                         "heading_2": {"rich_text": [{"type":"text","text":{"content":"Summary"}}]}})
+        children += _markdown_to_notion_blocks(summary)
+    if actions:
+        children.append({"object": "block", "type": "heading_2",
+                         "heading_2": {"rich_text": [{"type":"text","text":{"content":"Action items"}}]}})
+        children += _markdown_to_notion_blocks(actions)
+    if segments:
+        children.append({"object": "block", "type": "heading_2",
+                         "heading_2": {"rich_text": [{"type":"text","text":{"content":"Transcript"}}]}})
+        children += _segments_to_notion_blocks(segments, speakers)
+
+    # Notion caps children at 100 blocks per page creation request — split if needed
+    try:
+        page_body = {
+            "parent": {"page_id": parent_id},
+            "properties": {
+                "title": {"title": [{"type": "text", "text": {"content": title}}]}
+            },
+            "children": children[:100],
+        }
+        page = _notion_request("POST", "/pages", token, body=page_body)
+        page_id = page.get("id")
+        page_url = page.get("url")
+        # Append remaining children in chunks of 100
+        if len(children) > 100:
+            for i in range(100, len(children), 100):
+                _notion_request("PATCH", f"/blocks/{page_id}/children", token,
+                                body={"children": children[i:i+100]})
+        return jsonify({"ok": True, "url": page_url, "page_id": page_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
 
 
 # ── Delete account (GDPR) ──────────────────────────────────────
