@@ -456,6 +456,24 @@ def _sb_admin(path: str, method: str = "GET", data: dict = None, params: dict = 
     return r.json() if r.content else []
 
 
+def _notify_admin(text: str):
+    """Best-effort Telegram ping to admin. No-op if not configured.
+    Never raises — caller must not depend on this for correctness."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_ADMIN_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
+            timeout=4,
+        )
+    except Exception as e:
+        print(f"[admin-notify] failed: {e}", flush=True)
+
+
 def _generate_referral_code(user_id: str) -> str:
     """Short, URL-safe, human-readable referral code. Collision-resistant enough
     for our scale (deriving from uuid + secrets gives ~10^9 unique codes)."""
@@ -517,6 +535,20 @@ def _get_user_profile(user_id: str) -> dict:
     code = _generate_referral_code(user_id)
     rows = _sb_admin("user_profiles", method="POST",
                      data={"id": user_id, "referral_code": code})
+    # First time we see this user → ping admin
+    try:
+        email = (g.user_email or "(unknown)") if hasattr(g, "user_email") else "(unknown)"
+        ref_used = ""
+        # If user has a referred_by set already, mention it. Usually not yet
+        # at first profile creation, but redeem might race.
+        _notify_admin(
+            f"🎉 <b>New Skriptly signup</b>\n\n"
+            f"📧 {email}\n"
+            f"🆔 <code>{user_id}</code>\n"
+            f"🔗 ref code: <code>{code}</code>{ref_used}"
+        )
+    except Exception as e:
+        print(f"[admin-notify] signup ping failed: {e}", flush=True)
     return rows[0] if rows else {"plan": "free", "minutes_used": 0, "referral_code": code}
 
 
