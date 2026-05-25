@@ -1741,6 +1741,7 @@
     <div class="transcript-footer">
       <button id="copyBtn" class="btn-ghost" data-i18n="copyBtn">Copy</button>
       <button id="downloadBtn" class="btn-ghost" data-i18n="downloadBtn">Download .md</button>
+      <button id="sendNotionBtn" class="btn-ghost" style="display:none" data-i18n="sendNotionBtn">Send to Notion</button>
     </div>
     <div id="error" class="error"></div>
     <div id="recoveryBox" class="recovery-box" style="display:none">
@@ -1893,6 +1894,24 @@
         <button id="manageSubBtn" class="btn-ghost" style="font-size:12px;padding:6px 14px"
                 data-i18n="settingsManageSubBtn">Manage billing →</button>
       </div>
+    </div>
+
+    <!-- Integrations -->
+    <div class="settings-section" id="integrationsSection">
+      <div class="settings-section-title" data-i18n="settingsIntegrations">Integrations</div>
+      <div class="settings-row" id="notionRow">
+        <span class="settings-row-label">
+          <span style="font-weight:600">Notion</span>
+          <span id="notionStatus" style="font-size:12px;color:var(--muted);margin-left:8px"></span>
+        </span>
+        <button id="notionConnectBtn" class="btn-ghost" style="font-size:12px;padding:6px 14px"
+                data-i18n="notionConnect">Connect</button>
+        <button id="notionDisconnectBtn" class="btn-ghost" style="font-size:12px;padding:6px 14px;display:none;color:#e55"
+                data-i18n="notionDisconnect">Disconnect</button>
+      </div>
+      <p class="settings-help-text" data-i18n="notionHint" style="margin:6px 0 0;font-size:12px;color:var(--muted);line-height:1.5">
+        Send transcripts straight to your Notion. After connecting, you'll see a "Send to Notion" button under each transcript.
+      </p>
     </div>
 
     <!-- Workspace section — content set by renderWorkspaceSettings() -->
@@ -2199,6 +2218,19 @@ const T = {
     settingsSignOut: 'Sign out',
     settingsManageSub: 'Subscription',
     settingsManageSubBtn: 'Manage billing →',
+    // Notion integration
+    settingsIntegrations: 'Integrations',
+    notionConnect: 'Connect',
+    notionDisconnect: 'Disconnect',
+    notionConnected: 'Connected to {workspace}',
+    notionNotConnected: 'Not connected',
+    notionHint: 'Send transcripts straight to your Notion. After connecting, you\'ll see a "Send to Notion" button under each transcript.',
+    sendNotionBtn: 'Send to Notion',
+    sendingNotion: 'Sending…',
+    notionSent: 'Sent ✓',
+    notionSendError: 'Could not send to Notion',
+    notionNoParentError: 'Share a page with Skriptly in Notion first (open the page, click ⋯ → Add connections → Skriptly).',
+    notionConnectFailed: 'Notion connection failed',
     // Welcome (first-run) modal
     welcomeTitle: 'Welcome to Skriptly 👋',
     welcomeSub: 'Record any call right in your browser. Here\'s the 30-second tour:',
@@ -2412,6 +2444,19 @@ const T = {
     settingsSignOut: 'Вийти',
     settingsManageSub: 'Підписка',
     settingsManageSubBtn: 'Керувати білінгом →',
+    // Notion integration
+    settingsIntegrations: 'Інтеграції',
+    notionConnect: 'Підключити',
+    notionDisconnect: 'Відключити',
+    notionConnected: 'Підключено до {workspace}',
+    notionNotConnected: 'Не підключено',
+    notionHint: 'Відправляй транскрипти прямо у твій Notion. Після підключення під кожним транскриптом з\'явиться кнопка «Send to Notion».',
+    sendNotionBtn: 'У Notion',
+    sendingNotion: 'Відправка…',
+    notionSent: 'Відправлено ✓',
+    notionSendError: 'Не вдалося відправити в Notion',
+    notionNoParentError: 'Спочатку додай Skriptly до сторінки у Notion (відкрий сторінку → ⋯ → Add connections → Skriptly).',
+    notionConnectFailed: 'Помилка підключення Notion',
     // Welcome (first-run) modal
     welcomeTitle: 'Вітаємо у Skriptly 👋',
     welcomeSub: 'Записуй будь-який дзвінок прямо в браузері. 30 секунд про головне:',
@@ -2679,6 +2724,8 @@ let currentReferralCode = null;
 let currentBonusMinutes = 0;
 let currentReferralCount = 0;
 let currentWasReferred = false;
+let currentNotionConnected = false;
+let currentNotionWorkspace = null;
 
 async function fetchProfile() {
   if (!currentUser) return;
@@ -2693,8 +2740,11 @@ async function fetchProfile() {
     currentBonusMinutes  = data.bonus_minutes || 0;
     currentReferralCount = data.referral_count || 0;
     currentWasReferred   = !!data.was_referred;
+    currentNotionConnected = !!data.notion_connected;
+    currentNotionWorkspace = data.notion_workspace_name || null;
     _updatePlanUI();
     renderReferralSection();
+    renderNotionSection();
   } catch (e) {
     console.warn('[profile] fetch failed:', e);
   }
@@ -3615,6 +3665,8 @@ function renderTranscript(segments, highlightQuery) {
   updateSectionsVisibility();
   notesArea.value = currentNotes || '';
   renderAIResults();
+  // Sync Notion button visibility — appears only when both connected AND segments present
+  if (typeof renderNotionSection === 'function') renderNotionSection();
   renderChatMessages();
   renderTags();
 
@@ -5870,6 +5922,122 @@ document.getElementById('referralCopyBtn').addEventListener('click', async () =>
 
 // Also let user click the input to select-all (easier on mobile)
 document.getElementById('referralLinkInput').addEventListener('click', e => e.target.select());
+
+// ── Notion integration UI ──────────────────────────────────────
+function renderNotionSection() {
+  const statusEl   = document.getElementById('notionStatus');
+  const connectBtn = document.getElementById('notionConnectBtn');
+  const disBtn     = document.getElementById('notionDisconnectBtn');
+  const sendBtn    = document.getElementById('sendNotionBtn');
+  if (currentNotionConnected) {
+    if (statusEl) statusEl.textContent = ' · ' + tFmt('notionConnected', { workspace: currentNotionWorkspace || '?' });
+    if (connectBtn) connectBtn.style.display = 'none';
+    if (disBtn) disBtn.style.display = '';
+  } else {
+    if (statusEl) statusEl.textContent = '';
+    if (connectBtn) connectBtn.style.display = '';
+    if (disBtn) disBtn.style.display = 'none';
+  }
+  // Send button visible only if connected AND there's a transcript loaded
+  if (sendBtn) {
+    sendBtn.style.display = (currentNotionConnected && currentSegments && currentSegments.length) ? '' : 'none';
+  }
+}
+
+document.getElementById('notionConnectBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('notionConnectBtn');
+  btn.disabled = true;
+  try {
+    const res = await authFetch(`${API_BASE}/api/notion/oauth/start`);
+    const d = await res.json();
+    if (d.url) {
+      if (window.posthog) posthog.capture('notion_connect_started');
+      window.location.href = d.url;
+    } else {
+      alert(d.error || 'Could not start Notion connect.');
+      btn.disabled = false;
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('notionDisconnectBtn').addEventListener('click', async () => {
+  if (!confirm('Disconnect Notion?\n\nThis only removes the connection from Skriptly. To fully revoke access, visit your Notion settings.')) return;
+  const btn = document.getElementById('notionDisconnectBtn');
+  btn.disabled = true;
+  try {
+    const res = await authFetch(`${API_BASE}/api/notion/disconnect`, { method: 'POST' });
+    if (res.ok) {
+      currentNotionConnected = false;
+      currentNotionWorkspace = null;
+      renderNotionSection();
+      if (window.posthog) posthog.capture('notion_disconnected');
+    }
+  } catch (e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+});
+
+document.getElementById('sendNotionBtn').addEventListener('click', async () => {
+  if (!currentSegments || !currentSegments.length) return;
+  const btn = document.getElementById('sendNotionBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = t('sendingNotion');
+  try {
+    const res = await authFetch(`${API_BASE}/api/notion/send`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: currentTitle || 'Skriptly transcript',
+        segments: currentSegments,
+        speakerNames: currentSpeakerNames,
+        summary: currentAIResults?.summary || '',
+        actions: currentAIResults?.actions || '',
+      }),
+    });
+    const d = await res.json();
+    if (res.ok && d.url) {
+      btn.textContent = t('notionSent');
+      if (window.posthog) posthog.capture('notion_sent', { segments: currentSegments.length });
+      // Open the created Notion page in a new tab
+      window.open(d.url, '_blank', 'noopener');
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+      return;
+    }
+    if (d.no_parent) {
+      alert(t('notionNoParentError'));
+    } else {
+      alert(t('notionSendError') + ': ' + (d.error || 'unknown'));
+    }
+  } catch (e) {
+    alert(t('notionSendError') + ': ' + e.message);
+  }
+  btn.textContent = orig;
+  btn.disabled = false;
+});
+
+// Handle ?notion=connected|error in URL after OAuth callback redirect
+(function handleNotionCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('notion');
+  if (!status) return;
+  const detail = params.get('detail') || '';
+  if (status === 'connected') {
+    // Profile refresh happens after auth — UI will update then. Show a toast.
+    setTimeout(() => {
+      // Could replace with a nicer toast, alert is fine for MVP
+      console.log('[notion] connected:', detail);
+    }, 1000);
+  } else if (status === 'error') {
+    alert(t('notionConnectFailed') + ': ' + detail);
+  }
+  // Strip from URL
+  params.delete('notion');
+  params.delete('detail');
+  const qs = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+})();
 
 // ── Delete account (GDPR) ──────────────────────────────────────
 // Two-step confirmation: type DELETE → POST /api/account/delete →
