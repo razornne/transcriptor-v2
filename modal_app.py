@@ -48,6 +48,12 @@ hf_secret = modal.Secret.from_name("transcriptor-secrets")
 notion_secret = modal.Secret.from_name("notion-secrets", required_keys=[
     "NOTION_OAUTH_CLIENT_ID", "NOTION_OAUTH_CLIENT_SECRET",
 ])
+# Telegram bot creds for admin signup notifications. Same pattern as
+# notion-secrets — isolated so the main transcriptor-secrets is never
+# touched when we add operational integrations.
+admin_secret = modal.Secret.from_name("admin-secrets", required_keys=[
+    "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_CHAT_ID",
+])
 
 # Образ контейнера — собирается один раз, кэшируется Modal'ом.
 # Используем CUDA 12.4 base image чтобы libcublas.so.12 и libcudnn были
@@ -781,7 +787,7 @@ def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: flo
 
 @app.function(
     image=web_image,
-    secrets=[hf_secret, notion_secret],   # main secrets + Notion OAuth creds
+    secrets=[hf_secret, notion_secret, admin_secret],   # + Telegram admin notify
     timeout=120,                 # на сам HTTP запрос (spawn моментален)
     scaledown_window=60,         # держим тёплым 1 мин между запросами
     min_containers=0,            # скейл в ноль когда idle = бесплатно
