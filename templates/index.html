@@ -1340,10 +1340,82 @@
 
     /* ── SETTINGS MODAL ── */
     .settings-modal .modal-card {
-      width: 650px;
+      width: 860px;
       max-width: 96vw;
       max-height: 92vh;
+      padding: 0;            /* zero so inner panes do their own padding */
+      overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    .settings-modal .settings-shell {
+      display: flex; flex: 1; min-height: 0;
+    }
+    .settings-modal .settings-tabs {
+      width: 200px; flex: 0 0 200px;
+      border-right: 1px solid var(--border);
+      padding: 20px 8px;
+      display: flex; flex-direction: column; gap: 1px;
       overflow-y: auto;
+    }
+    .settings-modal .settings-tab-btn {
+      background: none; border: none; cursor: pointer;
+      padding: 9px 14px; border-radius: 6px;
+      text-align: left;
+      font: inherit; font-size: 13.5px;
+      color: var(--muted);
+      display: flex; align-items: center; gap: 10px;
+      transition: background .15s, color .15s;
+    }
+    .settings-modal .settings-tab-btn:hover {
+      background: color-mix(in srgb, var(--text) 5%, transparent);
+      color: var(--text);
+    }
+    .settings-modal .settings-tab-btn.active {
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      color: var(--text);
+      font-weight: 600;
+    }
+    .settings-modal .settings-tab-btn.danger.active {
+      background: color-mix(in srgb, #e55 12%, transparent);
+      color: #e55;
+    }
+    .settings-modal .settings-pane {
+      flex: 1; min-width: 0;
+      padding: 24px 28px;
+      overflow-y: auto;
+    }
+    .settings-modal .settings-pane-title {
+      font-size: 18px; font-weight: 700;
+      color: var(--text); margin: 0 0 4px;
+    }
+    .settings-modal .settings-pane-sub {
+      font-size: 13px; color: var(--muted);
+      margin: 0 0 22px; line-height: 1.5;
+    }
+    .settings-modal .modal-footer {
+      padding: 12px 20px;
+      border-top: 1px solid var(--border);
+      margin: 0;
+    }
+    /* Section title becomes group header inside pane — no longer the whole-pane heading */
+    .settings-modal .settings-section { margin-bottom: 20px; }
+    .settings-modal .settings-section:last-child { margin-bottom: 0; }
+    /* Hidden when its tab is not active */
+    .settings-modal .settings-section[data-settings-tab][hidden] { display: none; }
+    /* Mobile: stack — tabs on top as horizontal scroll */
+    @media (max-width: 720px) {
+      .settings-modal .settings-shell { flex-direction: column; }
+      .settings-modal .settings-tabs {
+        width: auto; flex: 0 0 auto;
+        flex-direction: row; gap: 4px;
+        overflow-x: auto; overflow-y: hidden;
+        border-right: none; border-bottom: 1px solid var(--border);
+        padding: 12px;
+      }
+      .settings-modal .settings-tab-btn {
+        white-space: nowrap; padding: 7px 12px;
+      }
+      .settings-modal .settings-pane { padding: 18px 16px; }
     }
     .settings-section { margin-bottom: 22px; }
     .settings-section:last-child { margin-bottom: 0; }
@@ -1822,9 +1894,35 @@
 
 <div id="settingsModal" class="modal-backdrop hidden settings-modal">
   <div class="modal-card">
-    <div class="modal-title" data-i18n="settingsTitle">Settings</div>
+    <div class="settings-shell">
+      <!-- Sidebar with tab buttons -->
+      <nav class="settings-tabs" id="settingsTabsNav">
+        <button class="settings-tab-btn active" data-settings-tab="account">
+          <span>👤</span> <span data-i18n="settingsTabAccount">Account</span>
+        </button>
+        <button class="settings-tab-btn" data-settings-tab="subscription">
+          <span>💳</span> <span data-i18n="settingsTabSubscription">Subscription</span>
+        </button>
+        <button class="settings-tab-btn" data-settings-tab="workspace">
+          <span>👥</span> <span data-i18n="settingsTabWorkspace">Workspace</span>
+        </button>
+        <button class="settings-tab-btn" data-settings-tab="integrations">
+          <span>🔌</span> <span data-i18n="settingsTabIntegrations">Integrations</span>
+        </button>
+        <button class="settings-tab-btn" data-settings-tab="friends">
+          <span>🎁</span> <span data-i18n="settingsTabFriends">Invite friends</span>
+        </button>
+        <button class="settings-tab-btn" data-settings-tab="preferences">
+          <span>⚙</span> <span data-i18n="settingsTabPreferences">Preferences</span>
+        </button>
+        <button class="settings-tab-btn danger" data-settings-tab="danger">
+          <span>⚠</span> <span data-i18n="settingsTabDanger">Danger zone</span>
+        </button>
+      </nav>
 
-    <div class="settings-section">
+      <!-- Active pane -->
+      <div class="settings-pane">
+    <div class="settings-section" data-settings-tab="account">
       <div class="settings-section-title" data-i18n="settingsAccount">Account</div>
       <div class="settings-row">
         <span class="settings-row-label" data-i18n="settingsEmailLabel">Email</span>
@@ -1832,7 +1930,7 @@
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" data-settings-tab="subscription">
       <div class="settings-section-title">
         <span data-i18n="settingsSubscription">Subscription</span>
         <div class="billing-toggle" id="billingToggle">
@@ -1911,7 +2009,7 @@
     </div>
 
     <!-- Privacy Mode — Max/Team only -->
-    <div class="settings-section" id="privacySection" style="display:none">
+    <div class="settings-section" id="privacySection" data-settings-tab="subscription" style="display:none">
       <div class="settings-section-title" data-i18n="settingsPrivacy">Privacy mode</div>
       <p class="settings-help-text" id="privacyHint" style="margin:0 0 10px;font-size:13px;color:var(--muted);line-height:1.5"
          data-i18n="privacyHint">
@@ -1929,7 +2027,7 @@
     </div>
 
     <!-- Integrations -->
-    <div class="settings-section" id="integrationsSection">
+    <div class="settings-section" id="integrationsSection" data-settings-tab="integrations">
       <div class="settings-section-title" data-i18n="settingsIntegrations">Integrations</div>
       <div class="settings-row" id="notionRow">
         <span class="settings-row-label">
@@ -1947,7 +2045,7 @@
     </div>
 
     <!-- Workspace section — content set by renderWorkspaceSettings() -->
-    <div class="settings-section" id="workspaceSection">
+    <div class="settings-section" id="workspaceSection" data-settings-tab="workspace">
       <div class="settings-section-title" data-i18n="settingsWorkspace">Workspace</div>
 
       <!-- No workspace state -->
@@ -2010,7 +2108,7 @@
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" data-settings-tab="preferences">
       <div class="settings-section-title" data-i18n="settingsPreferences">Preferences</div>
       <div class="settings-row">
         <span class="settings-row-label" data-i18n="settingsTheme">Theme</span>
@@ -2025,7 +2123,7 @@
       </div>
     </div>
 
-    <div class="settings-section" id="referralSection" style="display:none">
+    <div class="settings-section" id="referralSection" data-settings-tab="friends" style="display:none">
       <div class="settings-section-title" data-i18n="settingsReferral">Invite friends, get free minutes</div>
       <p class="settings-help-text" data-i18n="referralHint" style="margin:0 0 10px;font-size:13px;color:var(--muted)">
         Share this link. Both you and your friend get +60 minutes when they sign up.
@@ -2042,12 +2140,12 @@
       </div>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" data-settings-tab="account">
       <div class="settings-section-title" data-i18n="settingsActions">Actions</div>
       <button id="settingsSignOutBtn" class="settings-danger-btn" style="margin-bottom:8px" data-i18n="settingsSignOut">Sign out</button>
     </div>
 
-    <div class="settings-section">
+    <div class="settings-section" data-settings-tab="danger">
       <div class="settings-section-title" data-i18n="settingsDangerZone" style="color:#e55">Danger zone</div>
       <p class="settings-help-text" data-i18n="deleteAccountHint" style="margin:0 0 10px;font-size:13px;color:var(--muted)">
         Permanently delete your account and all transcripts. This cannot be undone.
@@ -2057,7 +2155,8 @@
         Delete my account…
       </button>
     </div>
-
+      </div><!-- /.settings-pane -->
+    </div><!-- /.settings-shell -->
     <div class="modal-footer" data-i18n-html="settingsEscHint">Press <kbd>Esc</kbd> to close</div>
   </div>
 </div>
@@ -2327,6 +2426,13 @@ const T = {
     referralStatsInvites: 'Invited',
     referralStatsBonus: 'Bonus minutes',
     settingsDangerZone: 'Danger zone',
+    settingsTabAccount: 'Account',
+    settingsTabSubscription: 'Subscription',
+    settingsTabWorkspace: 'Workspace',
+    settingsTabIntegrations: 'Integrations',
+    settingsTabFriends: 'Invite friends',
+    settingsTabPreferences: 'Preferences',
+    settingsTabDanger: 'Danger zone',
     deleteAccountHint: 'Permanently delete your account and all transcripts. This cannot be undone.',
     deleteAccountBtn: 'Delete my account…',
     deleteAccountConfirmTitle: 'Delete account?',
@@ -2569,6 +2675,13 @@ const T = {
     referralStatsInvites: 'Запрошено',
     referralStatsBonus: 'Бонусні хвилини',
     settingsDangerZone: 'Небезпечна зона',
+    settingsTabAccount: 'Акаунт',
+    settingsTabSubscription: 'Підписка',
+    settingsTabWorkspace: 'Workspace',
+    settingsTabIntegrations: 'Інтеграції',
+    settingsTabFriends: 'Запросити друзів',
+    settingsTabPreferences: 'Налаштування',
+    settingsTabDanger: 'Небезпечна зона',
     deleteAccountHint: 'Видалити акаунт і всі транскрипти без можливості відновлення.',
     deleteAccountBtn: 'Видалити мій акаунт…',
     deleteAccountConfirmTitle: 'Видалити акаунт?',
@@ -5972,11 +6085,33 @@ sb.auth.onAuthStateChange(async (event, session) => {
 
 // ── Settings modal ────────────────────────────────────────────
 const settingsModal = document.getElementById('settingsModal');
+let _currentSettingsTab = 'account';
+
+function switchSettingsTab(name) {
+  _currentSettingsTab = name;
+  // Highlight active tab in sidebar
+  document.querySelectorAll('.settings-tab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.settingsTab === name);
+  });
+  // Show only sections that belong to this tab
+  document.querySelectorAll('.settings-section[data-settings-tab]').forEach(s => {
+    s.hidden = (s.dataset.settingsTab !== name);
+  });
+  // Scroll pane back to top so each tab starts fresh
+  const pane = settingsModal.querySelector('.settings-pane');
+  if (pane) pane.scrollTop = 0;
+}
+
+document.querySelectorAll('.settings-tab-btn').forEach(b => {
+  b.addEventListener('click', () => switchSettingsTab(b.dataset.settingsTab));
+});
+
 function openSettingsModal() {
   const email = currentUser?.email || '';
   document.getElementById('settingsEmail').textContent = email || '—';
   _updatePlanUI();
   renderWorkspaceSettings();
+  switchSettingsTab(_currentSettingsTab || 'account');
   settingsModal.classList.remove('hidden');
 }
 function closeSettingsModal() { settingsModal.classList.add('hidden'); }
