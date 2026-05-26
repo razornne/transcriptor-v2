@@ -715,24 +715,36 @@ class Transcriptor:
 #    these are only used for testing, no need to keep warm).
 
 
-def _llm_chat_generate(model, tokenizer, prompt: str, max_tokens: int, temperature: float) -> str:
+def _llm_chat_generate(
+    model, tokenizer, prompt: str, max_tokens: int, temperature: float,
+    *, template_kwargs: dict | None = None, post_process=None,
+) -> str:
     """Shared inference helper for any chat-tuned LLM loaded via transformers.
     Wraps prompt as a single user turn and runs greedy/sampled decode.
-    Clears CUDA cache before generate to avoid OOM from cold-start fragmentation."""
+    Clears CUDA cache before generate to avoid OOM from cold-start fragmentation.
+
+    template_kwargs: extra kwargs passed into apply_chat_template (e.g.
+        reasoning_effort='low' for gpt-oss)
+    post_process: optional callable(str) -> str applied to the decoded output
+        before returning (e.g. strip gpt-oss analysis channel)
+    """
     import torch, gc
     messages = [{"role": "user", "content": prompt}]
+    tpl_kwargs = dict(
+        tokenize=True, add_generation_prompt=True, return_tensors="pt",
+    )
+    if template_kwargs:
+        tpl_kwargs.update(template_kwargs)
     try:
-        result = tokenizer.apply_chat_template(
-            messages, tokenize=True, add_generation_prompt=True, return_tensors="pt",
-        )
-    except Exception:
+        result = tokenizer.apply_chat_template(messages, **tpl_kwargs)
+    except Exception as e:
+        print(f"[llm] chat template failed ({e}), falling back to raw tokenize", flush=True)
         result = tokenizer(prompt, return_tensors="pt")
     if isinstance(result, torch.Tensor):
         encoded = {"input_ids": result.to("cuda")}
     else:
         encoded = {k: v.to("cuda") for k, v in result.items()}
     input_len = encoded["input_ids"].shape[-1]
-    # Reclaim VRAM fragmented by model load — critical for long-context inference
     gc.collect()
     torch.cuda.empty_cache()
     with torch.no_grad():
@@ -743,7 +755,32 @@ def _llm_chat_generate(model, tokenizer, prompt: str, max_tokens: int, temperatu
             temperature=max(temperature, 1e-6) if temperature > 0 else 1.0,
             pad_token_id=tokenizer.eos_token_id,
         )
-    return tokenizer.decode(output[0][input_len:], skip_special_tokens=True).strip()
+    text = tokenizer.decode(output[0][input_len:], skip_special_tokens=True).strip()
+    if post_process:
+        text = post_process(text)
+    return text
+
+
+def _strip_gpt_oss_analysis(text: str) -> str:
+    """gpt-oss has two output channels (analysis + final) that the standard
+    skip_special_tokens=True decoding flattens — leaving the analysis 'thinking'
+    inline before the actual answer. The channel boundary is marked by the
+    literal token text 'assistantfinal' once specials are stripped.
+
+    Take everything after the LAST 'assistantfinal' (model might think
+    multiple times in 'analysis' channel before committing)."""
+    if not text:
+        return text
+    marker = "assistantfinal"
+    idx = text.rfind(marker)
+    if idx >= 0:
+        return text[idx + len(marker):].lstrip()
+    # Fallback: also try common alternative ending
+    for alt in ("<|final|>", "final\n"):
+        i = text.rfind(alt)
+        if i >= 0:
+            return text[i + len(alt):].lstrip()
+    return text
 
 
 # Both Lab models run on A100 80GB.
@@ -806,7 +843,7 @@ class LabQwen32B:
 
 @app.cls(
     image=image,
-    gpu="A100-80GB",
+    gpu="A10G",                  # MXFP4 ~12GB fits 24GB A10G — 3x cheaper than A100
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
     timeout=600,
@@ -815,7 +852,11 @@ class LabQwen32B:
 )
 class LabGPTOSS20B:
     """OpenAI gpt-oss-20b — 21B MoE, ~5B active params per token.
-    Strong reasoning, English-centric."""
+    Strong reasoning, English-centric. Native MXFP4 (12GB) on A10G.
+
+    Output post-processed to strip the 'analysis' channel (model's
+    internal thinking) — only the 'final' channel reaches users.
+    Chat template uses reasoning_effort='low' to keep thinking short."""
 
     @modal.enter()
     def load_model(self):
@@ -830,9 +871,6 @@ class LabGPTOSS20B:
 
         model_id = "openai/gpt-oss-20b"
         print(f"[lab/gptoss20b] loading {model_id}...", flush=True)
-        # gpt-oss ships in MXFP4 natively; transformers>=4.55 loads it as-is.
-        # Force SDPA — eager attention does O(n²) memory which OOMs on
-        # long transcripts even on A100.
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_id, cache_dir=f"{MODELS_DIR}/lab", token=hf_token,
         )
@@ -842,16 +880,19 @@ class LabGPTOSS20B:
             device_map="cuda",
             cache_dir=f"{MODELS_DIR}/lab",
             token=hf_token,
-            # gpt-oss doesn't support SDPA yet in transformers; fall back to eager
-            # (O(n²) attention) but on A100 80GB with MXFP4 weights we have room
-            attn_implementation="eager",
+            attn_implementation="eager",   # SDPA not yet supported by GptOssForCausalLM
         )
         self.model.eval()
         print("[lab/gptoss20b] ready", flush=True)
 
     @modal.method()
     def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:
-        return _llm_chat_generate(self.model, self.tokenizer, prompt, max_tokens, temperature)
+        return _llm_chat_generate(
+            self.model, self.tokenizer, prompt, max_tokens, temperature,
+            # gpt-oss specific: short thinking, then final answer
+            template_kwargs={"reasoning_effort": "low"},
+            post_process=_strip_gpt_oss_analysis,
+        )
 
 
 # ── External LLM (Gemini) ────────────────────────────────────────
