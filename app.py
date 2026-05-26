@@ -1140,6 +1140,7 @@ def stripe_checkout():
             client_reference_id=g.user_id,
             customer_email=g.user_email or "",
             metadata={"plan": plan, "user_id": g.user_id or ""},
+            allow_promotion_codes=True,   # enables "Add promotion code" on Stripe Checkout
         )
         return jsonify({"url": session.url})
     except Exception as e:
