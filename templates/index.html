@@ -6707,7 +6707,11 @@ const PLAN_PRICES = {
 
 function applyBilling(billing) {
   currentBilling = billing;
+  // Only touch buttons that actually represent the personal-plan billing
+  // toggle — .billing-opt class is also used by .ws-billing-opt and
+  // .uilang-opt which have their own data-* attributes and handlers.
   document.querySelectorAll('.billing-opt').forEach(b => {
+    if (!b.dataset.billing) return;
     b.classList.toggle('active', b.dataset.billing === billing);
   });
   const prices = PLAN_PRICES[billing];
@@ -6723,6 +6727,8 @@ function applyBilling(billing) {
 }
 
 document.querySelectorAll('.billing-opt').forEach(b => {
+  // Skip ws-billing / uilang buttons — they have their own handlers
+  if (!b.dataset.billing) return;
   b.addEventListener('click', () => applyBilling(b.dataset.billing));
 });
 
