@@ -792,7 +792,7 @@ def _strip_gpt_oss_analysis(text: str) -> str:
 
 @app.cls(
     image=image,
-    gpu="A100-80GB",
+    gpu="L40S",                  # 48GB, ~\$1.95/hr — fits 32B int4 + KV cache + SDPA
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
     timeout=600,
@@ -843,7 +843,7 @@ class LabQwen32B:
 
 @app.cls(
     image=image,
-    gpu="A10G",                  # MXFP4 ~12GB fits 24GB A10G — 3x cheaper than A100
+    gpu="L40S",                  # 48GB needed: 12GB model + eager-attn O(n²) on long ctx
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
     timeout=600,
