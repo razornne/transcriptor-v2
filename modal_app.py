@@ -249,8 +249,12 @@ class Transcriptor:
         prompt: str | None,
         progress_key: str | None = None,
         quality: str = "fast",
+        privacy_mode: bool = False,
     ) -> dict:
         """Полный пайплайн: webm → whisper → pyannote → merge → LLM correction.
+
+        privacy_mode=True forces correction through the local Qwen 7B path
+        (no Gemini API call). Set by Privacy Mode users on Max/Team plans.
 
         Принимает сырой WebM/Opus blob, конвертирует через ffmpeg внутри.
         Возвращает dict:
@@ -378,7 +382,7 @@ class Transcriptor:
             _report("merge")  # merge done
 
             # --- LLM correction ---
-            merged, vocab_additions = self._correct_segments(merged, language)
+            merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode)
 
             # После Gemini boundary-fix соседние сегменты могут оказаться
             # одного спикера — склеиваем заново.
@@ -401,8 +405,12 @@ class Transcriptor:
                 except OSError:
                     pass
 
-    def _correct_segments(self, segments: list[dict], language: str | None) -> tuple[list[dict], list[str]]:
+    def _correct_segments(self, segments: list[dict], language: str | None,
+                          privacy_mode: bool = False) -> tuple[list[dict], list[str]]:
         """Главный correction pass.
+
+        privacy_mode=True skips the Gemini call entirely — falls back to
+        local Qwen on the same GPU. No data leaves Modal infra.
 
         Возвращает (corrected_segments, vocab_additions).
         vocab_additions — список терминов которые Gemini добавил при
@@ -417,6 +425,10 @@ class Transcriptor:
         """
         if not segments:
             return segments, []
+
+        # Privacy Mode — skip Gemini entirely, stay on-device
+        if privacy_mode:
+            return self._correct_segments_qwen(segments, language), []
 
         # Try Gemini first if API key available
         if os.environ.get("GEMINI_API_KEY", "").strip():

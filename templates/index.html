@@ -1910,6 +1910,24 @@
       </div>
     </div>
 
+    <!-- Privacy Mode — Max/Team only -->
+    <div class="settings-section" id="privacySection" style="display:none">
+      <div class="settings-section-title" data-i18n="settingsPrivacy">Privacy mode</div>
+      <p class="settings-help-text" id="privacyHint" style="margin:0 0 10px;font-size:13px;color:var(--muted);line-height:1.5"
+         data-i18n="privacyHint">
+        Process your transcripts on Skriptly's own GPUs instead of sending them to Google/OpenAI. Your data never leaves our infrastructure. Trade-off: slightly less detailed summaries.
+      </p>
+      <div class="settings-row">
+        <span class="settings-row-label">
+          <span data-i18n="privacyToggle">Use local AI only</span>
+          <span id="privacyStatus" style="font-size:12px;color:var(--muted);margin-left:8px"></span>
+        </span>
+        <label class="privacy-switch" style="display:inline-flex;align-items:center;cursor:pointer;gap:8px">
+          <input type="checkbox" id="privacyToggleInput" style="cursor:pointer;width:18px;height:18px">
+        </label>
+      </div>
+    </div>
+
     <!-- Integrations -->
     <div class="settings-section" id="integrationsSection">
       <div class="settings-section-title" data-i18n="settingsIntegrations">Integrations</div>
@@ -2267,6 +2285,14 @@ const T = {
     settingsSignOut: 'Sign out',
     settingsManageSub: 'Subscription',
     settingsManageSubBtn: 'Manage billing →',
+    // Privacy mode
+    settingsPrivacy: 'Privacy mode',
+    privacyHint: 'Process transcripts on Skriptly\'s own GPUs — your data never reaches Google/OpenAI. Trade-off: summaries are slightly less detailed.',
+    privacyToggle: 'Use local AI only',
+    privacyEnabled: 'On',
+    privacyDisabled: 'Off',
+    privacyNeedsUpgrade: 'Max or Team plan required',
+    privacySaveFailed: 'Could not save privacy setting',
     // Demo transcript banner
     demoBannerTitle: 'This is a demo transcript',
     demoBannerSub: 'Click around — open Summary or Actions, rename speakers, edit text. Then record your own.',
@@ -2501,6 +2527,14 @@ const T = {
     settingsSignOut: 'Вийти',
     settingsManageSub: 'Підписка',
     settingsManageSubBtn: 'Керувати білінгом →',
+    // Privacy mode
+    settingsPrivacy: 'Приватний режим',
+    privacyHint: 'Обробляти транскрипти на власних GPU Skriptly — твої дані не йдуть у Google/OpenAI. Компроміс: підсумки трохи менш детальні.',
+    privacyToggle: 'Лише локальний AI',
+    privacyEnabled: 'Увімкнено',
+    privacyDisabled: 'Вимкнено',
+    privacyNeedsUpgrade: 'Потрібен план Max або Team',
+    privacySaveFailed: 'Не вдалося зберегти налаштування',
     // Demo transcript banner
     demoBannerTitle: 'Це демо-транскрипт',
     demoBannerSub: 'Потицяй — відкрий Summary або Actions, переймейнуй спікерів, відредагуй текст. Потім запиши свій.',
@@ -2792,6 +2826,8 @@ let currentWasReferred = false;
 let currentNotionConnected = false;
 let currentNotionWorkspace = null;
 let currentIsAdmin = false;
+let currentPrivacyMode = false;
+let currentPrivacyAvailable = false;
 
 async function fetchProfile() {
   if (!currentUser) return;
@@ -2809,10 +2845,13 @@ async function fetchProfile() {
     currentNotionConnected = !!data.notion_connected;
     currentNotionWorkspace = data.notion_workspace_name || null;
     currentIsAdmin = !!data.is_admin;
+    currentPrivacyMode = !!data.privacy_mode;
+    currentPrivacyAvailable = !!data.privacy_mode_available;
     _updatePlanUI();
     renderReferralSection();
     renderNotionSection();
     renderLabButton();
+    renderPrivacySection();
   } catch (e) {
     console.warn('[profile] fetch failed:', e);
   }
@@ -6553,6 +6592,47 @@ document.getElementById('labRunBtn').addEventListener('click', async () => {
   runBtn.disabled = false;
   runBtn.textContent = 'Run comparison';
   _labRunning = false;
+});
+
+// ── Privacy Mode toggle ───────────────────────────────────────
+function renderPrivacySection() {
+  const section = document.getElementById('privacySection');
+  const input = document.getElementById('privacyToggleInput');
+  const statusEl = document.getElementById('privacyStatus');
+  if (!section || !input) return;
+  // Only shown to plans that actually get Privacy Mode (Max + Team)
+  section.style.display = currentPrivacyAvailable ? '' : 'none';
+  input.checked = currentPrivacyMode;
+  if (statusEl) {
+    statusEl.textContent = currentPrivacyMode ? ' · ' + t('privacyEnabled') : ' · ' + t('privacyDisabled');
+  }
+}
+
+document.getElementById('privacyToggleInput').addEventListener('change', async (e) => {
+  const desired = e.target.checked;
+  const orig = currentPrivacyMode;
+  // Optimistic UI
+  currentPrivacyMode = desired;
+  renderPrivacySection();
+  try {
+    const res = await authFetch(`${API_BASE}/api/profile/privacy-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: desired }),
+    });
+    const d = await res.json();
+    if (!res.ok) {
+      currentPrivacyMode = orig;
+      renderPrivacySection();
+      alert(d.error || t('privacySaveFailed'));
+      return;
+    }
+    if (window.posthog) posthog.capture('privacy_mode_toggled', { enabled: desired });
+  } catch (err) {
+    currentPrivacyMode = orig;
+    renderPrivacySection();
+    alert(t('privacySaveFailed') + ': ' + err.message);
+  }
 });
 
 // Handle ?notion=connected|error in URL after OAuth callback redirect

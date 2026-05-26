@@ -456,6 +456,21 @@ def _is_admin() -> bool:
     """True if the JWT-authenticated user is in ADMIN_EMAILS."""
     return bool(g.user_email and g.user_email.lower() in ADMIN_EMAILS)
 
+
+# Plans on which Privacy Mode is offered as a feature. Free/Pro users can
+# have the column flipped (no DB-level enforcement) but the UI hides the
+# toggle and the backend ignores their flag.
+PRIVACY_MODE_ALLOWED_PLANS = {"max", "team"}
+
+
+def _privacy_mode_active(profile: dict, effective_plan: str) -> bool:
+    """True if this user's transcription / generation should bypass Gemini.
+    Requires both the flag set AND the user actually being on a plan that
+    offers Privacy Mode (defence-in-depth — UI gates too)."""
+    if not profile.get("privacy_mode"):
+        return False
+    return effective_plan in PRIVACY_MODE_ALLOWED_PLANS
+
 # Notion OAuth — Public integration credentials
 NOTION_OAUTH_CLIENT_ID     = os.environ.get("NOTION_OAUTH_CLIENT_ID", "")
 NOTION_OAUTH_CLIENT_SECRET = os.environ.get("NOTION_OAUTH_CLIENT_SECRET", "")
@@ -991,12 +1006,46 @@ def profile_endpoint():
             "was_referred": bool(profile.get("referred_by")),
             "notion_connected":      bool(profile.get("notion_access_token")),
             "notion_workspace_name": profile.get("notion_workspace_name"),
+            "privacy_mode":          bool(profile.get("privacy_mode")),
+            "privacy_mode_available": plan in PRIVACY_MODE_ALLOWED_PLANS,
             "is_admin":              _is_admin(),
         })
     except Exception as e:
         print(f"[profile] error: {e}")
         return jsonify({"plan": "free", "minutes_used": 0, "minutes_limit": 60,
                         "bonus_minutes": 0, "referral_code": None})
+
+
+# ── Privacy Mode toggle ────────────────────────────────────────
+@app.route("/api/profile/privacy-mode", methods=["POST"])
+def set_privacy_mode():
+    """Toggle Privacy Mode for the calling user. Gated to Max + Team plans.
+    Body: {enabled: bool}"""
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        return jsonify({"error": "service unavailable"}), 503
+
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled"))
+
+    profile = _get_user_profile(g.user_id)
+    eff_plan = _get_effective_plan(g.user_id, g.user_email, profile)
+    if enabled and eff_plan not in PRIVACY_MODE_ALLOWED_PLANS:
+        return jsonify({
+            "error": "Privacy Mode requires Max or Team plan.",
+            "upgrade_required": True,
+        }), 402
+
+    try:
+        _sb_admin("user_profiles", method="PATCH",
+                  params={"id": f"eq.{g.user_id}"},
+                  data={"privacy_mode": enabled})
+        print(f"[privacy] {g.user_id} → privacy_mode={enabled}", flush=True)
+    except Exception as e:
+        return jsonify({"error": f"save failed: {e}"}), 500
+
+    return jsonify({"ok": True, "privacy_mode": enabled})
 
 
 # ── Referral redeem ────────────────────────────────────────────
@@ -2385,12 +2434,38 @@ def generate_endpoint():
     speaker_names = data.get("speakerNames") or {}
     full_text = _format_segments_for_llm(segments, speaker_names)
 
-    use_gemini = USE_MODAL and template_name in GEMINI_TEMPLATES
+    # Resolve Privacy Mode — when ON, route summary/actions through
+    # self-hosted LabGPTOSS20B instead of Gemini Pro.
+    privacy_mode = False
+    if SUPABASE_SERVICE_ROLE_KEY and g.user_id and template_name in GEMINI_TEMPLATES:
+        try:
+            profile = _get_user_profile(g.user_id)
+            eff_plan = _get_effective_plan(g.user_id, g.user_email, profile)
+            privacy_mode = _privacy_mode_active(profile, eff_plan)
+        except Exception as e:
+            print(f"[privacy] generate resolve failed: {e}")
+
+    use_gemini = USE_MODAL and template_name in GEMINI_TEMPLATES and not privacy_mode
 
     # Gemini 2.5 Pro: контекст 2M токенов, влезает любой созвон без обрезки.
-    # Qwen 7B на A10G и локальный Ollama — режем до 12k символов, иначе деградирует.
-    text = full_text if use_gemini else full_text[:12000]
+    # gpt-oss-20b: ~32K context — feed full text too (similar capacity to Gemini at this scale).
+    # Qwen 7B (legacy fallback) — режем до 12k символов, иначе деградирует.
+    if use_gemini or privacy_mode:
+        text = full_text  # both gpt-oss-20b and Gemini have enough context
+    else:
+        text = full_text[:12000]
     prompt = GENERATE_TEMPLATES[template_name].format(text=text, lang_hint=lang_hint)
+
+    # Privacy Mode path: self-hosted gpt-oss-20b on Modal L40S, no Gemini API call.
+    if privacy_mode:
+        try:
+            cls = _modal.Cls.from_name("transcriptor-v2", "LabGPTOSS20B")
+            inst = cls()
+            call = inst.generate.spawn(prompt, 4096, 0.3)
+        except Exception as e:
+            return jsonify({"error": f"privacy generate spawn failed: {e}"}), 502
+        return jsonify({"job_id": JOB_PREFIX_GENERATE + call.object_id,
+                        "status": "queued", "privacy_mode": True})
 
     # Gemini-путь для summary/actions: внешний LLM, отдельная Modal функция.
     if use_gemini:
@@ -2640,9 +2715,19 @@ def transcribe_endpoint():
     if USE_MODAL:
         audio_bytes = audio_file.read()
         progress_key = uuid.uuid4().hex  # уникальный ключ для modal.Dict прогресса
+        # Resolve Privacy Mode for this user — if on, Modal will skip Gemini
+        # correction entirely (falls back to local Qwen on the same GPU)
+        privacy_mode = False
+        try:
+            if g.user_id and SUPABASE_SERVICE_ROLE_KEY:
+                profile = _get_user_profile(g.user_id)
+                eff_plan = _get_effective_plan(g.user_id, g.user_email, profile)
+                privacy_mode = _privacy_mode_active(profile, eff_plan)
+        except Exception as e:
+            print(f"[privacy] resolve failed: {e}")
         try:
             call = _transcriptor.transcribe_full.spawn(
-                audio_bytes, language, num_speakers, prompt, progress_key, quality
+                audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode,
             )
         except Exception as e:
             return jsonify({"error": f"modal spawn failed: {e}"}), 502
