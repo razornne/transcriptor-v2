@@ -6350,7 +6350,10 @@ async function openLabModal() {
     const id = 'lab-m-' + m.key;
     const lbl = document.createElement('label');
     lbl.style.cssText = 'display:flex;gap:6px;align-items:center;cursor:pointer';
-    lbl.innerHTML = `<input type="checkbox" id="${id}" data-model="${m.key}" checked> <span>${m.label}</span>`;
+    // Gemini is the cloud baseline — unchecked by default so accidental
+    // runs don't burn API quota when we're iterating on self-hosted models.
+    const isDefault = m.key !== 'gemini';
+    lbl.innerHTML = `<input type="checkbox" id="${id}" data-model="${m.key}"${isDefault ? ' checked' : ''}> <span>${m.label}</span>`;
     modelBox.appendChild(lbl);
   });
   document.getElementById('labStatusText').textContent = '';
