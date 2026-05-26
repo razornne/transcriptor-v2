@@ -714,8 +714,9 @@ class Transcriptor:
 
 def _llm_chat_generate(model, tokenizer, prompt: str, max_tokens: int, temperature: float) -> str:
     """Shared inference helper for any chat-tuned LLM loaded via transformers.
-    Wraps prompt as a single user turn and runs greedy/sampled decode."""
-    import torch
+    Wraps prompt as a single user turn and runs greedy/sampled decode.
+    Clears CUDA cache before generate to avoid OOM from cold-start fragmentation."""
+    import torch, gc
     messages = [{"role": "user", "content": prompt}]
     try:
         result = tokenizer.apply_chat_template(
@@ -728,6 +729,9 @@ def _llm_chat_generate(model, tokenizer, prompt: str, max_tokens: int, temperatu
     else:
         encoded = {k: v.to("cuda") for k, v in result.items()}
     input_len = encoded["input_ids"].shape[-1]
+    # Reclaim VRAM fragmented by model load — critical for long-context inference
+    gc.collect()
+    torch.cuda.empty_cache()
     with torch.no_grad():
         output = model.generate(
             **encoded,
@@ -739,9 +743,16 @@ def _llm_chat_generate(model, tokenizer, prompt: str, max_tokens: int, temperatu
     return tokenizer.decode(output[0][input_len:], skip_special_tokens=True).strip()
 
 
+# Both Lab models run on A100 80GB.
+# Rationale: A10G (24GB) OOMs on long-context inference for 20-32B class
+# models even with quantization. Attention KV cache + activations push past
+# the budget when input is 30K+ tokens (a typical 30-60min transcript).
+# A100 80GB has comfortable headroom. Scale-to-zero so we only pay when
+# someone runs a Compare or a Privacy Mode generation.
+
 @app.cls(
     image=image,
-    gpu="A10G",
+    gpu="A100-80GB",
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
     timeout=600,
@@ -749,7 +760,7 @@ def _llm_chat_generate(model, tokenizer, prompt: str, max_tokens: int, temperatu
     min_containers=0,
 )
 class LabQwen32B:
-    """Qwen 2.5 32B Instruct loaded with bitsandbytes int4 (~18 GB on A10G).
+    """Qwen 2.5 32B Instruct loaded with bitsandbytes int4 (~18 GB weights).
     Strong on Russian/Ukrainian; primary candidate for Privacy Mode."""
 
     @modal.enter()
@@ -769,14 +780,18 @@ class LabQwen32B:
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,   # extra ~0.4 bits saving, ~5% slower
+            bnb_4bit_use_double_quant=True,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_id, cache_dir=f"{MODELS_DIR}/lab", token=hf_token,
         )
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_id, quantization_config=bnb, device_map="cuda",
-            cache_dir=f"{MODELS_DIR}/lab", token=hf_token,
+            model_id,
+            quantization_config=bnb,
+            device_map="cuda",
+            cache_dir=f"{MODELS_DIR}/lab",
+            token=hf_token,
+            attn_implementation="sdpa",   # PyTorch SDPA — O(n) attention, fits long context
         )
         self.model.eval()
         print("[lab/qwen32b] ready", flush=True)
@@ -788,7 +803,7 @@ class LabQwen32B:
 
 @app.cls(
     image=image,
-    gpu="A10G",
+    gpu="A100-80GB",
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
     timeout=600,
@@ -797,12 +812,12 @@ class LabQwen32B:
 )
 class LabGPTOSS20B:
     """OpenAI gpt-oss-20b — 21B MoE, ~5B active params per token.
-    Strong reasoning, English-centric but uses Whisper-friendly tokenizer."""
+    Strong reasoning, English-centric."""
 
     @modal.enter()
     def load_model(self):
         import os, torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
+        from transformers import AutoTokenizer, AutoModelForCausalLM
         from huggingface_hub import login
 
         hf_token = os.environ.get("HF_TOKEN")
@@ -813,7 +828,8 @@ class LabGPTOSS20B:
         model_id = "openai/gpt-oss-20b"
         print(f"[lab/gptoss20b] loading {model_id}...", flush=True)
         # gpt-oss ships in MXFP4 natively; transformers>=4.55 loads it as-is.
-        # On A10G that's ~12 GB. We do NOT layer bitsandbytes on top.
+        # Force SDPA — eager attention does O(n²) memory which OOMs on
+        # long transcripts even on A100.
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_id, cache_dir=f"{MODELS_DIR}/lab", token=hf_token,
         )
@@ -823,6 +839,7 @@ class LabGPTOSS20B:
             device_map="cuda",
             cache_dir=f"{MODELS_DIR}/lab",
             token=hf_token,
+            attn_implementation="sdpa",
         )
         self.model.eval()
         print("[lab/gptoss20b] ready", flush=True)
