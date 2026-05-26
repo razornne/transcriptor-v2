@@ -8,66 +8,60 @@
 
 Прямо следующие задачи, активно обсуждаемые.
 
-### Context prompt для Whisper
-**Зачем:** на жаргоне / именах / спецтерминах Whisper угадывает по фонетике и часто промахивается. Самое заметное улучшение качества при минимуме работы.
+### Upload audio file
+**Зачем:** запрос брата — записать звонок на iPhone Voice Memos / Android call recorder → загрузить .mp3/.m4a в Skriptly. Решает все сценарии где `getDisplayMedia` недоступен (cellular calls, WhatsApp, Signal).
 
-**Как:** поле «Тема/контекст» в UI до записи → уходит в Whisper как `initial_prompt`. Уже есть инфраструктура (`prompt` параметр прокидывается через весь стек).
+**Как:** кнопка "Upload audio" рядом со Start. Принимает .mp3/.m4a/.wav/.opus. Отправляет в существующий `/api/transcribe` (бэкенд уже умеет работать с аудио-файлом).
 
-**Сложность:** ~1-2 часа.
+**Сложность:** ~1 час.
 
-### GDPR compliance (минимум)
-**Зачем:** работаем с EU юзерами и аудио созвонов — это чувствительные данные. Нужно до публичного запуска.
+### Mobile mic-only mode
+**Зачем:** на iPhone Safari `getDisplayMedia` не работает → запись с телефона сейчас невозможна. Соня и её коллеги — на iPad/телефонах.
 
-**Что нужно:**
-- Страница Privacy Policy актуальна и точно описывает что храним (аудио не храним, только транскрипты в Supabase)
-- Кнопка "Delete my account + all data" в Settings
-- Уведомление о cookies / PostHog в footer (минимальный banner)
+**Как:** детектить mobile / Safari → скрывать screen-share часть UI → писать только микрофон. Юзер может включить спикер на звонке, телефон рядом.
 
-**Сложность:** ~2-3 часа.
+**Сложность:** ~1.5 часа.
 
-### Mobile responsive polish
-**Зачем:** базовый mobile sweep сделан, но визуально не идеально. Юзеры на iPhone/Android должны получить нормальный экспириенс.
-
-**Как:** реальное тестирование на телефоне, точечные фиксы CSS под виды боли. Особенно — hero, app mockup, pricing на узких экранах.
+### Mobile responsive polish (app side)
+**Зачем:** лендинг отполирован, но `/app` на телефоне выглядит хуже. Sidebar history, modal'ы, recording controls.
 
 **Сложность:** ~2-4 часа.
+
+### Stripe — subscription.updated pro/max разграничение
+Сейчас `customer.subscription.updated` webhook всегда ставит `plan=pro` при активной подписке, не различает pro/max. Нужно читать price_id из объекта подписки и маппить на план.
+
+**Сложность:** ~30 мин.
 
 ---
 
 ## 🚀 Medium term
 
-После Stage 2C.
+После запуска с первыми ~20-30 юзерами.
 
-### Custom SMTP для Supabase (Resend / SendGrid)
-- Снимает лимит 4 magic-link письма в час
-- Свой `noreply@skriptly.io` адрес
-- 10 минут настройки
+### OSVC / ФОП / sole-proprietor оформление
+- Для Чехии — OSVC. Нужно регистрироваться когда доход появляется
+- До этого Stripe принимает платежи без проблем, налоги задним числом
 
 ### Apple Sign-In
 - Требует Apple Developer Program ($99/год) — отложено до спроса
 - UI в Supabase уже готов, надо только заполнить Service ID + Key
 
-### Workspace + sharing
-- Юзер создаёт workspace («Marketing agency»), приглашает по email
-- Транскрипты можно шарить внутри workspace или конкретным людям
-- В UI переключатель «My transcripts / Workspace»
-
 ### Pre-recording template mode
 - До записи можно выбрать «Sales call mode» / «1-on-1» / «Stand-up»
 - После Stop **автоматически** запускается генерация Summary с правильным шаблоном
 
-### Stripe — subscription.updated pro/max разграничение
-Сейчас `customer.subscription.updated` webhook всегда ставит `plan=pro` при активной подписке, не различает pro/max. Нужно читать price_id из объекта подписки и маппить на план.
-
 ### Stripe — server-side PostHog events
-`subscription_activated` / `subscription_cancelled` из webhook — надёжнее чем client-side `payment_started` (юзер может закрыть вкладку до callback'а).
+`subscription_activated` / `subscription_cancelled` из webhook — надёжнее чем client-side `payment_started` (юзер может закрыть вкладку до callback'а). Сейчас есть Telegram-уведомления; PostHog ивенты добавим когда нужна будет funnel-аналитика.
 
-### Pricing model (решено)
-~~Когда будет понятен паттерн~~ — уже определились:
-- **Free** $0 / 60 мин / без диаризации и AI
-- **Pro** $15/мес ($12 annual) / 600 мин / всё включено
-- **Max** $29/мес ($23 annual) / 2000 мин / + Best Quality (large-v3)
-- **Team** $14/чел/мес (workspace plans) — в планах, не реализован
+### Pricing (зафиксированно)
+- **Free** $0 / 60 мин / без диаризации и AI / 5 транскриптов истории
+- **Pro** $15/мес ($12 annual) / 600 мин / диаризация + Summary/Actions / безлимит истории
+- **Max** $29/мес ($23 annual) / 2000 мин / Best Quality (large-v3) / **+ Privacy Mode** (toggle для bypass Gemini)
+- **Team** $14/чел/мес ($11 annual) / 600 мин/seat / + Privacy Mode
+
+### Live Stripe + UAH currency_options
+- ✅ Live ключи + 6 price IDs (Pro/Max/Team × Monthly/Annual) подключены
+- ⬜ UAH currency_options на каждом Price — Stripe Checkout автоматом покажет грн юзерам с UA IP. ~10 мин в Stripe Dashboard.
 
 ---
 
@@ -163,6 +157,50 @@ LLM авто-генерит 2-4 тега категории (sales / hiring / br
 ---
 
 ## 📝 Done so far (changelog highlights)
+
+### Pre-launch wave (2026-05, late) — production-ready
+- ✅ **Privacy Mode** (Max + Team) — toggle полностью bypass'ит Gemini:
+  - STT correction → Qwen 7B на нашем A10G (вместо Gemini Flash)
+  - Summary / Actions → gpt-oss-20b MXFP4 на L40S (вместо Gemini Pro)
+  - Gated в UI + бэке двойной защитой (PRIVACY_MODE_ALLOWED_PLANS)
+- ✅ **Live Stripe** — `sk_live_...`, webhook на production, 6 price IDs
+  (Pro/Max/Team × Monthly/Annual). Promo codes включены через
+  `allow_promotion_codes=True`.
+- ✅ **Team subscription billing** (per-seat) — owner создаёт workspace
+  → Upgrade to Team → Stripe Checkout с quantity=N. Add/remove member
+  → автоматическая модификация Stripe quantity через API. Min 2 seats.
+- ✅ **Notion integration** — public OAuth, save default parent page,
+  "Send to Notion" под транскриптом → создаётся страница с Summary,
+  Action items, и полным транскриптом по спикерам.
+- ✅ **Lab harness** (admin only) — `/api/lab/compare` параллельный
+  inference на нескольких LLM с одним промптом, side-by-side display
+  в modal. Использовали для оценки MamayLM 9B vs gpt-oss-20b vs Qwen
+  32B. Выбран gpt-oss-20b для Privacy Mode.
+- ✅ **Hardened prompts** — anti-hallucination + anti-transliteration
+  rules в GENERATE_TEMPLATES. Закрыли проблему "ДІМ-9000 → DIMM-9000"
+  и выдуманных ролей у self-hosted моделей.
+- ✅ **Demo transcript onboarding** — после welcome modal новый юзер
+  видит готовый транскрипт (Eli/Sasha/Niko mock) с заполненными
+  Summary/Actions — может потыкать табы, переименовать спикеров,
+  ощутить ценность без записи реального звонка.
+- ✅ **Cancel button** во время processing — clicks `FunctionCall.cancel()`
+  на Modal + flip `pollCancelled` на фронте.
+- ✅ **Settings tabs refactor** — sidebar с 7 табами (Account /
+  Subscription / Workspace / Integrations / Friends / Preferences /
+  Danger zone) вместо длинного scroll.
+- ✅ **Telegram admin notifications** — отдельный `admin-secrets`,
+  ping'и в личку на: новый signup, новая подписка (Pro/Max/Team) с
+  суммой + промокодом если был, отмена подписки.
+- ✅ **PostHog error tracking** — `capture_exceptions:true` ловит
+  uncaught JS errors. `autocapture:true` — все клики автоматом.
+  + новые ивенты: `settings_tab_viewed`, `plan_card_clicked`,
+  `content_tab_clicked`, `privacy_mode_toggled`, `team_upgrade_started`,
+  `lab_compare_ran`.
+- ✅ **Shortcuts robustness** — keyboard handler использует `e.key` +
+  `e.code` fallback (исправляет non-Latin раскладку на Mac). Cmd+K
+  переключён с поиска на открытие Settings (поиск только на `/`).
+- ✅ **Privacy Policy rewrite** — точно описывает что хранится, кто
+  обрабатывает, Privacy Mode опция, GDPR права.
 
 ### Analytics + UX polish (2026-05)
 - ✅ PostHog Session Replay включён + privacy masking (`maskAllInputs`, `blockSelector` на `.transcript` и `.ai-result-content`) — тексты созвонов не пишутся в replay

@@ -76,7 +76,10 @@ Supabase Postgres
 |------|------|-----------|-----------|---------|
 | **Free** | $0 | 60 мин | ❌ | ❌ |
 | **Pro** | $15/мес | 600 мин | ✅ | ✅ |
-| **Max** | $29/мес | 2000 мин | ✅ | ✅ + Best Quality (Whisper large-v3) |
+| **Max** | $29/мес | 2000 мин | ✅ | ✅ + Best Quality (Whisper large-v3) + **Privacy Mode** |
+| **Team** | $14/seat/мес | 600 мин/seat | ✅ | ✅ + **Privacy Mode** (per-seat billing) |
+
+**Privacy Mode** (Max/Team only) — toggle в Settings отключает Gemini API: вся транскрипция и AI-генерация идут через self-hosted модели на нашем Modal GPU (gpt-oss-20b + Qwen). Данные не покидают нашу инфру.
 
 Минуты считаются по реальной длительности аудио. Сбрасываются 1-го числа каждого месяца.
 Биллинг через Stripe. Подробнее — см. **[BILLING.md](./BILLING.md)**.
