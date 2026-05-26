@@ -528,6 +528,57 @@ def _notify_admin(text: str):
         print(f"[admin-notify] failed: {e}", flush=True)
 
 
+def _stripe_session_discount_summary(session_obj) -> str:
+    """If the Stripe Checkout Session used a promotion code, build a short
+    Telegram-friendly summary string. Returns empty string if no discount.
+
+    Tries multiple access patterns because the Stripe SDK sometimes exposes
+    nested fields as dicts and sometimes as objects depending on version."""
+    try:
+        total_details = getattr(session_obj, "total_details", None) or \
+                        (session_obj.get("total_details") if hasattr(session_obj, "get") else None)
+        if not total_details:
+            return ""
+        discount_amount = 0
+        breakdown = None
+        if isinstance(total_details, dict):
+            discount_amount = (total_details.get("amount_discount") or 0)
+            breakdown = total_details.get("breakdown")
+        else:
+            discount_amount = getattr(total_details, "amount_discount", 0) or 0
+            breakdown = getattr(total_details, "breakdown", None)
+        if discount_amount <= 0:
+            return ""
+        currency = "USD"
+        try:
+            currency = (getattr(session_obj, "currency", None) or
+                        (session_obj.get("currency") if hasattr(session_obj, "get") else "usd")).upper()
+        except Exception:
+            pass
+        code = ""
+        try:
+            discounts = breakdown.get("discounts") if isinstance(breakdown, dict) else getattr(breakdown, "discounts", None)
+            if discounts:
+                first = discounts[0]
+                disc = first.get("discount") if isinstance(first, dict) else getattr(first, "discount", None)
+                if disc:
+                    promo_code = disc.get("promotion_code") if isinstance(disc, dict) else getattr(disc, "promotion_code", None)
+                    coupon = disc.get("coupon") if isinstance(disc, dict) else getattr(disc, "coupon", None)
+                    if promo_code:
+                        code = str(promo_code)
+                    elif coupon:
+                        code = (coupon.get("name") if isinstance(coupon, dict) else getattr(coupon, "name", None)) or ""
+        except Exception:
+            pass
+        line = f"🎟 promo: −{discount_amount/100:.2f} {currency}"
+        if code:
+            line += f" ({code})"
+        return line
+    except Exception as e:
+        print(f"[webhook] discount summary failed: {e}", flush=True)
+        return ""
+
+
 def _generate_referral_code(user_id: str) -> str:
     """Short, URL-safe, human-readable referral code. Collision-resistant enough
     for our scale (deriving from uuid + secrets gives ~10^9 unique codes)."""
@@ -2140,6 +2191,16 @@ def stripe_webhook():
                               "seats": int(qty),
                           })
                 print(f"[webhook] workspace {workspace_id} → team, seats={qty}", flush=True)
+                # Notify admin: new Team subscription
+                amount = (_g(obj, "amount_total") or 0) / 100
+                currency = (_g(obj, "currency") or "usd").upper()
+                discount = _stripe_session_discount_summary(obj)
+                _notify_admin(
+                    f"💰 <b>New Team subscription</b>\n\n"
+                    f"💵 {amount:.2f} {currency} ({billing}, {qty} seats)\n"
+                    f"🏢 workspace: <code>{workspace_id}</code>\n"
+                    f"{discount}"
+                )
             return jsonify({"ok": True})
 
         # ── Personal subscription (Pro/Max) ──────────────────────────
@@ -2158,6 +2219,23 @@ def stripe_webhook():
                           "stripe_subscription_id": _g(obj, "subscription"),
                       })
             print(f"[webhook] plan updated to {plan_name} + minutes reset for {user_id}", flush=True)
+            # Notify admin: new paid subscription
+            amount = (_g(obj, "amount_total") or 0) / 100
+            currency = (_g(obj, "currency") or "usd").upper()
+            email = _g(obj, "customer_email") or _g(obj, "customer_details") or "(unknown)"
+            if hasattr(email, "get"):
+                email = email.get("email", "(unknown)")
+            elif isinstance(email, dict):
+                email = email.get("email", "(unknown)")
+            billing = _meta_get(obj, "billing") or ""
+            discount = _stripe_session_discount_summary(obj)
+            _notify_admin(
+                f"💰 <b>New {plan_name.upper()} subscription</b>\n\n"
+                f"💵 {amount:.2f} {currency}{(' ('+billing+')') if billing else ''}\n"
+                f"📧 {email}\n"
+                f"🆔 <code>{user_id}</code>\n"
+                f"{discount}"
+            )
 
     elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
         meta_type = _meta_get(obj, "type") or ""
@@ -2175,6 +2253,11 @@ def stripe_webhook():
                               data={"plan": "free", "seats": 1,
                                     "stripe_subscription_id": None})
                     print(f"[webhook] team sub deleted → workspace {ws_id} downgraded to free", flush=True)
+                    _notify_admin(
+                        f"⚠️ <b>Team subscription cancelled</b>\n\n"
+                        f"🏢 workspace: <code>{ws_id}</code>\n"
+                        f"downgraded to free"
+                    )
                 else:
                     status = _g(obj, "status")
                     qty = 1
@@ -2205,6 +2288,12 @@ def stripe_webhook():
             _sb_admin("user_profiles", method="PATCH",
                       params={"id": f"eq.{uid}"}, data={"plan": plan})
             print(f"[webhook] {etype} → plan={plan} for {uid}", flush=True)
+            if etype == "customer.subscription.deleted":
+                _notify_admin(
+                    f"⚠️ <b>Subscription cancelled</b>\n\n"
+                    f"🆔 <code>{uid}</code>\n"
+                    f"downgraded to free"
+                )
 
     return jsonify({"ok": True})
 

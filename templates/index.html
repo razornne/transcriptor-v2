@@ -31,6 +31,15 @@
       api_host: window.__POSTHOG_API_HOST__,
       ui_host:  window.__POSTHOG_UI_HOST__,
       person_profiles: 'identified_only',
+      // Auto-capture uncaught JS errors and unhandled promise rejections —
+      // lands in PostHog → Error tracking. Replaces a dedicated Sentry setup
+      // for now; switch if PostHog volume becomes a problem.
+      capture_exceptions: true,
+      // Auto-capture clicks/inputs on elements so we get a baseline of
+      // 'who clicked what' without instrumenting every button manually.
+      // Combined with the named events we fire from JS, this gives a full
+      // picture of feature engagement (Best Quality, Privacy Mode, etc).
+      autocapture: true,
       session_recording: {
         maskAllInputs: true,
         // Block transcript and AI result content from session replays (privacy)
@@ -2243,11 +2252,11 @@
         <span class="keys"><kbd>Space</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc" data-i18n="shortcutHistory">Open History &amp; focus search</span>
+        <span class="desc" data-i18n="shortcutOpenSettings">Open Settings</span>
         <span class="keys"><kbd>Ctrl</kbd><kbd>K</kbd></span>
       </div>
       <div class="shortcut-row">
-        <span class="desc" data-i18n="shortcutSearch">Focus search (when History open)</span>
+        <span class="desc" data-i18n="shortcutSearch">Focus search in History</span>
         <span class="keys"><kbd>/</kbd></span>
       </div>
       <div class="shortcut-row">
@@ -2501,8 +2510,9 @@ const T = {
     // Shortcuts
     shortcutsTitle: 'Keyboard shortcuts',
     shortcutRec: 'Start / stop recording',
-    shortcutHistory: 'Open History & focus search',
-    shortcutSearch: 'Focus search (when History open)',
+    shortcutOpenSettings: 'Open Settings',
+    shortcutHistory: 'Open History & focus search',   // kept for back-compat with any older HTML
+    shortcutSearch: 'Focus search in History',
     shortcutDownload: 'Download as .md',
     shortcutSidebar: 'Toggle sidebar',
     shortcutLang: 'Toggle UI language (EN ↔ UA)',
@@ -2750,8 +2760,9 @@ const T = {
     // Shortcuts
     shortcutsTitle: 'Гарячі клавіші',
     shortcutRec: 'Почати / зупинити запис',
+    shortcutOpenSettings: 'Відкрити налаштування',
     shortcutHistory: 'Відкрити Історію і пошук',
-    shortcutSearch: 'Пошук (коли Історія відкрита)',
+    shortcutSearch: 'Пошук в Історії',
     shortcutDownload: 'Завантажити .md',
     shortcutSidebar: 'Сховати / показати панель',
     shortcutLang: 'Перемкнути мову інтерфейсу (EN ↔ UA)',
@@ -3874,7 +3885,14 @@ function switchTab(name, save = true) {
 // Tab click delegation
 document.getElementById('contentTabs').addEventListener('click', e => {
   const btn = e.target.closest('.content-tab');
-  if (btn && btn.dataset.tab) switchTab(btn.dataset.tab);
+  if (btn && btn.dataset.tab) {
+    if (window.posthog && btn.dataset.tab !== currentTab) {
+      // Which output tab people actually open after transcription — drives
+      // decisions about which AI surface to invest in next.
+      posthog.capture('content_tab_clicked', { tab: btn.dataset.tab });
+    }
+    switchTab(btn.dataset.tab);
+  }
 });
 
 function renderTranscript(segments, highlightQuery) {
@@ -5791,6 +5809,10 @@ shortcutsModal.addEventListener('click', (e) => {
 window.addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   const typing = isTypingTarget(e.target);
+  // Lowercase + use e.code as fallback — handles non-Latin layouts (cyrillic
+  // keyboard on Mac) where e.key may be Cyrillic but e.code stays 'KeyK'.
+  const key = (e.key || '').toLowerCase();
+  const code = e.code || '';
 
   // Escape — закрывает модалку или снимает фокус с поля
   if (e.key === 'Escape') {
@@ -5823,16 +5845,15 @@ window.addEventListener('keydown', (e) => {
     }
   }
 
-  // Ctrl/Cmd + K — раскрыть Историю и сфокусироваться на поиске
-  if (mod && (e.key === 'k' || e.key === 'K')) {
+  // Ctrl/Cmd + K — open Settings (was: search; search is now '/' only)
+  if (mod && (key === 'k' || code === 'KeyK')) {
     e.preventDefault();
-    if (historyList.classList.contains('hidden')) historyToggle.click();
-    setTimeout(() => document.getElementById('historySearch').focus(), 30);
+    if (currentUser) openSettingsModal();
     return;
   }
 
   // Ctrl/Cmd + S — скачать .md
-  if (mod && (e.key === 's' || e.key === 'S')) {
+  if (mod && (key === 's' || code === 'KeyS')) {
     if (currentSegments && currentSegments.length) {
       e.preventDefault();
       downloadBtn.click();
@@ -5841,7 +5862,7 @@ window.addEventListener('keydown', (e) => {
   }
 
   // Ctrl/Cmd + B — toggle sidebar
-  if (mod && (e.key === 'b' || e.key === 'B')) {
+  if (mod && (key === 'b' || code === 'KeyB')) {
     e.preventDefault();
     const isCollapsed = sidebarEl ? sidebarEl.classList.contains('collapsed') : true;
     setSidebarCollapsed(!isCollapsed);
@@ -5849,7 +5870,7 @@ window.addEventListener('keydown', (e) => {
   }
 
   // Ctrl/Cmd + L — toggle UI language (EN ↔ UA)
-  if (mod && (e.key === 'l' || e.key === 'L')) {
+  if (mod && (key === 'l' || code === 'KeyL')) {
     e.preventDefault();
     const btn = document.getElementById('uiLangToggle');
     if (btn) btn.click();
@@ -5857,7 +5878,7 @@ window.addEventListener('keydown', (e) => {
   }
 
   // Ctrl/Cmd + D — переключение темы
-  if (mod && (e.key === 'd' || e.key === 'D')) {
+  if (mod && (key === 'd' || code === 'KeyD')) {
     e.preventDefault();
     themeToggle.click();
     return;
@@ -6088,6 +6109,7 @@ const settingsModal = document.getElementById('settingsModal');
 let _currentSettingsTab = 'account';
 
 function switchSettingsTab(name) {
+  const changed = _currentSettingsTab !== name;
   _currentSettingsTab = name;
   // Highlight active tab in sidebar
   document.querySelectorAll('.settings-tab-btn').forEach(b => {
@@ -6100,6 +6122,10 @@ function switchSettingsTab(name) {
   // Scroll pane back to top so each tab starts fresh
   const pane = settingsModal.querySelector('.settings-pane');
   if (pane) pane.scrollTop = 0;
+  // Track which tabs users actually visit — helps decide where to invest UX
+  if (changed && window.posthog) {
+    posthog.capture('settings_tab_viewed', { tab: name, plan: currentPlan });
+  }
 }
 
 document.querySelectorAll('.settings-tab-btn').forEach(b => {
@@ -6894,7 +6920,18 @@ async function startCheckout(plan, btn) {
   }
 }
 
+// Two listeners: cards (interest signal) + actual upgrade (intent)
 document.getElementById('planCards').addEventListener('click', e => {
+  const card = e.target.closest('.plan-card');
+  if (card && window.posthog) {
+    // Card-level click — fires even when user clicks anywhere in the card.
+    // Helps measure 'interest in plan X' separately from actual checkout.
+    posthog.capture('plan_card_clicked', {
+      target_plan: card.dataset.plan,
+      current_plan: currentPlan,
+      billing: currentBilling,
+    });
+  }
   const btn = e.target.closest('.btn-upgrade');
   if (!btn || btn.disabled) return;
   const plan = btn.closest('.plan-card')?.dataset.plan;
