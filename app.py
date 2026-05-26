@@ -2416,15 +2416,17 @@ LAB_MODELS = {
 
 @app.route("/api/lab/compare", methods=["POST"])
 def lab_compare():
-    """Run a single prompt against N selected models in parallel, block until
-    all return (with per-model timeout). Returns text + latency for each.
+    """Spawn N model calls in parallel. Returns job_ids (one per model)
+    that the frontend polls via the existing /api/jobs/<id> endpoint.
+    Async — avoids HTTP gateway timeouts on slow cold starts (Modal HTTP
+    proxy drops connections after ~5 min of no response data).
 
     Body (JSON):
       transcript_id: uuid of an existing transcript in the calling user's history
       task:          'summary' | 'actions' (any key in GENERATE_TEMPLATES)
       models:        list of LAB_MODELS keys to compare
 
-    Result: {results: {model_key: {text|error, time_ms}}, ...}
+    Result: {job_ids: {model_key: 'g_<call_id>'|None}, errors: {model_key: msg}}
     """
     if not _is_admin():
         return jsonify({"error": "admin only"}), 403
@@ -2464,52 +2466,29 @@ def lab_compare():
     if not language:
         language = _detect_transcript_language(segments) or ""
     lang_hint = LANG_HINTS.get(language, LANG_HINT_DEFAULT)
-    # Gemini sees full text (2M token context); local Qwen 32B / gpt-oss-20b
-    # also have enough context (≥32K), so feed them the same. Cap at 200K
-    # chars defensively.
-    text = full_text[:200000]
+    text = full_text[:200000]   # defensive cap, all 3 models have ≥32K context
     prompt = GENERATE_TEMPLATES[task].format(text=text, lang_hint=lang_hint)
 
-    # Spawn each model in parallel
-    import time
-    spawn_t0 = time.time()
-    calls = {}     # key -> (FunctionCall, start_ts)
-    results = {}   # key -> {text|error, time_ms}
+    job_ids = {}
+    errors = {}
 
     for key in models:
         cfg = LAB_MODELS[key]
         cls_or_fn, method = cfg["modal_fn"]
         try:
-            t_start = time.time()
             if method is None:
-                # Plain Modal function (gemini_generate)
                 fn = _modal.Function.from_name("transcriptor-v2", cls_or_fn)
                 call = fn.spawn(prompt, max_output_tokens=8000, temperature=0.3)
             else:
-                # Class method
                 cls = _modal.Cls.from_name("transcriptor-v2", cls_or_fn)
                 inst = cls()
                 bound = getattr(inst, method)
                 call = bound.spawn(prompt, 4096, 0.3)
-            calls[key] = (call, t_start)
+            # Re-use 'g_' prefix so existing /api/jobs/<id> handler treats
+            # these as generate-style jobs (result = plain string).
+            job_ids[key] = JOB_PREFIX_GENERATE + call.object_id
         except Exception as e:
-            results[key] = {"error": f"spawn failed: {e}", "time_ms": 0}
-
-    # Collect (block per model with timeout)
-    PER_MODEL_TIMEOUT_S = 600  # 10 min — first cold start for 32B can be 3-5min
-    for key, (call, t_start) in calls.items():
-        try:
-            out = call.get(timeout=PER_MODEL_TIMEOUT_S)
-            results[key] = {
-                "text": (out or "").strip(),
-                "time_ms": int((time.time() - t_start) * 1000),
-                "char_count": len(out or ""),
-            }
-        except Exception as e:
-            results[key] = {
-                "error": str(e)[:300],
-                "time_ms": int((time.time() - t_start) * 1000),
-            }
+            errors[key] = f"spawn failed: {e}"
 
     return jsonify({
         "ok": True,
@@ -2518,8 +2497,8 @@ def lab_compare():
         "transcript_id": transcript_id,
         "segments_count": len(segments),
         "input_chars": len(text),
-        "wall_ms": int((time.time() - spawn_t0) * 1000),
-        "results": results,
+        "job_ids": job_ids,
+        "errors": errors,
     })
 
 
