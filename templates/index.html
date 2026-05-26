@@ -6424,9 +6424,8 @@ document.getElementById('labRunBtn').addEventListener('click', async () => {
 
   const statusEl = document.getElementById('labStatusText');
   document.getElementById('labDownloadBtn').style.display = 'none';
-  statusEl.textContent = `Spawning ${models.length} model(s)… first cold start can take 3-5 min for 32B.`;
+  statusEl.textContent = `Spawning ${models.length} model(s)… first cold start can take 3-5 min.`;
   const resBox = document.getElementById('labResults');
-  // Pre-render skeleton columns so user sees progress
   resBox.style.gridTemplateColumns = `repeat(${models.length}, minmax(0, 1fr))`;
   resBox.innerHTML = '';
   const cards = {};
@@ -6435,59 +6434,122 @@ document.getElementById('labRunBtn').addEventListener('click', async () => {
     c.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;min-height:200px;display:flex;flex-direction:column;gap:8px';
     c.innerHTML = `
       <div style="font-weight:600;font-size:13px">${(_labInfo.models.find(x=>x.key===m) || {}).label || m}</div>
-      <div style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace">⏳ waiting…</div>
+      <div class="lab-meta" style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace">⏳ waiting…</div>
       <div class="lab-text" style="font-size:12.5px;line-height:1.55;white-space:pre-wrap;color:var(--text);overflow-y:auto;max-height:55vh"></div>
     `;
     cards[m] = c;
     resBox.appendChild(c);
   });
 
+  // Step 1: spawn all models, get job_ids back
+  let spawned;
   try {
     const res = await authFetch(`${API_BASE}/api/lab/compare`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        transcript_id: currentHistoryId,
-        task,
-        models,
-      }),
+      body: JSON.stringify({ transcript_id: currentHistoryId, task, models }),
     });
-    const data = await res.json();
+    spawned = await res.json();
     if (!res.ok) {
-      statusEl.textContent = '❌ ' + (data.error || 'failed');
+      statusEl.textContent = '❌ ' + (spawned.error || 'spawn failed');
+      runBtn.disabled = false; runBtn.textContent = 'Run comparison';
+      _labRunning = false;
       return;
     }
-    statusEl.textContent = `✅ Done in ${(data.wall_ms/1000).toFixed(1)}s — ${data.segments_count} segments, ${data.input_chars} chars input`;
-    // Remember for Download .md export
-    _labLastResults = {
-      ...data,
-      models,
-      run_at: new Date().toISOString(),
-      transcript_title: currentTitle || 'untitled',
-    };
-    document.getElementById('labDownloadBtn').style.display = '';
-    for (const m of models) {
-      const r = data.results[m] || {};
-      const card = cards[m];
-      const meta = card.children[1];
-      const text = card.querySelector('.lab-text');
-      if (r.error) {
-        meta.textContent = `❌ ${r.time_ms}ms — error`;
-        meta.style.color = '#e55';
-        text.textContent = r.error;
-      } else {
-        meta.textContent = `✓ ${(r.time_ms/1000).toFixed(1)}s · ${r.char_count} chars output`;
-        text.textContent = r.text || '(empty)';
-      }
-    }
-    if (window.posthog) posthog.capture('lab_compare_ran', { task, models: models.join(','), wall_ms: data.wall_ms });
   } catch (e) {
     statusEl.textContent = '❌ ' + e.message;
-  } finally {
-    runBtn.disabled = false;
-    runBtn.textContent = 'Run comparison';
+    runBtn.disabled = false; runBtn.textContent = 'Run comparison';
     _labRunning = false;
+    return;
   }
+
+  // Show immediate spawn errors
+  for (const [m, msg] of Object.entries(spawned.errors || {})) {
+    const card = cards[m];
+    if (!card) continue;
+    card.querySelector('.lab-meta').textContent = '❌ spawn failed';
+    card.querySelector('.lab-meta').style.color = '#e55';
+    card.querySelector('.lab-text').textContent = msg;
+  }
+
+  // Step 2: poll each job independently (parallel via Promise.all)
+  const startedAt = Date.now();
+  const perModelResults = {};
+  const POLL_INTERVAL_MS = 3000;
+  const MAX_WAIT_MS = 10 * 60 * 1000;  // 10 min per model
+
+  statusEl.textContent = `Running ${Object.keys(spawned.job_ids || {}).length} model(s)… polling every 3s.`;
+
+  await Promise.all(Object.entries(spawned.job_ids || {}).map(async ([key, jobId]) => {
+    const card = cards[key];
+    const metaEl = card.querySelector('.lab-meta');
+    const textEl = card.querySelector('.lab-text');
+    const t0 = Date.now();
+    while (true) {
+      if (Date.now() - t0 > MAX_WAIT_MS) {
+        perModelResults[key] = { error: 'timeout (10 min)', time_ms: Date.now() - t0 };
+        metaEl.textContent = '❌ timeout';
+        metaEl.style.color = '#e55';
+        textEl.textContent = 'Model did not return in 10 min.';
+        return;
+      }
+      // Live elapsed counter
+      metaEl.textContent = `⏳ ${((Date.now() - t0)/1000).toFixed(0)}s…`;
+      try {
+        const r = await authFetch(`${API_BASE}/api/jobs/${jobId}`);
+        const d = await r.json();
+        if (d.status === 'done') {
+          const out = (d.result || d || '').toString().trim();
+          const dt = Date.now() - t0;
+          perModelResults[key] = { text: out, time_ms: dt, char_count: out.length };
+          metaEl.textContent = `✓ ${(dt/1000).toFixed(1)}s · ${out.length} chars`;
+          metaEl.style.color = 'var(--muted)';
+          textEl.textContent = out || '(empty)';
+          return;
+        }
+        if (d.status === 'error' || d.error) {
+          const dt = Date.now() - t0;
+          const errMsg = (d.error || 'unknown').toString();
+          perModelResults[key] = { error: errMsg, time_ms: dt };
+          metaEl.textContent = `❌ ${(dt/1000).toFixed(1)}s — error`;
+          metaEl.style.color = '#e55';
+          textEl.textContent = errMsg;
+          return;
+        }
+      } catch (e) {
+        // Network blip — keep trying
+        console.warn('[lab] poll error:', e);
+      }
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+    }
+  }));
+
+  // All done — build final result for download
+  const wallMs = Date.now() - startedAt;
+  statusEl.textContent = `✅ Done in ${(wallMs/1000).toFixed(1)}s — ${spawned.segments_count} segments, ${spawned.input_chars} chars input`;
+  // Also include any spawn-failed models in download
+  for (const [m, msg] of Object.entries(spawned.errors || {})) {
+    perModelResults[m] = { error: msg, time_ms: 0 };
+  }
+  _labLastResults = {
+    ok: true,
+    task,
+    language: spawned.language,
+    transcript_id: spawned.transcript_id,
+    segments_count: spawned.segments_count,
+    input_chars: spawned.input_chars,
+    wall_ms: wallMs,
+    results: perModelResults,
+    models,
+    run_at: new Date().toISOString(),
+    transcript_title: currentTitle || 'untitled',
+  };
+  document.getElementById('labDownloadBtn').style.display = '';
+  if (window.posthog) posthog.capture('lab_compare_ran', { task, models: models.join(','), wall_ms: wallMs });
+
+  runBtn.disabled = false;
+  runBtn.textContent = 'Run comparison';
+  _labRunning = false;
 });
 
 // Handle ?notion=connected|error in URL after OAuth callback redirect

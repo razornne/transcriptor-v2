@@ -63,7 +63,7 @@ image = (
         "nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04",
         add_python="3.11",
     )
-    .apt_install("ffmpeg")
+    .apt_install("ffmpeg", "build-essential")  # build-essential: C compiler for Triton JIT (gpt-oss MoE)
     .pip_install(
         # Whisper
         "faster-whisper==1.1.1",
