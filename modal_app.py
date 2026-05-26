@@ -792,16 +792,21 @@ def _strip_gpt_oss_analysis(text: str) -> str:
 
 @app.cls(
     image=image,
-    gpu="L40S",                  # 48GB, ~\$1.95/hr — fits 32B int4 + KV cache + SDPA
+    gpu="A10G",                  # 9B in int4 ~5GB — easily fits A10G's 24GB
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
     timeout=600,
     scaledown_window=120,
     min_containers=0,
 )
-class LabQwen32B:
-    """Qwen 2.5 32B Instruct loaded with bitsandbytes int4 (~18 GB weights).
-    Strong on Russian/Ukrainian; primary candidate for Privacy Mode."""
+class LabMamayLM9B:
+    """MamayLM — Ukrainian-focused fine-tune of Google Gemma 2 9B.
+    Built specifically for ru/uk; expected to outperform generic models
+    on Cyrillic analytical tasks despite being much smaller (9B vs 32B).
+
+    Note: requires accepting Gemma 2 license on HuggingFace before
+    HF_TOKEN can download. Set MAMAY_MODEL_ID env var to override the
+    repo if the default doesn't match the actual release name."""
 
     @modal.enter()
     def load_model(self):
@@ -814,8 +819,12 @@ class LabQwen32B:
             try: login(token=hf_token)
             except Exception: pass
 
-        model_id = "Qwen/Qwen2.5-32B-Instruct"
-        print(f"[lab/qwen32b] loading {model_id}...", flush=True)
+        # Default repo guess — verify against HF or override via env
+        model_id = os.environ.get(
+            "MAMAY_MODEL_ID",
+            "INSAIT-Institute/MamayLM-Gemma-2-9B-IT-v0.1",
+        )
+        print(f"[lab/mamaylm] loading {model_id}...", flush=True)
         bnb = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.float16,
@@ -831,10 +840,10 @@ class LabQwen32B:
             device_map="cuda",
             cache_dir=f"{MODELS_DIR}/lab",
             token=hf_token,
-            attn_implementation="sdpa",   # PyTorch SDPA — O(n) attention, fits long context
+            attn_implementation="sdpa",
         )
         self.model.eval()
-        print("[lab/qwen32b] ready", flush=True)
+        print("[lab/mamaylm] ready", flush=True)
 
     @modal.method()
     def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:

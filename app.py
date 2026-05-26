@@ -2408,9 +2408,9 @@ def generate_endpoint():
 # Privacy Mode (Max + Team feature replacing Gemini with self-hosted).
 
 LAB_MODELS = {
-    "gemini":    {"label": "Gemini 2.5 Pro",  "modal_fn": ("gemini_generate", None)},
-    "qwen32b":   {"label": "Qwen 2.5 32B (A10G int4)",   "modal_fn": ("LabQwen32B",   "generate")},
-    "gptoss20b": {"label": "gpt-oss-20b (A10G MXFP4)",   "modal_fn": ("LabGPTOSS20B", "generate")},
+    "gemini":    {"label": "Gemini 2.5 Pro",                "modal_fn": ("gemini_generate", None)},
+    "mamaylm":   {"label": "MamayLM 9B (Gemma 2 / UA)",     "modal_fn": ("LabMamayLM9B",  "generate")},
+    "gptoss20b": {"label": "gpt-oss-20b (L40S MXFP4)",      "modal_fn": ("LabGPTOSS20B",  "generate")},
 }
 
 
