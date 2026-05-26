@@ -79,6 +79,9 @@ image = (
         "accelerate",
         "bitsandbytes",
         "huggingface_hub",
+        # MXFP4 kernels for gpt-oss native 4-bit (otherwise dequantizes to bf16
+        # which means 40GB instead of 12GB — wastes VRAM, slower)
+        "kernels>=0.12.0",
         # Utils
         "numpy",
         "requests",
@@ -839,7 +842,9 @@ class LabGPTOSS20B:
             device_map="cuda",
             cache_dir=f"{MODELS_DIR}/lab",
             token=hf_token,
-            attn_implementation="sdpa",
+            # gpt-oss doesn't support SDPA yet in transformers; fall back to eager
+            # (O(n²) attention) but on A100 80GB with MXFP4 weights we have room
+            attn_implementation="eager",
         )
         self.model.eval()
         print("[lab/gptoss20b] ready", flush=True)
@@ -940,7 +945,9 @@ def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: flo
 @app.function(
     image=web_image,
     secrets=[hf_secret, notion_secret, admin_secret],   # + Telegram admin notify
-    timeout=120,                 # на сам HTTP запрос (spawn моментален)
+    timeout=900,                 # 15 min — почти все запросы моментальные через .spawn(),
+                                 # но /api/lab/compare блокирует до завершения всех моделей
+                                 # (3-5 мин cold start на A100 + до 60s генерации × N моделей)
     scaledown_window=60,         # держим тёплым 1 мин между запросами
     min_containers=0,            # скейл в ноль когда idle = бесплатно
 )
