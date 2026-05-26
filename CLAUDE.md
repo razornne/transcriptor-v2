@@ -114,8 +114,13 @@ Supabase Postgres
   - **Forward/backward-fill** для `SPEAKER_UNKNOWN` на первых словах сегмента.
 
 ### Migrations (`migrations/`)
-- **`001_workspace.sql`** — workspace collaboration. Создаёт `workspaces` + `workspace_members`, ALTER'ит `transcripts` для visibility/workspace_id, обновляет RLS-политики. **Дроп `workspaces_member_select`** обязателен — без этого infinite recursion в RLS.
-- **`002_vocabulary.sql`** — `ALTER TABLE user_profiles ADD COLUMN vocabulary JSONB`. Хранит auto-learned терминологию.
+- **`001_workspace.sql`** — workspaces + workspace_members + transcripts.visibility/workspace_id + RLS. **Дроп `workspaces_member_select`** обязателен — без этого infinite recursion в RLS.
+- **`002_vocabulary.sql`** — `user_profiles.vocabulary JSONB` — auto-learned терминология (термины которые Gemini correction исправил → шевелятся в `initial_prompt` следующего Whisper'a).
+- **`003_referrals.sql`** — `user_profiles.referral_code` (UNIQUE) + `referred_by` + `bonus_minutes`. +60 мин обоим за каждый успешный реф.
+- **`004_team_billing.sql`** — `workspaces.plan/stripe_customer_id/stripe_subscription_id/seats/billing` — per-seat Team подписка (Stripe quantity-based).
+- **`005_notion.sql`** — `user_profiles.notion_access_token / notion_workspace_id / notion_workspace_name / notion_default_parent_id / notion_connected_at` — OAuth credentials для "Send to Notion".
+- **`006_signup_notified.sql`** — `user_profiles.signup_notified_at TIMESTAMPTZ` — флаг чтобы Telegram-ping на новый signup стрелял ровно один раз (профиль создаётся Supabase-триггером, не нашим кодом — без флага никакой "create new profile" branch не срабатывает).
+- **`007_privacy_mode.sql`** — `user_profiles.privacy_mode BOOLEAN` — toggle для Max/Team чтобы транскрипция и AI шли через self-hosted модели (никакого Gemini).
 - Миграции выполняются **вручную через Supabase SQL Editor** — нет миграционного фреймворка. После добавления новой — обновить эту секцию + сам файл должен начинаться с комментария "Run in Supabase SQL Editor".
 
 ### Frontend — приложение
@@ -168,13 +173,29 @@ modal deploy modal_app.py
 
 # Frontend (Vercel) автоматом при git push в main
 
-# Modal Secret — все ключи разом (--force ЗАМЕНЯЕТ содержимое секрета целиком,
-# а не мерджит — всегда указывай все три)
+# Modal Secrets разбиты на несколько небольших, привязанных к flask_app:
+#   • transcriptor-secrets — основные (HF, Supabase, Gemini)
+#   • notion-secrets       — Notion OAuth client_id + secret
+#   • admin-secrets        — Telegram bot token + chat_id + ADMIN_EMAILS
+#   • stripe-secrets       — live Stripe key, webhook secret, 6 price IDs
+# --force заменяет КАЖДЫЙ секрет целиком — нужно указывать все ключи в нём.
+
 modal secret create transcriptor-secrets `
   HF_TOKEN=hf_... `
   SUPABASE_URL=https://bmonakhktbaliwgobrxv.supabase.co `
+  SUPABASE_SERVICE_ROLE_KEY=eyJ... `
   GEMINI_API_KEY=AIza... `
   --force
+
+modal secret create stripe-secrets `
+  STRIPE_SECRET_KEY=sk_live_... `
+  STRIPE_WEBHOOK_SECRET=whsec_... `
+  STRIPE_PRO_MONTHLY_PRICE=price_... STRIPE_PRO_ANNUAL_PRICE=price_... `
+  STRIPE_MAX_MONTHLY_PRICE=price_... STRIPE_MAX_ANNUAL_PRICE=price_... `
+  STRIPE_TEAM_MONTHLY_PRICE=price_... STRIPE_TEAM_ANNUAL_PRICE=price_... `
+  --force
+
+# admin-secrets и notion-secrets — отдельными командами по той же схеме
 
 # ── Локальная разработка (без Modal) ──────────────────────────
 python -m venv venv
@@ -350,6 +371,47 @@ python app.py
 - **`recordings/` ephemeral** в local mode. На Modal вообще не пишем — bytes в память → ffmpeg → wav в /tmp → удаляется.
 - **History в Postgres** хранит `segments` JSONB целиком. Не ломать формат без миграции схемы.
 
+## Privacy Mode (Max + Team plans)
+
+Toggle в Settings → Subscription tab. Видим только Max и Team plan'ам. Когда включён, **никакая часть пайплайна не идёт в Google/OpenAI**:
+
+| Stage | Default | Privacy Mode ON |
+|-------|---------|-----------------|
+| Whisper (transcription) | Modal A10G | Modal A10G (unchanged) |
+| Pyannote (diarization) | Modal A10G | Modal A10G (unchanged) |
+| STT correction | Gemini 2.5 Flash REST | Qwen 7B on same A10G |
+| Summary / Action items | Gemini 2.5 Pro REST | gpt-oss-20b on L40S |
+
+**Backend gating** (`app.py`):
+- `PRIVACY_MODE_ALLOWED_PLANS = {"max", "team"}`
+- `_privacy_mode_active(profile, effective_plan)` — true только если флаг ON И plan eligible (defence-in-depth: даже если юзер на Pro как-то выставил флаг — backend игнорит)
+- `/api/profile/privacy-mode POST` отвергает с 402 если plan ниже Max
+- `/api/transcribe` читает privacy_mode из профиля → пассует в `Transcriptor.transcribe_full.spawn(..., privacy_mode=True)` → `_correct_segments(privacy_mode=True)` идёт сразу в Qwen-ветку, минуя Gemini
+- `/api/generate` для summary/actions: если privacy_mode → spawn'ит `LabGPTOSS20B.generate` вместо `gemini_generate`
+
+**Frontend UI:**
+- Settings → Subscription → "Privacy Mode" чекбокс, optimistic UI с rollback при ошибке save
+- PostHog ивент `privacy_mode_toggled {enabled}` — измеряем кто включает
+
+**Trade-off:** gpt-oss-20b даёт качество ~75-80% от Gemini Pro (заметно беднее на длинных summary, лучше на reasoning). Стоимость инференса близка: ~$0.05/call на L40S vs ~$0.05 у Gemini Pro. Главный win — privacy, не цена.
+
+## Lab harness (`app.py` → `/api/lab/*`)
+
+Admin-only инструмент для side-by-side сравнения LLM на реальных транскриптах юзера. Использовался чтобы выбрать gpt-oss-20b для Privacy Mode.
+
+**Доступ:** `ADMIN_EMAILS` env var (в `admin-secrets` Modal Secret) — comma-separated email allowlist. `is_admin` возвращается в `/api/profile`, фронт показывает "⚗ Compare models" кнопку под транскриптом только для админов.
+
+**Endpoints:**
+- `GET /api/lab/info` — список доступных моделей + GENERATE_TEMPLATES keys
+- `POST /api/lab/compare {transcript_id, task, models}` — спавнит каждую модель параллельно, возвращает `job_ids`, фронт поллит через тот же `/api/jobs/<id>` (re-use `g_` префикса). Async — не блокирует HTTP gateway
+
+**Зарегистрированные модели** (`LAB_MODELS` в `app.py`):
+- `gemini` → `gemini_generate` (Gemini 2.5 Pro baseline)
+- `mamaylm` → `LabMamayLM9B.generate` — Gemma 2 9B fine-tuned на UA (`INSAIT-Institute/MamayLM-Gemma-2-9B-IT-v0.1`), int4 на A10G. Strong UA, shallow depth.
+- `gptoss20b` → `LabGPTOSS20B.generate` — gpt-oss-20b MXFP4 на L40S. Eager attention, `reasoning_effort="low"`, post-process `_strip_gpt_oss_analysis` убирает "analysis" channel из output'a. **Текущий Privacy Mode backend.**
+
+**UI Lab modal:** task dropdown + model checkboxes + run → side-by-side колонки + Download .md экспорт результатов.
+
 ## Personal Vocabulary (auto-learned terminology)
 
 **Цель:** научить Whisper твоей специфической лексике без участия юзера. Не Wispr Flow-стиль "юзер правит → словарь" — наш подход умнее: **Gemini правит → словарь**.
@@ -433,6 +495,23 @@ posthog.setPersonProperties(props);
 | `workspace_invite_sent` | Owner пригласил | `status` (invited/active) |
 | `workspace_invite_accepted` | Member принял | `workspace_name` |
 | `best_quality_toggled` | Max включает large-v3 | `enabled` (bool) |
+| `privacy_mode_toggled` | Max/Team toggle Privacy Mode | `enabled` (bool) |
+| `settings_tab_viewed` | Открыли таб в Settings | `tab`, `plan` |
+| `plan_card_clicked` | Клик по plan-card в Settings | `target_plan`, `current_plan`, `billing` |
+| `content_tab_clicked` | Switch Transcript/Summary/Actions | `tab` |
+| `team_upgrade_started` | Owner начал Stripe Checkout для Team | `billing` |
+| `referral_link_copied` | Copy кнопка на реф-ссылке | — |
+| `referral_redeemed` | Юзер пришёл по чужому коду | `bonus` |
+| `demo_transcript_loaded` | Демо показалось новому юзеру | — |
+| `demo_dismissed` | Закрыли демо | `action` (try_own / close / start_recording) |
+| `welcome_modal_shown` / `welcome_modal_dismissed` | Onboarding modal | `action` |
+| `notion_connect_started` / `notion_sent` / `notion_disconnected` | Notion integration | — |
+| `transcription_cancelled` | Cancel button во время processing | `duration_sec` |
+| `lab_compare_ran` | Admin Lab сравнение | `task`, `models`, `wall_ms` |
+
+### Autocapture + Error tracking (включён)
+- `autocapture: true` — pageviews + все клики/inputs автоматом. Дополняет наши named events базовой engagement-картой без instrumentation каждой кнопки.
+- `capture_exceptions: true` — uncaught JS errors + unhandled promise rejections автоматом в PostHog → Error tracking. Заменяет нужду в Sentry для нашего объёма.
 
 ### Session Replay (включён)
 Privacy masking настроен в `posthog.init` в `templates/index.html`:
@@ -448,9 +527,17 @@ Privacy masking настроен в `posthog.init` в `templates/index.html`:
 - **Dashboard "Skriptly Operations"**: new users/day, transcriptions/day, failures/day (красный), upgrade prompts breakdown, best_quality usage breakdown
 
 ### Что НЕ настроено (TODO)
-- **Server-side events** из Stripe webhook (`subscription_activated`, `subscription_cancelled`) — надёжнее чем client-side `payment_started`
-- **Error tracking** через `posthog.init({capture_exceptions: true})` — заменит ручной `transcription_failed`
+- **Server-side events** из Stripe webhook (`subscription_activated`, `subscription_cancelled`) — для PostHog funnel. Сейчас они идут только в Telegram админу.
 - **Cohorts**: Active free, Pro near limit, Workspace owners — создать вручную в PostHog UI
+
+### Admin Telegram notifications (отдельный канал)
+
+Дополнительно к PostHog для **операционных** алертов — Telegram bot пингует админу:
+- 🎉 **New signup** — email + user_id + referral code
+- 💰 **New subscription** (Pro/Max/Team) — сумма, валюта, billing период, email, **промокод** если был применён
+- ⚠️ **Subscription cancelled** — user/workspace id
+
+Реализовано в `_notify_admin(text)` в `app.py`. Best-effort: если Telegram упал, операция не прерывается. Креды в `admin-secrets` Modal Secret.
 
 ---
 
