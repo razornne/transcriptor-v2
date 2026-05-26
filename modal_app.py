@@ -54,6 +54,14 @@ notion_secret = modal.Secret.from_name("notion-secrets", required_keys=[
 admin_secret = modal.Secret.from_name("admin-secrets", required_keys=[
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_CHAT_ID",
 ])
+# Stripe live-mode credentials. Kept separate from transcriptor-secrets so we
+# can rotate keys without --force-replacing the whole core secret.
+stripe_secret = modal.Secret.from_name("stripe-secrets", required_keys=[
+    "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_PRO_MONTHLY_PRICE", "STRIPE_PRO_ANNUAL_PRICE",
+    "STRIPE_MAX_MONTHLY_PRICE", "STRIPE_MAX_ANNUAL_PRICE",
+    "STRIPE_TEAM_MONTHLY_PRICE", "STRIPE_TEAM_ANNUAL_PRICE",
+])
 
 # Образ контейнера — собирается один раз, кэшируется Modal'ом.
 # Используем CUDA 12.4 base image чтобы libcublas.so.12 и libcudnn были
@@ -1006,7 +1014,9 @@ def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: flo
 
 @app.function(
     image=web_image,
-    secrets=[hf_secret, notion_secret, admin_secret],   # + Telegram admin notify
+    # stripe_secret last so its STRIPE_* values override anything stale in
+    # transcriptor-secrets from earlier --force runs (test-mode keys).
+    secrets=[hf_secret, notion_secret, admin_secret, stripe_secret],
     timeout=900,                 # 15 min — почти все запросы моментальные через .spawn(),
                                  # но /api/lab/compare блокирует до завершения всех моделей
                                  # (3-5 мин cold start на A100 + до 60s генерации × N моделей)
