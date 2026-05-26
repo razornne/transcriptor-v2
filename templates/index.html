@@ -2068,7 +2068,10 @@
       </div>
     </div>
 
-    <div id="labStatus" style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
+    <div id="labStatus" style="font-size:12px;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <span id="labStatusText" style="flex:1;min-width:0"></span>
+      <button id="labDownloadBtn" class="btn-ghost" style="font-size:12px;padding:6px 12px;display:none">Download .md</button>
+    </div>
 
     <div id="labResults" style="flex:1;overflow-y:auto;display:grid;gap:14px;grid-template-columns:1fr"></div>
 
@@ -6305,6 +6308,7 @@ document.getElementById('sendNotionBtn').addEventListener('click', async () => {
 // ── Lab: model comparison (admin only) ────────────────────────
 let _labInfo = null;   // {models, tasks} — fetched lazily from /api/lab/info
 let _labRunning = false;
+let _labLastResults = null;  // {task, results, segments_count, ...} — last compare run, for download
 
 function renderLabButton() {
   const btn = document.getElementById('labCompareBtn');
@@ -6349,8 +6353,10 @@ async function openLabModal() {
     lbl.innerHTML = `<input type="checkbox" id="${id}" data-model="${m.key}" checked> <span>${m.label}</span>`;
     modelBox.appendChild(lbl);
   });
-  document.getElementById('labStatus').textContent = '';
+  document.getElementById('labStatusText').textContent = '';
+  document.getElementById('labDownloadBtn').style.display = 'none';
   document.getElementById('labResults').innerHTML = '';
+  _labLastResults = null;
   modal.classList.remove('hidden');
 }
 
@@ -6362,6 +6368,46 @@ function closeLabModal() {
 document.getElementById('labCompareBtn').addEventListener('click', openLabModal);
 document.getElementById('labModal').addEventListener('click', e => {
   if (e.target.id === 'labModal' && !_labRunning) closeLabModal();
+});
+
+document.getElementById('labDownloadBtn').addEventListener('click', () => {
+  if (!_labLastResults) return;
+  const d = _labLastResults;
+  const lines = [];
+  lines.push(`# Lab comparison — ${d.task}`);
+  lines.push('');
+  lines.push(`- **Transcript:** ${d.transcript_title}`);
+  lines.push(`- **Run at:** ${d.run_at}`);
+  lines.push(`- **Language:** ${d.language || 'auto'}`);
+  lines.push(`- **Segments:** ${d.segments_count} · **Input chars:** ${d.input_chars}`);
+  lines.push(`- **Models compared:** ${d.models.join(', ')}`);
+  lines.push(`- **Total wall time:** ${(d.wall_ms/1000).toFixed(1)}s`);
+  lines.push('');
+  for (const m of d.models) {
+    const label = (_labInfo.models.find(x => x.key === m) || {}).label || m;
+    const r = d.results[m] || {};
+    lines.push(`---`);
+    lines.push('');
+    lines.push(`## ${label}`);
+    lines.push('');
+    if (r.error) {
+      lines.push(`> ⚠️ Error after ${r.time_ms}ms: ${r.error}`);
+    } else {
+      lines.push(`> ⏱ ${(r.time_ms/1000).toFixed(1)}s · ${r.char_count} chars`);
+      lines.push('');
+      lines.push(r.text || '_(empty)_');
+    }
+    lines.push('');
+  }
+  const md = lines.join('\n');
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const safeTitle = (d.transcript_title || 'transcript').toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').trim().replace(/\s+/g, '-').slice(0, 50) || 'transcript';
+  a.download = `lab-${d.task}-${safeTitle}-${d.run_at.slice(0,10)}.md`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
 document.getElementById('labRunBtn').addEventListener('click', async () => {
@@ -6376,7 +6422,8 @@ document.getElementById('labRunBtn').addEventListener('click', async () => {
   runBtn.disabled = true;
   runBtn.textContent = 'Running…';
 
-  const statusEl = document.getElementById('labStatus');
+  const statusEl = document.getElementById('labStatusText');
+  document.getElementById('labDownloadBtn').style.display = 'none';
   statusEl.textContent = `Spawning ${models.length} model(s)… first cold start can take 3-5 min for 32B.`;
   const resBox = document.getElementById('labResults');
   // Pre-render skeleton columns so user sees progress
@@ -6411,6 +6458,14 @@ document.getElementById('labRunBtn').addEventListener('click', async () => {
       return;
     }
     statusEl.textContent = `✅ Done in ${(data.wall_ms/1000).toFixed(1)}s — ${data.segments_count} segments, ${data.input_chars} chars input`;
+    // Remember for Download .md export
+    _labLastResults = {
+      ...data,
+      models,
+      run_at: new Date().toISOString(),
+      transcript_title: currentTitle || 'untitled',
+    };
+    document.getElementById('labDownloadBtn').style.display = '';
     for (const m of models) {
       const r = data.results[m] || {};
       const card = cards[m];
