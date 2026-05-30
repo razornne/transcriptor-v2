@@ -115,6 +115,28 @@ web_image = (
     .add_local_dir("templates", remote_path="/root/templates")
 )
 
+# Лёгкий CPU образ для оркестратора длинных записей (transcribe_long).
+# Режет аудио (ffmpeg), фанит GPU-воркеров transcribe_chunk, глобально
+# кластеризует спикеров (scikit-learn) и сшивает. Без torch/CUDA — дёшево,
+# почти всё время ждёт GPU-воркеров (I/O bound).
+orchestrator_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg")
+    .pip_install(
+        "soundfile",
+        "numpy",
+        "scikit-learn",
+    )
+)
+
+# Длина чанка для длинных записей (сек). 1200 = 20 мин — каждый чанк-джоб
+# укладывается в таймаут Transcriptor (1200с) с большим запасом.
+CHUNK_LEN_S = int(os.environ.get("CHUNK_LEN_S", "1200"))
+# Порог cosine-расстояния для глобальной кластеризации спикеров между чанками.
+# ~0.7 типично для wespeaker-эмбеддингов. Меньше → больше спикеров (дробит),
+# больше → меньше (сливает). Используется только если num_speakers не задан.
+GLOBAL_SPK_THRESHOLD = float(os.environ.get("GLOBAL_SPK_THRESHOLD", "0.7"))
+
 # Language prompts — зеркало из transcriber.py
 _LANG_PROMPTS: dict[str, str] = {
     "ru": (
@@ -131,6 +153,11 @@ _LANG_PROMPTS: dict[str, str] = {
         "Recording of a business conversation or interview in English. "
         "— Good morning, great to meet you. — Likewise, let's get started. "
         "Topics: business, marketing, YouTube, media, technology, startups."
+    ),
+    "pl": (
+        "Nagranie rozmowy biznesowej, wykładu lub warsztatu w języku polskim. "
+        "— Dzień dobry, miło mi państwa widzieć. — Również, zaczynajmy. "
+        "Tematy: biznes, marketing, technologia, sztuczna inteligencja, startupy, edukacja."
     ),
 }
 
@@ -151,6 +178,12 @@ _CORRECTION_INSTRUCTIONS: dict[str, str] = {
         "Fix ONLY obvious phonetic speech-to-text (STT) errors. "
         "Do NOT change meaning, style, word order, punctuation, or capitalization. "
         "Do NOT add or remove words. If unsure, leave as is."
+    ),
+    "pl": (
+        "Popraw TYLKO oczywiste fonetyczne błędy rozpoznawania mowy (STT). "
+        "NIE zmieniaj sensu, stylu, szyku wyrazów, interpunkcji ani wielkości liter. "
+        "NIE dodawaj i NIE usuwaj słów. Język pozostaw polski. "
+        "Jeśli nie masz pewności — zostaw bez zmian."
     ),
 }
 
@@ -221,6 +254,33 @@ class Transcriptor:
         )
         self.pyannote.to(torch.device("cuda"))
         print("[modal] pyannote ready", flush=True)
+
+        # Speaker embedding model — для глобального сшивания спикеров между
+        # чанками в transcribe_long. Это та же wespeaker-модель, которую
+        # diarization-пайплайн уже тянет внутри (никакого нового HF-гейтинга).
+        # Грузим отдельно как Inference(window="whole") чтобы считать
+        # centroid каждого локального спикера по его сегментам.
+        # Версионно-независимо — не полагаемся на нестабильный return_embeddings.
+        self.embedding_inference = None
+        try:
+            from pyannote.audio import Model, Inference
+            emb_name = os.environ.get(
+                "EMBEDDING_MODEL", "pyannote/wespeaker-voxceleb-resnet34-LM"
+            )
+            print(f"[modal] loading embedding model {emb_name}...", flush=True)
+            # cache_dir на Volume (тот же что у pyannote-пайплайна) — иначе
+            # каждый cold start перекачивает модель. Критично т.к. long-pipeline
+            # поднимает до 12 параллельных холодных контейнеров.
+            emb_model = Model.from_pretrained(
+                emb_name, token=hf_token, cache_dir=f"{MODELS_DIR}/pyannote",
+            )
+            self.embedding_inference = Inference(emb_model, window="whole")
+            self.embedding_inference.to(torch.device("cuda"))
+            print("[modal] embedding model ready", flush=True)
+        except Exception as e:
+            print(f"[modal] embedding model failed to load: {e} "
+                  "— long-recording speaker stitching will degrade", flush=True)
+            self.embedding_inference = None
 
         # Qwen2.5-7B-Instruct в 4-bit (~4 GB VRAM). Не гейтована, сильна на UA/RU/EN.
         # Альтернатива: Qwen/Qwen2.5-14B-Instruct (лучше, но ~8 GB VRAM)
@@ -412,6 +472,166 @@ class Transcriptor:
                     os.remove(p)
                 except OSError:
                     pass
+
+    # ── Chunked transcription (long recordings) ──────────────────
+
+    @modal.method()
+    def transcribe_chunk(
+        self,
+        wav_bytes: bytes,
+        language: str | None,
+        prompt: str | None = None,
+        quality: str = "fast",
+        privacy_mode: bool = False,
+    ) -> dict:
+        """Обрабатывает ОДИН чанк длинной записи (для transcribe_long).
+
+        Принимает уже сконвертированный 16kHz mono WAV — оркестратор делает
+        ffmpeg один раз на весь файл и режет на куски. В отличие от
+        transcribe_full:
+          • не форсит num_speakers (в чанке может быть меньше спикеров) —
+            всегда bounds 1..6, глобальное число применяется при кластеризации;
+          • дополнительно возвращает centroid-эмбеддинги каждого ЛОКАЛЬНОГО
+            спикера, чтобы оркестратор глобально сшил спикеров между чанками;
+          • таймстемпы chunk-relative (оркестратор сам добавит offset).
+
+        Returns:
+          { "segments": [{speaker, start, end, text}, ...],   # chunk-relative
+            "embeddings": {"SPEAKER_00": [float, ...], ...},
+            "vocab_additions": [term, ...] }
+        """
+        import soundfile as sf
+        import numpy as np
+        import torch
+        from merger import merge
+
+        wav_fd, wav_path = tempfile.mkstemp(suffix=".wav")
+        os.close(wav_fd)
+        try:
+            with open(wav_path, "wb") as f:
+                f.write(wav_bytes)
+
+            # --- Whisper (те же параметры что в transcribe_full) ---
+            lang_hint = _LANG_PROMPTS.get(language or "")
+            if lang_hint and prompt:
+                effective_prompt = f"{lang_hint} {prompt}"
+            else:
+                effective_prompt = lang_hint or prompt
+
+            whisper_model = self.whisper_best if (quality == "best" and getattr(self, "whisper_best", None)) else self.whisper
+            segments_iter, _ = whisper_model.transcribe(
+                wav_path,
+                language=language,
+                initial_prompt=effective_prompt,
+                beam_size=3,
+                best_of=3,
+                temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
+                condition_on_previous_text=True,
+                vad_filter=True,
+                vad_parameters={
+                    "threshold": 0.45,
+                    "min_silence_duration_ms": 500,
+                    "speech_pad_ms": 200,
+                },
+                word_timestamps=True,
+            )
+            segments = [
+                {
+                    "start": float(s.start),
+                    "end":   float(s.end),
+                    "text":  s.text.strip(),
+                    "words": [
+                        {"start": float(w.start), "end": float(w.end), "word": w.word}
+                        for w in (s.words or [])
+                    ],
+                }
+                for s in segments_iter
+                if s.text.strip()
+            ]
+            if not segments:
+                return {"segments": [], "embeddings": {}, "vocab_additions": []}
+
+            # --- Pyannote (bounds 1..6, без форсинга num_speakers) ---
+            waveform, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
+            waveform = waveform.T  # (channels, time)
+            audio_input = {
+                "waveform": torch.from_numpy(np.ascontiguousarray(waveform)),
+                "sample_rate": sample_rate,
+            }
+            result = self.pyannote(audio_input, min_speakers=1, max_speakers=6)
+            annotation = result.speaker_diarization
+            speaker_turns = [
+                {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
+                for turn, _, speaker in annotation.itertracks(yield_label=True)
+            ]
+
+            # Centroid-эмбеддинги локальных спикеров (для глобального сшивания)
+            embeddings = self._speaker_centroids(wav_path, annotation)
+
+            # --- Merge ---
+            merged = merge(segments, speaker_turns)
+            for m in merged:
+                m["start"]   = float(m["start"])
+                m["end"]     = float(m["end"])
+                m["speaker"] = str(m["speaker"])
+
+            # --- LLM correction (per-chunk; ~20мин транскрипт влезает в 1 Gemini-вызов) ---
+            merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode)
+
+            # Re-merge соседних сегментов одного спикера после boundary-fix
+            re_merged: list[dict] = []
+            for seg in merged:
+                if re_merged and re_merged[-1]["speaker"] == seg["speaker"]:
+                    re_merged[-1]["end"]   = seg["end"]
+                    re_merged[-1]["text"] += " " + seg["text"]
+                else:
+                    re_merged.append(dict(seg))
+
+            return {
+                "segments": re_merged,
+                "embeddings": embeddings,
+                "vocab_additions": vocab_additions,
+            }
+        finally:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+
+    def _speaker_centroids(self, wav_path: str, annotation) -> dict:
+        """Считает усреднённый embedding (centroid) каждого локального спикера.
+
+        Кропаем аудио по самым длинным сегментам спикера и усредняем
+        embedding'и. Возвращает {label: list[float]} (нативные Python float —
+        Flask-контейнер без numpy не десериализует numpy типы).
+        Версионно-независимо: не полагается на pyannote return_embeddings.
+        """
+        import numpy as np
+
+        if self.embedding_inference is None:
+            return {}
+
+        centroids: dict[str, list[float]] = {}
+        for label in annotation.labels():
+            timeline = annotation.label_timeline(label)
+            segs = sorted(timeline, key=lambda s: s.duration, reverse=True)
+            vecs = []
+            for seg in segs[:10]:  # топ-10 самых длинных сегментов спикера
+                if seg.duration < 0.5:  # слишком короткие — embedding нестабилен
+                    continue
+                try:
+                    emb = self.embedding_inference.crop(wav_path, seg)
+                    vecs.append(np.asarray(emb, dtype="float32").reshape(-1))
+                except Exception as e:
+                    print(f"[modal] embedding crop failed for {label}: {e}", flush=True)
+                    continue
+            if vecs:
+                centroid = np.mean(np.stack(vecs), axis=0)
+                centroids[label] = [float(x) for x in centroid]
+        return centroids
 
     def _correct_segments(self, segments: list[dict], language: str | None,
                           privacy_mode: bool = False) -> tuple[list[dict], list[str]]:
@@ -719,6 +939,229 @@ class Transcriptor:
 
         response = self.llm_tokenizer.decode(output[0][input_len:], skip_special_tokens=True)
         return response.strip()
+
+
+# ── Long-recording orchestrator ─────────────────────────────────
+#
+# Для записей > LONG_AUDIO_THRESHOLD_S (роутинг в app.py) монолитный
+# transcribe_full не подходит — 4ч обработки не влезут в таймаут, а один
+# Gemini-вызов на весь транскрипт упрётся в лимиты. Оркестратор режет аудио
+# на ~20-мин чанки, обрабатывает их ПАРАЛЛЕЛЬНО на нескольких A10G
+# (Transcriptor.transcribe_chunk.spawn), глобально сшивает спикеров через
+# embedding-кластеризацию и стичит. Контракт ответа идентичен transcribe_full
+# чтобы Flask polling / job_id не менялись.
+
+def _parse_silences(stderr: str) -> list[tuple[float, float]]:
+    """Парсит вывод ffmpeg silencedetect → список (start, end) интервалов тишины."""
+    silences: list[tuple[float, float]] = []
+    cur_start: float | None = None
+    for line in stderr.splitlines():
+        if "silence_start:" in line:
+            try:
+                cur_start = float(line.split("silence_start:")[1].strip().split()[0])
+            except (ValueError, IndexError):
+                cur_start = None
+        elif "silence_end:" in line and cur_start is not None:
+            try:
+                end = float(line.split("silence_end:")[1].strip().split()[0])
+                silences.append((cur_start, end))
+            except (ValueError, IndexError):
+                pass
+            cur_start = None
+    return silences
+
+
+def _plan_chunk_boundaries(duration: float, silences: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Планирует границы чанков ~CHUNK_LEN_S, привязывая разрезы к ближайшим
+    точкам тишины (чтобы не резать посреди слова). Фоллбэк — жёсткий рез.
+    """
+    if duration <= CHUNK_LEN_S * 1.5:
+        return [(0.0, duration)]
+
+    sil_mids = [(s + e) / 2 for s, e in silences]
+    window = max(120.0, CHUNK_LEN_S * 0.25)  # окно поиска тишины вокруг цели
+    cuts: list[float] = []
+    target = float(CHUNK_LEN_S)
+    while target < duration - CHUNK_LEN_S * 0.5:
+        floor = (cuts[-1] if cuts else 0.0) + 60.0  # минимум 60с от прошлого реза
+        candidates = [m for m in sil_mids if abs(m - target) < window and m > floor]
+        cut = min(candidates, key=lambda m: abs(m - target)) if candidates else target
+        cuts.append(cut)
+        target = cut + CHUNK_LEN_S
+
+    points = [0.0] + cuts + [duration]
+    return [(points[i], points[i + 1]) for i in range(len(points) - 1)]
+
+
+@app.function(
+    image=orchestrator_image,
+    secrets=[hf_secret],
+    timeout=7200,                # 2ч с запасом — оркестратор почти всё время ждёт GPU
+    scaledown_window=60,
+    min_containers=0,
+)
+def transcribe_long(
+    audio_bytes: bytes,
+    language: str | None,
+    num_speakers: int | None,
+    prompt: str | None = None,
+    progress_key: str | None = None,
+    quality: str = "fast",
+    privacy_mode: bool = False,
+) -> dict:
+    """Оркестратор длинных записей. Контракт ответа = transcribe_full:
+      { "segments": [{speaker, start, end, text}, ...], "vocab_additions": [...] }
+    """
+    import soundfile as sf
+    import numpy as np
+
+    def _progress(**kw):
+        if not progress_key:
+            return
+        try:
+            progress_store[progress_key] = {**kw, "ts": time.time()}
+            print(f"[long] progress → {kw}", flush=True)
+        except Exception as e:
+            print(f"[long] progress report failed: {e}", flush=True)
+
+    src_fd, src_path = tempfile.mkstemp(suffix=".bin")
+    wav_fd, wav_path = tempfile.mkstemp(suffix=".wav")
+    os.close(src_fd); os.close(wav_fd)
+    chunk_paths: list[str] = []
+    try:
+        with open(src_path, "wb") as f:
+            f.write(audio_bytes)
+
+        # 1. Декод полного аудио → 16k mono wav (на диск, не в RAM)
+        _progress(stage="convert")
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "1", wav_path],
+            check=True, capture_output=True,
+        )
+        duration = float(sf.info(wav_path).duration)
+
+        # 2. Silence-aware split
+        _progress(stage="split")
+        sil_proc = subprocess.run(
+            ["ffmpeg", "-i", wav_path, "-af", "silencedetect=noise=-30dB:d=0.5", "-f", "null", "-"],
+            capture_output=True, text=True,
+        )
+        silences = _parse_silences(sil_proc.stderr)
+        boundaries = _plan_chunk_boundaries(duration, silences)
+        n = len(boundaries)
+        print(f"[long] duration={duration:.0f}s → {n} chunks (silences={len(silences)})", flush=True)
+
+        # 3. Фан-аут: извлекаем чанк и сразу спавним воркер (память — один чанк за раз)
+        _progress(stage="processing", chunks_total=n, chunks_done=0)
+        calls = []
+        for i, (start, end) in enumerate(boundaries):
+            ch_fd, ch_path = tempfile.mkstemp(suffix=f".chunk{i}.wav")
+            os.close(ch_fd)
+            chunk_paths.append(ch_path)
+            # -ss/-t (не -to): -t = длительность, однозначно во всех версиях
+            # ffmpeg (в отличие от -to, который может быть абсолютным/относительным).
+            subprocess.run(
+                ["ffmpeg", "-y", "-ss", str(start), "-t", str(end - start),
+                 "-i", wav_path, "-ar", "16000", "-ac", "1", ch_path],
+                check=True, capture_output=True,
+            )
+            with open(ch_path, "rb") as f:
+                chunk_bytes = f.read()
+            call = Transcriptor().transcribe_chunk.spawn(
+                chunk_bytes, language, prompt, quality, privacy_mode,
+            )
+            calls.append((i, start, call))
+
+        # 4. Сбор результатов (чанки крутятся параллельно на Modal)
+        results: list[tuple[float, dict]] = [None] * n  # type: ignore
+        done = 0
+        for i, start, call in calls:
+            res = call.get()
+            results[i] = (start, res)
+            done += 1
+            _progress(stage="processing", chunks_total=n, chunks_done=done)
+
+        # 5. Глобальная кластеризация спикеров по centroid-эмбеддингам
+        _progress(stage="merge")
+        items: list[tuple[int, str]] = []   # (chunk_idx, local_label)
+        vecs: list[list[float]] = []
+        for i, (_start, res) in enumerate(results):
+            for label, vec in (res.get("embeddings") or {}).items():
+                if vec:
+                    items.append((i, label))
+                    vecs.append(vec)
+
+        label_map: dict[tuple[int, str], int] = {}
+        if len(vecs) == 1:
+            label_map = {items[0]: 0}
+        elif len(vecs) >= 2:
+            from sklearn.cluster import AgglomerativeClustering
+            X = np.stack([np.asarray(v, dtype="float64") for v in vecs])
+            if num_speakers and num_speakers >= 1:
+                k = min(num_speakers, len(vecs))
+                clusterer = AgglomerativeClustering(
+                    n_clusters=k, metric="cosine", linkage="average",
+                )
+            else:
+                clusterer = AgglomerativeClustering(
+                    n_clusters=None, distance_threshold=GLOBAL_SPK_THRESHOLD,
+                    metric="cosine", linkage="average",
+                )
+            cluster_ids = clusterer.fit_predict(X)
+            label_map = {items[k]: int(cluster_ids[k]) for k in range(len(items))}
+        if not vecs:
+            print("[long] no speaker embeddings — falling back to per-chunk labels", flush=True)
+
+        # 6. Стич: offset таймстемпов + релейбл local→global + сорт по времени
+        all_segs: list[dict] = []
+        for i, (start, res) in enumerate(results):
+            for seg in (res.get("segments") or []):
+                cluster = label_map.get((i, seg["speaker"]))
+                # Фоллбэк если эмбеддинга не было — уникальный per-chunk лейбл
+                key = cluster if cluster is not None else f"c{i}_{seg['speaker']}"
+                all_segs.append({
+                    "start": float(seg["start"]) + start,
+                    "end":   float(seg["end"]) + start,
+                    "text":  seg["text"],
+                    "_k":    key,
+                })
+        all_segs.sort(key=lambda s: s["start"])
+
+        # Глобальная нумерация спикеров по времени первого появления
+        order: dict = {}
+        for s in all_segs:
+            if s["_k"] not in order:
+                order[s["_k"]] = len(order)
+
+        # 7. Re-merge соседних сегментов одного (глобального) спикера
+        final: list[dict] = []
+        for s in all_segs:
+            spk = f"SPEAKER_{order[s['_k']]:02d}"
+            if final and final[-1]["speaker"] == spk:
+                final[-1]["end"]   = s["end"]
+                final[-1]["text"] += " " + s["text"]
+            else:
+                final.append({"speaker": spk, "start": s["start"], "end": s["end"], "text": s["text"]})
+
+        # 8. Агрегируем vocab_additions (дедуп по lower-case)
+        vocab: list[str] = []
+        seen: set[str] = set()
+        for _i, (_start, res) in enumerate(results):
+            for t in (res.get("vocab_additions") or []):
+                if t.lower() not in seen:
+                    seen.add(t.lower())
+                    vocab.append(t)
+
+        _progress(stage="correct", chunks_total=n, chunks_done=n)
+        print(f"[long] done: {len(final)} segments, {len(order)} speakers, vocab+{len(vocab)}", flush=True)
+        return {"segments": final, "vocab_additions": vocab}
+
+    finally:
+        for p in [src_path, wav_path, *chunk_paths]:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 # ── Lab models — side-by-side quality comparison ────────────────

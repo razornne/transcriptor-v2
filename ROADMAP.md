@@ -8,12 +8,80 @@
 
 Прямо следующие задачи, активно обсуждаемые.
 
+### Long recordings (3-4ч) — chunked pipeline ⏳ КОД ГОТОВ, не задеплоен
+**Зачем:** платящий клиент — 3-4ч воркшоп на польском. Монолит `transcribe_full`
+умирал на 20-мин таймауте; час аудио считался ~20 мин (медленно).
+
+**Что сделано (на ветке `claude/festive-keller-...`, Phase 0-3):**
+- `transcribe_long` оркестратор (CPU): ffmpeg split на ~20-мин чанки →
+  параллельный fan-out в `transcribe_chunk` на нескольких A10G → глобальное
+  сшивание спикеров через embedding-кластеризацию (sklearn agglomerative) → стич.
+- Роутинг по `duration_sec > LONG_AUDIO_THRESHOLD_S` (default 1800с).
+- Польский язык (дропдаун + детектор + correction/title hints).
+- Per-chunk Gemini correction (один вызов на ~20 мин вместо всего транскрипта).
+- Фронт: `duration_sec` в FormData, poll-таймаут 60 мин для длинных, "chunk k/N".
+
+**Осталось:** деплой + тест на реальном файле. Риски: загрузка embedding-модели
+(`wespeaker`, HF-гейтинг), Modal cross-call, лимит тела запроса ~250МБ (gating
+для resumable upload), подгонка `GLOBAL_SPK_THRESHOLD`. Рычаги скорости:
+`CHUNK_LEN_S` ниже = больше параллелизма, урезать `best_of`/temperature fallback.
+
 ### Upload audio file
 **Зачем:** запрос брата — записать звонок на iPhone Voice Memos / Android call recorder → загрузить .mp3/.m4a в Skriptly. Решает все сценарии где `getDisplayMedia` недоступен (cellular calls, WhatsApp, Signal).
 
-**Как:** кнопка "Upload audio" рядом со Start. Принимает .mp3/.m4a/.wav/.opus. Отправляет в существующий `/api/transcribe` (бэкенд уже умеет работать с аудио-файлом).
+**Как:** кнопка "Upload audio" рядом со Start. Принимает .mp3/.m4a/.wav/.opus/видео (ffmpeg извлечёт аудио). Отправляет в существующий `/api/transcribe` (бэкенд уже умеет работать с аудио-файлом). Длительность вытащить через ffprobe/HTMLMediaElement → передать `duration_sec` для роутинга и лимитов.
 
-**Сложность:** ~1 час.
+**Синергия с long-recording:** загрузка 3-4ч файла автоматом уходит в chunked `transcribe_long`. Аплоад снимает зависимость от стабильности вкладки на долгих записях — главный безопасный путь для длинных созвонов.
+
+**Сложность:** ~1-2 часа. Если большие файлы (>250МБ) рвутся — подключить resumable upload (Phase 4 long-recording: Supabase Storage + Modal тянет по URL).
+
+### Configurable summary detail (объём + фокус саммари)
+**Зачем:** разным юзерам нужен разный объём — кому-то TL;DR, кому-то детальный отчёт. Сейчас промпт фиксированный.
+
+**Как (всё сразу, по решению юзера):**
+- 3 пресета детальности **Short / Medium / Detailed** — переключатель рядом с кнопкой Summary (и Actions). Каждый = модификатор длины/глубины поверх существующих `GENERATE_TEMPLATES`.
+- **Запоминать выбор** юзера как дефолт (localStorage + опц. `user_profiles.preferences`).
+- Поле **Focus** (опционально, свободный текст) — "на чём сфокусироваться" (напр. "только решения и цифры", "риски"). Подмешивается в промпт.
+
+**Бэк:** `/api/generate` принимает `detail` (short/medium/detailed) + `focus` (text). `GENERATE_TEMPLATES` → функция-билдер промпта вместо статичных строк. Промпты НЕ сокращать (см. CLAUDE.md) — пресеты добавляют инструкцию, не урезают базу.
+
+**Сложность:** ~2-3 часа.
+
+### Self-learning correction dictionary (wrong→right память)
+**Зачем:** на реальном транскрипте видно — доменные термины ломаются СТАБИЛЬНО:
+"по ЖК"→"пожика", "дебіторська"→"депутатська", "алерти"→"аверти", "формули"→"форуми",
+"SQL-запит"→"ескірвізапит". Текущий Personal Vocabulary берёт только новые "интересные"
+слова из правок Gemini и кладёт в Whisper `initial_prompt`, но **НЕ запоминает пару**
+(что было → что стало) и не переиспользует это как correction-хинт.
+
+**Как (то что юзер хочет):**
+- При Gemini correction для каждого изменённого слова сохранять **пару (original → corrected)**, не только новый термин. `_extract_vocab_terms` → `_extract_vocab_pairs` в `modal_app.py`.
+- Хранить в Supabase: расширить `user_profiles.vocabulary` JSONB до `{wrong, right, freq, lang, last_seen}` (можно без схемной миграции — это JSONB) или новая колонка `corrections`.
+- Переиспользовать на будущих транскрипциях:
+  1. Корректные формы (`right`) → в Whisper `initial_prompt` (как сейчас) → распознаёт термин верно с первого раза.
+  2. Известные пары → в Gemini correction блоком "user's known corrections: X→Y" → Gemini увереннее чинит.
+  3. (опц. позже) детерминированная замена для частых однозначных пар.
+- **Бонус-подфича:** ручное поле "мои термины" в настройках (всегда в Whisper prompt) — для терминов которые Gemini ещё не встречал ("ЖК", "ТОВ", "BigQuery").
+
+**Сложность:** ~3-4 часа. Замещает размытый "Glossary с UI" из Long term.
+
+### User-facing analytics dashboard (отдельная страница)
+**Зачем:** юзер видит свой прогресс/пользу → retention + естественный повод апгрейдиться ("использовано 85% лимита"). Юзер очень хочет.
+
+**Что показывать (почти всё из Supabase, миграция НЕ нужна):**
+- Часы транскрибировано (всего / за месяц) — `minutes_used` + max(segment.end) из `transcripts.segments` JSONB
+- Число транскриптов (всего / за период) — count `transcripts`
+- График активности по дням/неделям — `created_at`
+- Языки записей — `transcripts.language`
+- Топ доменных терминов — `user_profiles.vocabulary`
+- Использование лимита (X из Y минут, прогресс-бар)
+- (когда будет speaker enrollment) топ-собеседники
+
+**Где:** отдельная страница в **v2 Studio** (`/v2/insights`, ссылка в sidebar). На текущем `/app` — отдельный таб/модал. Логично делать в рамках Studio v2 Phase 5.
+
+**Данные:** длительность одного транскрипта = `max(segment.end)` из уже хранимого `segments` JSONB → **без миграции**. Всё остальное (created_at, language, vocabulary) тоже уже есть.
+
+**Сложность:** ~1-2 дня (страница + графики). Старт с агрегатов-цифр, графики вторым шагом.
 
 ### Mobile mic-only mode
 **Зачем:** на iPhone Safari `getDisplayMedia` не работает → запись с телефона сейчас невозможна. Соня и её коллеги — на iPad/телефонах.
@@ -79,9 +147,7 @@
 - Полезно особенно в командах — все эталоны хранятся в workspace
 
 ### Stats / Dashboard
-- Отдельная страница: сколько часов созвонов за неделю / месяц
-- Топ-собеседники (если есть speaker enrollment), частые темы, время дня
-- Простая визуализация на чём проводишь время
+→ Проработано и поднято в **Next up: User-facing analytics dashboard**.
 
 ### Slack / Notion export
 - Кнопка под транскриптом «Send to Slack» → саммари + ссылка в выбранный канал
@@ -121,8 +187,11 @@
 
 ## 🔮 Long term / нет приоритета
 
-### Glossary с UI
-Apart от basic context prompt — полноценная фича: workspace может вести список терминов / имён / клиентов, автоподставляется в каждый transcript.
+### Glossary с UI (workspace-уровень)
+Базовый персональный вариант ("мои термины" + wrong→right память) поднят в
+**Next up: Self-learning correction dictionary**. Здесь остаётся командный
+расширенный вариант: workspace ведёт общий список терминов / имён / клиентов,
+автоподставляется в каждый transcript всех участников.
 
 ### Custom AI templates
 Юзеры могут писать свои промпт-шаблоны: «Investor pitch», «Therapy session», whatever. Сохраняются в workspace.
