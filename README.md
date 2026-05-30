@@ -19,11 +19,14 @@
 
 - 🔐 **Аутентификация** — Google OAuth или email magic link через Supabase
 - 🎙 **Запись через браузер** — mic + системный звук вкладки (Meet / Teams / Zoom)
-- 📝 **Транскрипция** — Whisper large-v3-turbo (default) или **large-v3 (Best Quality для Max)** с языковыми prompt'ами UA / RU / EN
+- 📝 **Транскрипция** — Whisper large-v3-turbo (default) или **large-v3 (Best Quality для Max)** с языковыми prompt'ами UA / RU / EN / **PL (польский)**
+- ⏱ **Длинные созвоны (3-4ч)** — chunked pipeline: аудио режется на ~20-мин чанки, обрабатывается параллельно на нескольких GPU, спикеры глобально сшиваются через embedding-кластеризацию
+- 📤 **Загрузка файлов** — кнопка Upload: любой аудио/видео файл (mp3/m4a/wav/mp4/…) → та же транскрипция; длинные файлы автоматом в chunked pipeline
 - 👥 **Разделение по спикерам** — pyannote-3.1 + hybrid merger (majority-vote для коротких сегментов, word-level split для длинных, iterative smoothing)
 - ✨ **Gemini STT correction** — Gemini 2.5 Flash правит фонетические ошибки используя knowledge мира (рдух → ADHD), может переносить слова через границы спикеров (boundary fix). Fallback на Qwen если Gemini недоступен.
-- 📚 **Персональный словарь** — авто-обучается: термины которые Gemini исправил (аббревиатуры + имена) сохраняются и пропадают в Whisper prompt при следующих записях (как Wispr Flow, но без участия юзера)
-- 🤖 **AI-инструменты**: Summary, Action items (Gemini 2.5 Pro), Sales call / 1-on-1 / Stand-up templates
+- 📚 **Персональный словарь (wrong→right)** — авто-обучается: пары «что распознано ошибочно → что должно быть» из Gemini-правок сохраняются; правые формы идут в Whisper prompt, пары — в Gemini как «known corrections» на будущих записях
+- 🤖 **AI-инструменты**: Summary, Action items (Gemini 2.5 Pro) с **настройкой детальности (Short/Medium/Detailed) + полем Focus**
+- 📊 **Insights дашборд** — записей/часов всего и за месяц, использование лимита, активность по дням, языки, топ-термины
 - 📑 **Tabs UI** — Transcript / Summary / Actions табы вместо длинного скролла
 - 🏷 **Авто-заголовок** — LLM генерирует название по содержанию
 - ✎ **Inline edit** транскрипта, **переименование спикеров**
