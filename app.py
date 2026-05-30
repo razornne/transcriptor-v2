@@ -182,6 +182,7 @@ LANG_HINTS = {
     "ru": "Write the entire response in Russian.",
     "uk": "Write the entire response in Ukrainian.",
     "en": "Write the entire response in English.",
+    "pl": "Write the entire response in Polish.",
 }
 LANG_HINT_DEFAULT = "Write the entire response in the same language as the transcript."
 
@@ -206,12 +207,15 @@ def _detect_transcript_language(segments_or_text) -> str | None:
     # Украинские буквы, которых нет в русском
     uk_specific = sum(1 for c in text if c in 'іїєґІЇЄҐ')
     latin = sum(1 for c in text if 'a' <= c.lower() <= 'z')
+    # Польские диакритики, которых нет в английском — отличают pl от en
+    pl_specific = sum(1 for c in text if c in 'ąćęłńóśźżĄĆĘŁŃÓŚŹŻ')
 
     if cyrillic == 0 and latin == 0:
         return None
     if cyrillic > latin:
         return 'uk' if uk_specific > 0 else 'ru'
-    return 'en'
+    # Латиница: польский если есть характерные диакритики, иначе английский
+    return 'pl' if pl_specific > 0 else 'en'
 
 GENERATE_TEMPLATES = {
     "summary": (
@@ -407,7 +411,12 @@ app = Flask(__name__)
 # Разрешаем все origins для dev — в проде заменить на список доменов
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-ALLOWED_LANGUAGES = {"ru", "uk", "en"}
+ALLOWED_LANGUAGES = {"ru", "uk", "en", "pl"}
+
+# Порог (сек) для роутинга в chunked long-pipeline (transcribe_long).
+# Записи длиннее этого режутся на чанки и обрабатываются параллельно;
+# короче — идут в монолитный transcribe_full. Default 1800 = 30 мин.
+LONG_AUDIO_THRESHOLD_S = float(os.environ.get("LONG_AUDIO_THRESHOLD_S", "1800"))
 
 
 # ── Supabase JWT validation ─────────────────────────────────────
@@ -2321,6 +2330,7 @@ def title_endpoint():
         "ru": "Напиши заголовок на русском.",
         "uk": "Напиши заголовок українською.",
         "en": "Write the title in English.",
+        "pl": "Napisz tytuł po polsku.",
     }.get(language, "Write the title in the same language as the transcript.")
 
     # Ограничиваем контекст ~3000 символов — для заголовка достаточно
@@ -2770,6 +2780,14 @@ def transcribe_endpoint():
     if quality not in ("fast", "best"):
         quality = "fast"
 
+    # Длительность записи (сек) от фронта — для роутинга в long-pipeline.
+    # Фоллбэк на оценку по размеру блоба если фронт не прислал.
+    duration_sec_raw = request.form.get("duration_sec")
+    try:
+        duration_sec = float(duration_sec_raw) if duration_sec_raw else 0.0
+    except ValueError:
+        duration_sec = 0.0
+
     # Plan limits check + best-quality gating + vocabulary fetch
     user_vocab_prompt = ""
     if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
@@ -2815,10 +2833,25 @@ def transcribe_endpoint():
                 privacy_mode = _privacy_mode_active(profile, eff_plan)
         except Exception as e:
             print(f"[privacy] resolve failed: {e}")
+
+        # Роутинг по длительности: длинные записи (> LONG_AUDIO_THRESHOLD_S)
+        # идут в chunked-оркестратор transcribe_long (режет на ~20-мин куски,
+        # обрабатывает параллельно, глобально сшивает спикеров). Короткие —
+        # в монолитный transcribe_full как раньше. Фоллбэк на оценку
+        # длительности по размеру блоба если фронт не прислал duration_sec.
+        est_duration = duration_sec or (len(audio_bytes) * 8 / 32000)
+        use_long = est_duration > LONG_AUDIO_THRESHOLD_S
         try:
-            call = _transcriptor.transcribe_full.spawn(
-                audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode,
-            )
+            if use_long:
+                long_fn = _modal.Function.from_name("transcriptor-v2", "transcribe_long")
+                call = long_fn.spawn(
+                    audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode,
+                )
+                print(f"[transcribe] long-pipeline: ~{est_duration:.0f}s")
+            else:
+                call = _transcriptor.transcribe_full.spawn(
+                    audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode,
+                )
         except Exception as e:
             return jsonify({"error": f"modal spawn failed: {e}"}), 502
         job_id = JOB_PREFIX_TRANSCRIBE + call.object_id

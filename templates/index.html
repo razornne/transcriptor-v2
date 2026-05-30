@@ -1740,6 +1740,7 @@
         <option value="en">English</option>
         <option value="ru">Russian</option>
         <option value="uk">Ukrainian</option>
+        <option value="pl">Polish</option>
       </select>
     </div>
     <div id="numSpeakersWrap">
@@ -4423,6 +4424,14 @@ function showProcessingScreen(audioDurSec) {
   _procTimer = setInterval(_tickProcessing, 400);
 }
 
+// Long-pipeline: показываем "chunk k/N" в подзаголовке processing-экрана.
+// Обычные (короткие) записи не шлют chunks_total — функция не вызывается.
+function _showChunkProgress(done, total) {
+  if (!total) return;
+  const sub = document.getElementById('processingSub');
+  if (sub) sub.textContent = `Processing chunk ${Math.min((done || 0) + 1, total)} / ${total}`;
+}
+
 function hideProcessingScreen() {
   if (_procTimer) { clearInterval(_procTimer); _procTimer = null; }
   document.getElementById('processingState').style.display = 'none';
@@ -4750,6 +4759,8 @@ async function transcribeBlob(blob) {
     fd.append('audio', blob, 'recording.webm');
     if (langSel.value)                        fd.append('language', langSel.value);
     if (numSpeakersEl.value)                  fd.append('num_speakers', numSpeakersEl.value);
+    // Длительность — бэк роутит длинные записи в chunked long-pipeline
+    if (audioDur)                             fd.append('duration_sec', audioDur);
     const ctx = document.getElementById('contextPrompt').value.trim();
     if (ctx)                                  fd.append('prompt', ctx);
     // Best Quality (large-v3) — отправляем только если чекбокс активен (Max plan)
@@ -4763,10 +4774,16 @@ async function transcribeBlob(blob) {
       duration_sec: recordingDurationSec || null,
     });
 
+    // Длинные записи идут в chunked pipeline — обработка дольше по wall-clock
+    // (cold start нескольких контейнеров + параллельные чанки), поэтому даём
+    // большой poll-таймаут. Короткие — стандартные 22 мин.
+    const _pollTimeout = (audioDur > 1800) ? 60 * 60 * 1000 : 22 * 60 * 1000;
     const result = await pollJob(jobId, (progress) => {
       // Real backend stage signal — advance ring to confirmed position
       if (progress && progress.stage) _applyRealStage(progress.stage);
-    });
+      // Long-pipeline: показываем прогресс по чанкам
+      if (progress && progress.chunks_total) _showChunkProgress(progress.chunks_done, progress.chunks_total);
+    }, _pollTimeout);
     activeTranscribeJobId = null;
     const segments = result.segments || [];
 
