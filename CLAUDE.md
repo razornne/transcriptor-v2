@@ -562,6 +562,12 @@ Privacy masking настроен в `posthog.init` в `templates/index.html`:
 Старый `templates/index.html` работает в проде на `/app`, новый строится
 параллельно на `/v2`. **Не удалять старый пока новый не одобрен.**
 
+> 📐 **Дизайн-документы** (`docs/`): `DESIGN_CURRENT.md` — полное описание
+> текущего `/app` (дизайн, функции, UI/UX); `DESIGN_V2.md` — целевой Studio
+> редизайн на основе мокапов `redesign v2/*.png`, бриф для дизайн-инструмента
+> (Google Stitch). Содержит cloud-adaptation заметки (мокапы рисовались как
+> local-desktop — framing меняется под облако).
+
 ### Мокапы
 
 Лежат в `redesign v2/` в корне проекта (9 PNG): `Main _ recording (2).png`,
