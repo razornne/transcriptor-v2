@@ -577,6 +577,38 @@
     .ai-focus-input:focus { outline: none; border-color: var(--accent); }
     .ai-focus-input::placeholder { color: var(--muted); }
 
+    /* Insights dashboard */
+    .dash-card { width: min(900px, 94vw); max-height: 90vh; display: flex; flex-direction: column; padding: 0; }
+    .dash-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 22px; border-bottom: 1px solid var(--border); }
+    .dash-title { font-size: 18px; font-weight: 700; margin: 0; }
+    .dash-close { background: none; border: none; color: var(--muted); font-size: 24px; line-height: 1; cursor: pointer; padding: 0 4px; }
+    .dash-close:hover { color: var(--text); }
+    .dash-body { padding: 20px 22px; overflow-y: auto; }
+    .dash-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+    .dash-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+    .dash-stat-val { font-size: 25px; font-weight: 700; color: var(--text); line-height: 1.05; }
+    .dash-stat-label { font-size: 12px; color: var(--muted); margin-top: 5px; }
+    .dash-usage-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 9px; }
+    .dash-usage-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+    .dash-section { margin-bottom: 24px; }
+    .dash-section-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 13px; }
+    .dash-activity { display: flex; align-items: flex-end; gap: 4px; height: 110px; }
+    .dash-act-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
+    .dash-act-bar { width: 100%; max-width: 26px; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; }
+    .dash-act-bar.empty { background: var(--border); }
+    .dash-act-label { font-size: 9px; color: var(--muted); white-space: nowrap; }
+    .dash-langs { display: flex; flex-direction: column; gap: 9px; }
+    .dash-lang-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+    .dash-lang-name { width: 90px; color: var(--text); flex-shrink: 0; }
+    .dash-lang-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+    .dash-lang-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+    .dash-lang-count { width: 34px; text-align: right; color: var(--muted); font-size: 12px; }
+    .dash-terms { display: flex; flex-wrap: wrap; gap: 7px; }
+    .dash-term { background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; font-size: 12px; color: var(--text); }
+    .dash-term-freq { color: var(--muted); margin-left: 4px; }
+    .dash-empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+    @media (max-width: 680px) { .dash-cards { grid-template-columns: repeat(2, 1fr); } }
+
     .ai-result-card {
       padding: 18px 20px;
       background: var(--surface);
@@ -1728,6 +1760,11 @@
           <div class="sidebar-usage-fill" id="sidebarUsageFill"></div>
         </div>
       </div>
+      <button class="sidebar-settings-btn" id="sidebarInsightsBtn" title="Insights" data-i18n-title="insightsTitle">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+      </button>
       <button class="sidebar-settings-btn" id="sidebarSettingsBtn" title="Settings">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
@@ -1936,6 +1973,17 @@
 <button id="signOutBtn" style="display:none"></button>
 <button id="historyToggle" style="display:none"><span id="historyLabel"></span><span class="chev"></span></button>
 <div id="historyList" style="display:none"></div>
+
+<!-- ── Insights dashboard ── -->
+<div id="dashboardModal" class="modal-backdrop hidden">
+  <div class="modal-card dash-card">
+    <div class="dash-header">
+      <h2 class="dash-title" data-i18n="insightsTitle">Insights</h2>
+      <button class="dash-close" id="dashboardClose" title="Close">×</button>
+    </div>
+    <div class="dash-body" id="dashboardBody"></div>
+  </div>
+</div>
 
 <div id="settingsModal" class="modal-backdrop hidden settings-modal">
   <div class="modal-card">
@@ -2547,6 +2595,17 @@ const T = {
     aiDetailMedium: 'Medium',
     aiDetailDetailed: 'Detailed',
     aiFocusPh: 'Focus on… (optional)',
+    insightsTitle: 'Insights',
+    dashRecordings: 'Recordings',
+    dashTotalTime: 'Total time',
+    dashHoursUnit: 'h',
+    dashThisMonth: 'This month',
+    dashUsage: 'Used this month (min)',
+    dashActivity: 'Activity — last 14 days',
+    dashLanguages: 'Languages',
+    dashTopTerms: 'Top recognized terms',
+    dashNoData: 'No data yet',
+    dashNoTerms: 'Terms will appear here as you record more.',
     // Shortcuts
     shortcutsTitle: 'Keyboard shortcuts',
     shortcutRec: 'Start / stop recording',
@@ -2801,6 +2860,17 @@ const T = {
     aiDetailMedium: 'Середньо',
     aiDetailDetailed: 'Детально',
     aiFocusPh: 'Сфокусуватися на… (необов\'язково)',
+    insightsTitle: 'Аналітика',
+    dashRecordings: 'Записів',
+    dashTotalTime: 'Всього часу',
+    dashHoursUnit: 'год',
+    dashThisMonth: 'Цього місяця',
+    dashUsage: 'Витрачено цього місяця (хв)',
+    dashActivity: 'Активність — останні 14 днів',
+    dashLanguages: 'Мови',
+    dashTopTerms: 'Топ розпізнаних термінів',
+    dashNoData: 'Поки немає даних',
+    dashNoTerms: 'Терміни з\'являться тут із часом.',
     // Shortcuts
     shortcutsTitle: 'Гарячі клавіші',
     shortcutRec: 'Почати / зупинити запис',
@@ -2996,6 +3066,7 @@ let currentNotionWorkspace = null;
 let currentIsAdmin = false;
 let currentPrivacyMode = false;
 let currentPrivacyAvailable = false;
+let currentVocabulary = [];   // для Insights дашборда (топ-термины)
 
 async function fetchProfile() {
   if (!currentUser) return;
@@ -3015,6 +3086,7 @@ async function fetchProfile() {
     currentIsAdmin = !!data.is_admin;
     currentPrivacyMode = !!data.privacy_mode;
     currentPrivacyAvailable = !!data.privacy_mode_available;
+    currentVocabulary = Array.isArray(data.vocabulary) ? data.vocabulary : [];
     _updatePlanUI();
     renderReferralSection();
     renderNotionSection();
@@ -5913,6 +5985,12 @@ window.addEventListener('keydown', (e) => {
       dismissWelcomeModal();
       return;
     }
+    const dashEl = document.getElementById('dashboardModal');
+    if (dashEl && !dashEl.classList.contains('hidden')) {
+      e.preventDefault();
+      closeDashboard();
+      return;
+    }
     if (!settingsModal.classList.contains('hidden')) {
       e.preventDefault();
       closeSettingsModal();
@@ -6228,6 +6306,108 @@ function closeSettingsModal() { settingsModal.classList.add('hidden'); }
 
 document.getElementById('sidebarSettingsBtn').addEventListener('click', openSettingsModal);
 _initWorkspaceHandlers();
+
+// ── Insights dashboard ─────────────────────────────────────────
+const dashboardModal = document.getElementById('dashboardModal');
+
+function _transcriptDurationSec(entry) {
+  let max = 0;
+  for (const s of (entry.segments || [])) { const e = +s.end || 0; if (e > max) max = e; }
+  return max;
+}
+
+function openDashboard() {
+  renderDashboard();
+  dashboardModal.classList.remove('hidden');
+  if (window.posthog) posthog.capture('dashboard_opened');
+}
+function closeDashboard() { dashboardModal.classList.add('hidden'); }
+
+function renderDashboard() {
+  const body = document.getElementById('dashboardBody');
+  if (!body) return;
+  const hist = _historyCache || [];
+  const now = new Date();
+  const dayMs = 86400000;
+
+  // Totals
+  const total = hist.length;
+  let totalSec = 0;
+  hist.forEach(e => totalSec += _transcriptDurationSec(e));
+  const totalHours = totalSec / 3600;
+
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const monthCount = hist.filter(e => new Date(e.date).getTime() >= monthStart).length;
+
+  const used  = +currentMinutesUsed  || 0;
+  const limit = +currentMinutesLimit || 0;
+  const usagePct = limit > 0 ? Math.min(100, used / limit * 100) : 0;
+  const fmtHours = h => h >= 10 ? String(Math.round(h)) : h.toFixed(1);
+
+  const cards = `
+    <div class="dash-cards">
+      <div class="dash-stat"><div class="dash-stat-val">${total}</div><div class="dash-stat-label">${escapeHtml(t('dashRecordings'))}</div></div>
+      <div class="dash-stat"><div class="dash-stat-val">${fmtHours(totalHours)}${escapeHtml(t('dashHoursUnit'))}</div><div class="dash-stat-label">${escapeHtml(t('dashTotalTime'))}</div></div>
+      <div class="dash-stat"><div class="dash-stat-val">${monthCount}</div><div class="dash-stat-label">${escapeHtml(t('dashThisMonth'))}</div></div>
+      <div class="dash-stat">
+        <div class="dash-stat-val">${Math.round(used)}<span style="font-size:14px;color:var(--muted)"> / ${limit || '∞'}</span></div>
+        <div class="dash-stat-label">${escapeHtml(t('dashUsage'))}</div>
+        <div class="dash-usage-bar"><div class="dash-usage-fill" style="width:${usagePct.toFixed(1)}%"></div></div>
+      </div>
+    </div>`;
+
+  // Activity — last 14 days
+  const days = 14;
+  const counts = new Array(days).fill(0);
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  hist.forEach(e => {
+    const d = new Date(e.date); d.setHours(0, 0, 0, 0);
+    const diff = Math.round((todayStart - d.getTime()) / dayMs);
+    if (diff >= 0 && diff < days) counts[days - 1 - diff]++;
+  });
+  const maxC = Math.max(1, ...counts);
+  let actBars = '';
+  for (let i = 0; i < days; i++) {
+    const c = counts[i];
+    const h = c > 0 ? Math.max(6, c / maxC * 100) : 0;
+    const d = new Date(todayStart - (days - 1 - i) * dayMs);
+    const lbl = (i % 2 === 1) ? String(d.getDate()) : '';
+    actBars += `<div class="dash-act-col"><div class="dash-act-bar${c === 0 ? ' empty' : ''}" style="height:${h.toFixed(1)}%" title="${c}"></div><div class="dash-act-label">${lbl}</div></div>`;
+  }
+  const activity = `<div class="dash-section"><div class="dash-section-title">${escapeHtml(t('dashActivity'))}</div><div class="dash-activity">${actBars}</div></div>`;
+
+  // Languages
+  const langCounts = {};
+  hist.forEach(e => { const l = e.lang || 'auto'; langCounts[l] = (langCounts[l] || 0) + 1; });
+  const langEntries = Object.entries(langCounts).sort((a, b) => b[1] - a[1]);
+  const LANG_NAMES = { en: 'English', ru: 'Russian', uk: 'Ukrainian', pl: 'Polish', auto: 'Auto-detect' };
+  let langRows = '';
+  if (langEntries.length) {
+    const maxL = langEntries[0][1];
+    langEntries.forEach(([l, c]) => {
+      langRows += `<div class="dash-lang-row"><span class="dash-lang-name">${escapeHtml(LANG_NAMES[l] || l)}</span><div class="dash-lang-track"><div class="dash-lang-fill" style="width:${(c / maxL * 100).toFixed(1)}%"></div></div><span class="dash-lang-count">${c}</span></div>`;
+    });
+  } else {
+    langRows = `<div class="dash-empty">${escapeHtml(t('dashNoData'))}</div>`;
+  }
+  const langs = `<div class="dash-section"><div class="dash-section-title">${escapeHtml(t('dashLanguages'))}</div><div class="dash-langs">${langRows}</div></div>`;
+
+  // Top terms
+  const vocab = (currentVocabulary || []).slice().sort((a, b) => (+b.freq || 0) - (+a.freq || 0)).slice(0, 16);
+  let terms = '';
+  if (vocab.length) {
+    vocab.forEach(v => { terms += `<span class="dash-term">${escapeHtml(v.term || '')}<span class="dash-term-freq">${+v.freq || 1}</span></span>`; });
+  } else {
+    terms = `<div class="dash-empty">${escapeHtml(t('dashNoTerms'))}</div>`;
+  }
+  const termsSec = `<div class="dash-section"><div class="dash-section-title">${escapeHtml(t('dashTopTerms'))}</div><div class="dash-terms">${terms}</div></div>`;
+
+  body.innerHTML = cards + activity + langs + termsSec;
+}
+
+document.getElementById('sidebarInsightsBtn').addEventListener('click', openDashboard);
+document.getElementById('dashboardClose').addEventListener('click', closeDashboard);
+dashboardModal.addEventListener('click', (e) => { if (e.target === dashboardModal) closeDashboard(); });
 
 // ── Sidebar toggle ─────────────────────────────────────────────
 const sidebarEl   = document.getElementById('sidebar');
