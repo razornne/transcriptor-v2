@@ -247,6 +247,7 @@ python app.py
 ### Запись
 - **Один MediaRecorder** (`fullRecorder`) на mix микрофона + getDisplayMedia через AudioContext. `start(5000)` timeslice → каждый chunk в IndexedDB (см. Audio safety net)
 - На Stop: blob → `/api/transcribe` (multipart form) → async job → poll → segments
+- **Upload file** (`#uploadBtn` + `#audioFileInput`): `uploadAndTranscribe(file)` достаёт длительность через скрытый media-элемент (`getMediaDuration`), выставляет `recordingDurationSec` и переиспользует тот же `transcribeBlob`. Бэкенд `/api/transcribe` принимает любой ffmpeg-читаемый файл (audio/video). Длинные файлы автоматом → chunked long-pipeline. Guard на `isRecording`/`waitingForFull`.
 
 ### Job polling
 - `submitJob(url, body, isFormData)` — POST через `authFetch`, возвращает `job_id`. **Важно:** 402 проверяется ДО `safeJson(res)` — иначе нестандартное тело ответа (HTML страница ошибки от прокси) роняет `safeJson` и `upgradeRequired` никогда не ставится, юзер видит generic error вместо upgrade prompt.
@@ -521,6 +522,7 @@ posthog.setPersonProperties(props);
 | `transcription_cancelled` | Cancel button во время processing | `duration_sec` |
 | `lab_compare_ran` | Admin Lab сравнение | `task`, `models`, `wall_ms` |
 | `dashboard_opened` | Открыли Insights дашборд | — |
+| `file_uploaded` | Загрузили аудио/видео файл для транскрипции | `type`, `size_mb`, `duration_sec` |
 
 ### Autocapture + Error tracking (включён)
 - `autocapture: true` — pageviews + все клики/inputs автоматом. Дополняет наши named events базовой engagement-картой без instrumentation каждой кнопки.

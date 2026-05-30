@@ -26,7 +26,16 @@
 для resumable upload), подгонка `GLOBAL_SPK_THRESHOLD`. Рычаги скорости:
 `CHUNK_LEN_S` ниже = больше параллелизма, урезать `best_of`/temperature fallback.
 
-### Upload audio file
+### ✅ DONE — Upload audio file
+Реализовано и задеплоено. Кнопка **Upload file** (`.btn-ghost`) в `.controls` +
+скрытый file input (`accept="audio/*,video/*,..."`). `uploadAndTranscribe(file)`:
+достаёт длительность через media-элемент (`getMediaDuration`), выставляет
+`recordingDurationSec` (для роутинга в long-pipeline + лимитов) и переиспользует
+`transcribeBlob`. Guard на `isRecording`/`waitingForFull`. Длинные файлы автоматом
+идут в chunked-пайплайн. PostHog `file_uploaded`.
+
+<details><summary>исходный план</summary>
+
 **Зачем:** запрос брата — записать звонок на iPhone Voice Memos / Android call recorder → загрузить .mp3/.m4a в Skriptly. Решает все сценарии где `getDisplayMedia` недоступен (cellular calls, WhatsApp, Signal).
 
 **Как:** кнопка "Upload audio" рядом со Start. Принимает .mp3/.m4a/.wav/.opus/видео (ffmpeg извлечёт аудио). Отправляет в существующий `/api/transcribe` (бэкенд уже умеет работать с аудио-файлом). Длительность вытащить через ffprobe/HTMLMediaElement → передать `duration_sec` для роутинга и лимитов.
@@ -34,6 +43,7 @@
 **Синергия с long-recording:** загрузка 3-4ч файла автоматом уходит в chunked `transcribe_long`. Аплоад снимает зависимость от стабильности вкладки на долгих записях — главный безопасный путь для длинных созвонов.
 
 **Сложность:** ~1-2 часа. Если большие файлы (>250МБ) рвутся — подключить resumable upload (Phase 4 long-recording: Supabase Storage + Modal тянет по URL).
+</details>
 
 ### ✅ DONE — Configurable summary detail (объём + фокус саммари)
 Реализовано и задеплоено. 3 пресета **Short/Medium/Detailed** (сегмент-контрол на
