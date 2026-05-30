@@ -714,37 +714,53 @@ def _get_user_vocabulary(user_id: str) -> list[dict]:
     return []
 
 
-def _save_vocabulary_additions(user_id: str, terms: list[str], language: str | None):
+def _save_vocabulary_additions(user_id: str, additions: list, language: str | None):
     """Добавляет/инкрементит термины в персональный словарь юзера.
 
-    Логика: для каждого нового термина — если есть в словаре, +1 к freq
-    и обновляем last_seen. Если нет — добавляем с freq=1. Держим топ-100
-    по freq (старые редкие выкидываем).
+    additions — список пар {wrong, right} от Gemini correction (терпит и
+    голые строки для обратной совместимости со старыми in-flight джобами).
+    Элемент словаря: {term(=right), wrong?, freq, lang, last_seen}.
+
+    Логика: для каждого нового term — если есть в словаре, +1 к freq и
+    обновляем last_seen (+ свежую wrong-форму). Если нет — freq=1. Держим
+    топ-100 по freq (старые редкие выкидываем).
     """
-    if not (SUPABASE_SERVICE_ROLE_KEY and user_id and terms):
+    if not (SUPABASE_SERVICE_ROLE_KEY and user_id and additions):
         return
     try:
         existing = _get_user_vocabulary(user_id)
         by_key: dict[str, dict] = {item.get("term", "").lower(): item for item in existing if item.get("term")}
 
         now_iso = datetime.now().isoformat()
-        for term in terms:
+        for add in additions:
+            # tolerate dict {wrong, right} ИЛИ голую строку (старый формат)
+            if isinstance(add, dict):
+                term  = (add.get("right") or "").strip()
+                wrong = (add.get("wrong") or "").strip()
+            else:
+                term, wrong = str(add).strip(), ""
             if len(term) < 2:
                 continue
             key = term.lower()
             if key in by_key:
-                by_key[key]["freq"] = int(by_key[key].get("freq", 1)) + 1
-                by_key[key]["last_seen"] = now_iso
+                item = by_key[key]
+                item["freq"] = int(item.get("freq", 1)) + 1
+                item["last_seen"] = now_iso
                 # Обновляем casing если новый вариант больше похож на правильный
                 if term.isupper() or term[0].isupper():
-                    by_key[key]["term"] = term
+                    item["term"] = term
+                if wrong:
+                    item["wrong"] = wrong  # свежая ошибочная форма
             else:
-                by_key[key] = {
+                new_item = {
                     "term": term,
                     "freq": 1,
                     "lang": language or "auto",
                     "last_seen": now_iso,
                 }
+                if wrong:
+                    new_item["wrong"] = wrong
+                by_key[key] = new_item
 
         # Сортируем по freq desc, обрезаем до VOCAB_MAX_ITEMS
         all_items = sorted(by_key.values(), key=lambda x: (-int(x.get("freq", 1)), x.get("last_seen", "")))[:VOCAB_MAX_ITEMS]
@@ -752,7 +768,7 @@ def _save_vocabulary_additions(user_id: str, terms: list[str], language: str | N
         _sb_admin("user_profiles", method="PATCH",
                   params={"id": f"eq.{user_id}"},
                   data={"vocabulary": all_items})
-        print(f"[vocab] saved {len(terms)} new terms for user {user_id[:8]}…, total {len(all_items)}")
+        print(f"[vocab] saved {len(additions)} new terms for user {user_id[:8]}…, total {len(all_items)}")
     except Exception as e:
         print(f"[vocab] save failed: {e}")
 
@@ -767,6 +783,24 @@ def _build_vocab_prompt(vocab: list[dict]) -> str:
         return ""
     # Whisper prompt format — просто перечисление через запятую работает
     return "Recurring terms in this user's recordings: " + ", ".join(terms) + "."
+
+
+VOCAB_HINTS_TOP = 20  # сколько пар wrong→right подаём в Gemini correction
+
+def _build_correction_hints(vocab: list[dict]) -> str:
+    """Строит блок known corrections для Gemini из пар wrong→right.
+
+    Формат: 'пожика → по ЖК; депутатська → дебіторська'. Берём только
+    элементы где есть поле wrong, топ по freq. Передаётся в Modal как
+    correction_hints → Gemini контекстно применяет известные исправления.
+    """
+    if not vocab:
+        return ""
+    paired = [v for v in vocab if v.get("wrong") and v.get("term")]
+    if not paired:
+        return ""
+    top = sorted(paired, key=lambda x: -int(x.get("freq", 1)))[:VOCAB_HINTS_TOP]
+    return "; ".join(f"{v['wrong']} → {v['term']}" for v in top)
 
 _jwks_client = None
 def _get_jwks_client():
@@ -2790,6 +2824,7 @@ def transcribe_endpoint():
 
     # Plan limits check + best-quality gating + vocabulary fetch
     user_vocab_prompt = ""
+    correction_hints = ""  # пары wrong→right для Gemini correction
     if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
         try:
             profile = _get_user_profile(g.user_id)
@@ -2808,10 +2843,12 @@ def transcribe_endpoint():
             own_plan = profile.get("plan", "free")
             if quality == "best" and plan != "max" and own_plan != "max":
                 quality = "fast"
-            # Personal vocabulary — у всех залогиненных юзеров
+            # Personal vocabulary — у всех залогиненных юзеров.
+            # Правые формы → в Whisper prompt; пары wrong→right → в Gemini hints.
             vocab_items = profile.get("vocabulary") or []
             if isinstance(vocab_items, list) and vocab_items:
                 user_vocab_prompt = _build_vocab_prompt(vocab_items)
+                correction_hints = _build_correction_hints(vocab_items)
         except Exception as e:
             print(f"[limits] check failed: {e}")
 
@@ -2845,12 +2882,12 @@ def transcribe_endpoint():
             if use_long:
                 long_fn = _modal.Function.from_name("transcriptor-v2", "transcribe_long")
                 call = long_fn.spawn(
-                    audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode,
+                    audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode, correction_hints,
                 )
                 print(f"[transcribe] long-pipeline: ~{est_duration:.0f}s")
             else:
                 call = _transcriptor.transcribe_full.spawn(
-                    audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode,
+                    audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode, correction_hints,
                 )
         except Exception as e:
             return jsonify({"error": f"modal spawn failed: {e}"}), 502

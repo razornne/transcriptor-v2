@@ -121,6 +121,7 @@ Supabase Postgres
 - **`005_notion.sql`** — `user_profiles.notion_access_token / notion_workspace_id / notion_workspace_name / notion_default_parent_id / notion_connected_at` — OAuth credentials для "Send to Notion".
 - **`006_signup_notified.sql`** — `user_profiles.signup_notified_at TIMESTAMPTZ` — флаг чтобы Telegram-ping на новый signup стрелял ровно один раз (профиль создаётся Supabase-триггером, не нашим кодом — без флага никакой "create new profile" branch не срабатывает).
 - **`007_privacy_mode.sql`** — `user_profiles.privacy_mode BOOLEAN` — toggle для Max/Team чтобы транскрипция и AI шли через self-hosted модели (никакого Gemini).
+- **`008_vocabulary_pairs.sql`** — расширяет формат элемента `user_profiles.vocabulary` опциональным полем `wrong` (исходная ошибочная форма). Хранит пару `wrong→right` из Gemini-правок → подаётся Gemini correction как "known corrections" на будущих транскрипциях. DDL не нужен (JSONB), только обновление COMMENT.
 - Миграции выполняются **вручную через Supabase SQL Editor** — нет миграционного фреймворка. После добавления новой — обновить эту секцию + сам файл должен начинаться с комментария "Run in Supabase SQL Editor".
 
 ### Frontend — приложение
@@ -416,27 +417,34 @@ Admin-only инструмент для side-by-side сравнения LLM на 
 
 **Цель:** научить Whisper твоей специфической лексике без участия юзера. Не Wispr Flow-стиль "юзер правит → словарь" — наш подход умнее: **Gemini правит → словарь**.
 
-### Pipeline
+### Pipeline (wrong→right correction memory)
 
-1. Юзер записывает созвон, Gemini correction исправляет "рдух" → "ADHD"
-2. `_extract_vocab_terms` (в `modal_app.py`) выцепляет "ADHD" как интересный термин (2+ заглавных = аббревиатура; первая заглавная + 4+ символов = имя собственное)
-3. Возвращается в `vocab_additions` (list of strings)
-4. Flask polling endpoint → `_save_vocabulary_additions(user_id, terms, language)` → upsert в `user_profiles.vocabulary` (JSONB array of `{term, freq, lang, last_seen}`)
-5. На следующем `/api/transcribe` Flask тянет vocab, берёт топ-30 по freq, формирует строку: `"Recurring terms in this user's recordings: ADHD, CTR, Біллі Айліш, ..."` и **prepend'ит** к `prompt` юзера перед спавном в Modal
-6. Whisper получает эти термины как `initial_prompt` → распознаёт их с первой попытки (Gemini correction не нужен)
+1. Юзер записывает созвон, Gemini correction исправляет "пожика" → "по ЖК"
+2. `_extract_vocab_pairs` (в `modal_app.py`) через `difflib` выравнивает orig↔corrected по словам, из `replace`-блоков выцепляет **пару** `{wrong, right}` — где правая часть содержит аббревиатуру (2+ CAPS, в т.ч. 2-буквенную ЖК/AI), имя собственное (Capitalized 4+) или содержательное слово 5+ букв (ловит строчные доменные термины: дебіторська, алерти). Короткие грамм-фиксы (≤4 букв) и длинные перефразирования (>3 слов) игнорируются.
+3. Возвращается в `vocab_additions` — **list of dicts** `{wrong, right}` (раньше был list of strings)
+4. Flask polling → `_save_vocabulary_additions(user_id, additions, language)` → upsert в `user_profiles.vocabulary` (JSONB array of `{term, wrong?, freq, lang, last_seen}`, term=right). Терпит и старый str-формат для in-flight джоб.
+5. На следующем `/api/transcribe` Flask тянет vocab и строит ДВЕ вещи:
+   - `_build_vocab_prompt` — топ-30 правых форм → Whisper `initial_prompt` (как раньше; распознаёт термин с первой попытки)
+   - `_build_correction_hints` — топ-20 пар `wrong → right` (только элементы с полем `wrong`) → передаётся в Modal как `correction_hints`
+6. `correction_hints` пробрасывается через `transcribe_full`/`transcribe_long`/`transcribe_chunk` → `_correct_segments_gemini`, где вставляется в Gemini-промпт блоком "known corrections for THIS user" → Gemini контекстно (не слепо) применяет известные исправления
 
 ### Лимиты
 
 - **VOCAB_MAX_ITEMS=100** — топ-100 терминов на юзера. Старые редкие выбывают (sort by freq desc).
-- **VOCAB_PROMPT_TOP=30** — сколько прокидываем в initial_prompt. Whisper не любит сильно длинные prompts.
-- **Минимум 2 символа** на термин (`_extract_vocab_terms`).
-- Casing обновляется если новый вариант "выглядит правильнее" (CAPS или первая заглавная).
+- **VOCAB_PROMPT_TOP=30** — сколько правых форм в Whisper initial_prompt.
+- **VOCAB_HINTS_TOP=20** — сколько пар wrong→right в Gemini correction hints.
+- Casing обновляется если новый вариант "выглядит правильнее" (CAPS или первая заглавная). `wrong` обновляется на свежую ошибочную форму.
 
 ### Что НЕ попадает в словарь
 
-- Обычные слова которые Gemini поправил (грамматика, пунктуация) — отсеиваются по правилам в `_extract_vocab_terms`
-- Изменения регистра — игнорируются (word.lower() сравнивается)
-- Слова из оригинала которые не изменились — не учитываются (только diff)
+- Короткие грамматические фиксы (правая форма ≤4 букв и не аббревиатура) — отсеиваются в `_extract_vocab_pairs`
+- Длинные перефразирования / boundary-fix (>3 слов в блоке) — не term-уровень
+- Изменения регистра — игнорируются (`right.lower() == wrong.lower()`)
+- Слова из оригинала которые не изменились — только `replace`-блоки difflib
+
+### Подход (НЕ Wispr Flow)
+
+Не "юзер правит → словарь" — наш умнее: **Gemini правит → словарь пар wrong→right**, который дальше работает на ДВУХ уровнях: Whisper (распознать сразу) + Gemini hint (починить увереннее). Детерминированную find/replace замену НЕ делаем (риск ложных правок). Ручное поле "мои термины" — планируется отдельно.
 
 ### Gotchas
 
