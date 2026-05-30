@@ -578,7 +578,8 @@
     .ai-focus-input::placeholder { color: var(--muted); }
 
     /* Insights dashboard */
-    .dash-card { width: min(900px, 94vw); max-height: 90vh; display: flex; flex-direction: column; padding: 0; }
+    /* ID-specific to override .modal-card max-width:480px (defined later in source) */
+    #dashboardModal .dash-card { width: min(1140px, 95vw); max-width: 95vw; max-height: 90vh; min-width: 0; display: flex; flex-direction: column; padding: 0; }
     .dash-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 22px; border-bottom: 1px solid var(--border); }
     .dash-title { font-size: 18px; font-weight: 700; margin: 0; }
     .dash-close { background: none; border: none; color: var(--muted); font-size: 24px; line-height: 1; cursor: pointer; padding: 0 4px; }
@@ -6316,10 +6317,14 @@ function _transcriptDurationSec(entry) {
   return max;
 }
 
-function openDashboard() {
-  renderDashboard();
+async function openDashboard() {
+  renderDashboard();                       // мгновенно из кэша
   dashboardModal.classList.remove('hidden');
   if (window.posthog) posthog.capture('dashboard_opened');
+  // Подтягиваем свежие профиль + историю и перерисовываем (на случай если
+  // currentMinutesUsed/Limit остались дефолтными из-за неудачного login-fetch).
+  try { await Promise.all([fetchProfile(), refreshHistory()]); } catch {}
+  if (!dashboardModal.classList.contains('hidden')) renderDashboard();
 }
 function closeDashboard() { dashboardModal.classList.add('hidden'); }
 
