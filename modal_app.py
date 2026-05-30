@@ -318,6 +318,7 @@ class Transcriptor:
         progress_key: str | None = None,
         quality: str = "fast",
         privacy_mode: bool = False,
+        correction_hints: str = "",
     ) -> dict:
         """Полный пайплайн: webm → whisper → pyannote → merge → LLM correction.
 
@@ -450,7 +451,7 @@ class Transcriptor:
             _report("merge")  # merge done
 
             # --- LLM correction ---
-            merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode)
+            merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints)
 
             # После Gemini boundary-fix соседние сегменты могут оказаться
             # одного спикера — склеиваем заново.
@@ -483,6 +484,7 @@ class Transcriptor:
         prompt: str | None = None,
         quality: str = "fast",
         privacy_mode: bool = False,
+        correction_hints: str = "",
     ) -> dict:
         """Обрабатывает ОДИН чанк длинной записи (для transcribe_long).
 
@@ -579,7 +581,7 @@ class Transcriptor:
                 m["speaker"] = str(m["speaker"])
 
             # --- LLM correction (per-chunk; ~20мин транскрипт влезает в 1 Gemini-вызов) ---
-            merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode)
+            merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints)
 
             # Re-merge соседних сегментов одного спикера после boundary-fix
             re_merged: list[dict] = []
@@ -634,7 +636,8 @@ class Transcriptor:
         return centroids
 
     def _correct_segments(self, segments: list[dict], language: str | None,
-                          privacy_mode: bool = False) -> tuple[list[dict], list[str]]:
+                          privacy_mode: bool = False,
+                          correction_hints: str = "") -> tuple[list[dict], list[dict]]:
         """Главный correction pass.
 
         privacy_mode=True skips the Gemini call entirely — falls back to
@@ -661,7 +664,7 @@ class Transcriptor:
         # Try Gemini first if API key available
         if os.environ.get("GEMINI_API_KEY", "").strip():
             try:
-                result = self._correct_segments_gemini(segments, language)
+                result = self._correct_segments_gemini(segments, language, correction_hints)
                 if result:
                     return result  # (segments, vocab_additions)
             except Exception as e:
@@ -703,7 +706,68 @@ class Transcriptor:
                 interesting.append(w)
         return interesting
 
-    def _correct_segments_gemini(self, segments: list[dict], language: str | None) -> tuple[list[dict], list[str]] | None:
+    @staticmethod
+    def _vocab_is_interesting(w: str) -> bool:
+        """Слово достойно словаря: аббревиатура (2+ CAPS, в т.ч. 2-буквенная
+        как ЖК/AI/HR) или имя собственное (Capitalized, 4+)."""
+        if len(w) < 2:
+            return False
+        if sum(1 for c in w if c.isupper()) >= 2 and any(c.isalpha() for c in w):
+            return True
+        if len(w) >= 4 and w[0].isupper() and w[1:].islower():
+            return True
+        return False
+
+    def _extract_vocab_pairs(self, orig_text: str, corrected_text: str) -> list[dict]:
+        """Извлекаем пары (wrong → right) из разницы оригинал/коррекция.
+
+        В отличие от _extract_vocab_terms (только правая форма), сохраняем ЧТО
+        именно было заменено: "пожика" → "по ЖК". Пары идут в персональный
+        словарь и потом подаются Gemini как "known corrections" при будущей
+        коррекции. Выравнивание — difflib по словам; берём replace-блоки, где в
+        правой части есть "интересный" термин.
+        """
+        if orig_text == corrected_text:
+            return []
+        import difflib
+
+        def tokenize(t: str) -> list[str]:
+            cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in t)
+            return cleaned.split()
+
+        def worthy(w: str) -> bool:
+            # Достойно пары: аббревиатура / имя собственное (как в Whisper-словаре)
+            # ИЛИ содержательное слово 5+ букв — чтобы ловить строчные доменные
+            # термины (дебіторська, алерти, формули), но не короткие
+            # грамматические фиксы (він→вона).
+            if self._vocab_is_interesting(w):
+                return True
+            return len(w) >= 5 and any(c.isalpha() for c in w)
+
+        a = tokenize(orig_text)
+        b = tokenize(corrected_text)
+        sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+        pairs: list[dict] = []
+        for op, i1, i2, j1, j2 in sm.get_opcodes():
+            if op != "replace":
+                continue
+            right_words = b[j1:j2]
+            wrong_words = a[i1:i2]
+            # Только короткие term-уровневые замены (не перефразирование/boundary fix)
+            if not right_words or not wrong_words:
+                continue
+            if len(right_words) > 3 or len(wrong_words) > 3:
+                continue
+            if not any(worthy(w) for w in right_words):
+                continue
+            right = " ".join(right_words).strip()
+            wrong = " ".join(wrong_words).strip()
+            if right and wrong and right.lower() != wrong.lower():
+                pairs.append({"wrong": wrong, "right": right})
+        return pairs
+
+    def _correct_segments_gemini(self, segments: list[dict], language: str | None,
+                                 correction_hints: str = "") -> tuple[list[dict], list[dict]] | None:
         """Gemini-based correction с boundary-fix capability.
 
         Передаём весь транскрипт с метками спикеров. Gemini может:
@@ -717,6 +781,17 @@ class Transcriptor:
         api_key = os.environ["GEMINI_API_KEY"].strip()
         instruction = _CORRECTION_INSTRUCTIONS.get(language or "", _CORRECTION_INSTRUCTIONS["en"])
 
+        # Персональные known corrections юзера (wrong → right из его прошлых
+        # правок). Gemini применяет их контекстно, не слепой заменой.
+        hints_block = ""
+        if correction_hints:
+            hints_block = (
+                "\n\nKnown corrections for THIS specific user (their recurring "
+                "domain terms, learned from past edits). When you see the LEFT form "
+                "misrecognized, prefer the RIGHT form — but only when context fits:\n"
+                f"{correction_hints}\n"
+            )
+
         # Format: "N. [SPEAKER_XX] text"
         lines = [
             f"{i + 1}. [{seg['speaker']}] {seg['text']}"
@@ -725,7 +800,7 @@ class Transcriptor:
         lines_in = "\n".join(lines)
 
         prompt = (
-            f"{instruction}\n\n"
+            f"{instruction}{hints_block}\n\n"
             "Below is a numbered, speaker-diarized transcript. Each line is:\n"
             "  N. [SPEAKER_XX] text\n\n"
             "Your tasks (in this order of importance):\n"
@@ -806,7 +881,7 @@ class Transcriptor:
         corrected = [dict(s) for s in segments]
         changes_count = 0
         speaker_changes = 0
-        vocab_additions: list[str] = []
+        vocab_additions: list[dict] = []
         original_speakers = {s["speaker"] for s in segments}
         for idx, (new_speaker, new_text) in parsed.items():
             orig = corrected[idx]
@@ -826,8 +901,8 @@ class Transcriptor:
                 continue
 
             if new_text != orig_text:
-                # Извлекаем терминологию для персонального словаря
-                vocab_additions.extend(self._extract_vocab_terms(orig_text, new_text))
+                # Извлекаем пары (wrong → right) для персонального словаря
+                vocab_additions.extend(self._extract_vocab_pairs(orig_text, new_text))
                 corrected[idx]["text"] = new_text
                 changes_count += 1
             # Speaker reassignment (boundary fix)
@@ -835,19 +910,19 @@ class Transcriptor:
                 corrected[idx]["speaker"] = new_speaker
                 speaker_changes += 1
 
-        # Дедуплицируем словарные термины (сохраняем порядок появления)
+        # Дедуплицируем по правой форме (сохраняем порядок появления)
         seen: set[str] = set()
-        unique_vocab: list[str] = []
-        for t in vocab_additions:
-            key = t.lower()
+        unique_vocab: list[dict] = []
+        for p in vocab_additions:
+            key = p["right"].lower()
             if key not in seen:
                 seen.add(key)
-                unique_vocab.append(t)
+                unique_vocab.append(p)
 
         print(
             f"[modal] gemini corrected {changes_count} texts, "
             f"reassigned {speaker_changes} segments, "
-            f"vocab+{len(unique_vocab)} ({', '.join(unique_vocab[:8])}) "
+            f"vocab+{len(unique_vocab)} ({', '.join(p['right'] for p in unique_vocab[:8])}) "
             f"(coverage {coverage:.0%})",
             flush=True,
         )
@@ -1008,6 +1083,7 @@ def transcribe_long(
     progress_key: str | None = None,
     quality: str = "fast",
     privacy_mode: bool = False,
+    correction_hints: str = "",
 ) -> dict:
     """Оркестратор длинных записей. Контракт ответа = transcribe_full:
       { "segments": [{speaker, start, end, text}, ...], "vocab_additions": [...] }
@@ -1068,7 +1144,7 @@ def transcribe_long(
             with open(ch_path, "rb") as f:
                 chunk_bytes = f.read()
             call = Transcriptor().transcribe_chunk.spawn(
-                chunk_bytes, language, prompt, quality, privacy_mode,
+                chunk_bytes, language, prompt, quality, privacy_mode, correction_hints,
             )
             calls.append((i, start, call))
 
@@ -1143,14 +1219,17 @@ def transcribe_long(
             else:
                 final.append({"speaker": spk, "start": s["start"], "end": s["end"], "text": s["text"]})
 
-        # 8. Агрегируем vocab_additions (дедуп по lower-case)
-        vocab: list[str] = []
+        # 8. Агрегируем vocab_additions (list[dict] {wrong, right}, дедуп по right)
+        vocab: list[dict] = []
         seen: set[str] = set()
         for _i, (_start, res) in enumerate(results):
-            for t in (res.get("vocab_additions") or []):
-                if t.lower() not in seen:
-                    seen.add(t.lower())
-                    vocab.append(t)
+            for p in (res.get("vocab_additions") or []):
+                # tolerate старый формат (str) на случай in-flight несовместимости
+                key = (p.get("right") if isinstance(p, dict) else p) or ""
+                kl = key.lower()
+                if kl and kl not in seen:
+                    seen.add(kl)
+                    vocab.append(p)
 
         _progress(stage="correct", chunks_total=n, chunks_done=n)
         print(f"[long] done: {len(final)} segments, {len(order)} speakers, vocab+{len(vocab)}", flush=True)
