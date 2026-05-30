@@ -275,6 +275,7 @@ python app.py
 - **Summary tab** — generate button → результат от Gemini Pro (или upgrade prompt для Free). Loading spinner пока генерация.
 - **Actions tab** — то же что Summary, но шаблон "actions". Каждый таб имеет дот-индикатор `.tab-has-content` если результат уже есть.
 - `renderAIPanel(template)` — рендерит один панель (Summary или Actions). `runAI(template)` спавнит job, обновляет таб с loading state, парсит результат.
+- **Detail + Focus контролы** (`.ai-controls`, статичный HTML над `#summaryPanel`/`#actionsPanel`, не перерисовывается `renderAIPanel`): сегмент-контрол Short/Medium/Detailed (`aiDetailPref`, глобальный пресет в localStorage `transcriptor_settings.aiDetail`) + поле Focus (`#summaryFocus`/`#actionsFocus`). `runAI` шлёт `detail`+`focus` в `/api/generate`; бэк через `_build_generate_extras` подставляет `{detail_hint}`/`{focus_hint}` в `GENERATE_TEMPLATES`. Regenerate перечитывает текущие значения.
 - `currentAIResults` хранит результаты обоих templates в памяти. При загрузке из истории — восстанавливается.
 - **Notes section** — отдельной секцией под табами (не в табе). Видима когда `isRecording || hasSegments`. Debounce 600ms на save.
 - **Best Quality toggle** — чекбокс `qualityBestToggle` под Controls. Виден только если `currentPlan === 'max'`. При checked → отправляется `quality=best` в FormData.

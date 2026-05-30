@@ -8,7 +8,7 @@
 
 Прямо следующие задачи, активно обсуждаемые.
 
-### Long recordings (3-4ч) — chunked pipeline ⏳ КОД ГОТОВ, не задеплоен
+### Long recordings (3-4ч) — chunked pipeline ✅ ЗАДЕПЛОЕНО (Phase 4 upload — условно)
 **Зачем:** платящий клиент — 3-4ч воркшоп на польском. Монолит `transcribe_full`
 умирал на 20-мин таймауте; час аудио считался ~20 мин (медленно).
 
@@ -35,7 +35,14 @@
 
 **Сложность:** ~1-2 часа. Если большие файлы (>250МБ) рвутся — подключить resumable upload (Phase 4 long-recording: Supabase Storage + Modal тянет по URL).
 
-### Configurable summary detail (объём + фокус саммари)
+### ✅ DONE — Configurable summary detail (объём + фокус саммари)
+Реализовано и задеплоено. 3 пресета **Short/Medium/Detailed** (сегмент-контрол на
+Summary/Actions табах, запоминается в localStorage) + поле **Focus** (свободный
+текст). Backend: `_build_generate_extras` подставляет `{detail_hint}`/`{focus_hint}`
+в `GENERATE_TEMPLATES`. `/api/generate` читает `detail`+`focus`.
+
+<details><summary>исходный план</summary>
+
 **Зачем:** разным юзерам нужен разный объём — кому-то TL;DR, кому-то детальный отчёт. Сейчас промпт фиксированный.
 
 **Как (всё сразу, по решению юзера):**
@@ -46,8 +53,16 @@
 **Бэк:** `/api/generate` принимает `detail` (short/medium/detailed) + `focus` (text). `GENERATE_TEMPLATES` → функция-билдер промпта вместо статичных строк. Промпты НЕ сокращать (см. CLAUDE.md) — пресеты добавляют инструкцию, не урезают базу.
 
 **Сложность:** ~2-3 часа.
+</details>
 
-### Self-learning correction dictionary (wrong→right память)
+### ✅ DONE — Self-learning correction dictionary (wrong→right память)
+Реализовано и задеплоено. `_extract_vocab_pairs` (difflib) сохраняет пары
+`wrong→right` из Gemini-правок в `user_profiles.vocabulary` `{term,wrong?,...}`;
+`_build_correction_hints` (топ-20) подаёт их Gemini как "known corrections" на
+будущих транскрипциях, правые формы — в Whisper prompt. Migration 008.
+
+<details><summary>исходный план</summary>
+
 **Зачем:** на реальном транскрипте видно — доменные термины ломаются СТАБИЛЬНО:
 "по ЖК"→"пожика", "дебіторська"→"депутатська", "алерти"→"аверти", "формули"→"форуми",
 "SQL-запит"→"ескірвізапит". Текущий Personal Vocabulary берёт только новые "интересные"
@@ -64,6 +79,7 @@
 - **Бонус-подфича:** ручное поле "мои термины" в настройках (всегда в Whisper prompt) — для терминов которые Gemini ещё не встречал ("ЖК", "ТОВ", "BigQuery").
 
 **Сложность:** ~3-4 часа. Замещает размытый "Glossary с UI" из Long term.
+</details>
 
 ### User-facing analytics dashboard (отдельная страница)
 **Зачем:** юзер видит свой прогресс/пользу → retention + естественный повод апгрейдиться ("использовано 85% лимита"). Юзер очень хочет.

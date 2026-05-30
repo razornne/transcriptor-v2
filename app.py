@@ -225,6 +225,7 @@ GENERATE_TEMPLATES = {
         "analytical document.\n\n"
         "{lang_hint} Preserve speaker names exactly as given in the transcript "
         "(e.g. [Eli], [Speaker 1]). Write in clean markdown.\n\n"
+        "{focus_hint}"
         "==== HARD RULES ====\n"
         "1. Use ONLY information that is actually present in the transcript. "
         "Do not invent names, numbers, dates, companies, or facts. If something "
@@ -292,6 +293,7 @@ GENERATE_TEMPLATES = {
         "- Short meeting (<15 min): 300-600 words.\n"
         "- Medium meeting (15-45 min): 700-1500 words.\n"
         "- Long meeting (>45 min): 1500-3000 words.\n"
+        "{detail_hint}"
         "Do not pad. But do not under-report either — a 1-hour meeting should "
         "not collapse into 5 bullet points.\n\n"
         "==== STYLE ====\n"
@@ -309,6 +311,7 @@ GENERATE_TEMPLATES = {
         "You are extracting actionable takeaways from a meeting transcript. "
         "{lang_hint} Preserve speaker names exactly as given. Output is "
         "markdown.\n\n"
+        "{focus_hint}"
         "==== TWO SEPARATE SECTIONS ====\n"
         "The output has up to TWO sections. Do not mix them.\n\n"
         "1) `## Action items` — CONCRETE TASKS someone explicitly committed "
@@ -354,6 +357,7 @@ GENERATE_TEMPLATES = {
         "of either kind — reply with a single line in the target language, "
         "e.g. 'Конкретних action items та рекомендацій не зафіксовано.' / "
         "'No actionable takeaways were identified.'\n\n"
+        "{detail_hint}"
         "==== HARD RULES ====\n"
         "- Use ONLY content actually present in the transcript. Do not invent "
         "actions, recommendations, owners, or deadlines.\n"
@@ -374,6 +378,49 @@ GENERATE_TEMPLATES = {
 # Шаблоны которые идут через Gemini 2.5 Pro (для качества аналитики).
 # Остальные (если появятся в будущем) — через локальный Qwen.
 GEMINI_TEMPLATES = {"summary", "actions"}
+
+# Детальность вывода (объём саммари / actions). Пресет → инструкция-модификатор,
+# подставляется в {detail_hint}. Default medium = пустая строка (базовое поведение).
+GENERATE_DETAILS = {"short", "medium", "detailed"}
+
+def _build_generate_extras(detail: str, focus: str) -> dict:
+    """Строит {detail_hint, focus_hint} для подстановки в GENERATE_TEMPLATES.
+
+    detail — short/medium/detailed (объём вывода). focus — свободный текст
+    "на чём сфокусироваться". Оба опциональны; medium + пустой focus = базовое
+    поведение (пустые строки), полная обратная совместимость.
+    """
+    detail = (detail or "medium").lower()
+    if detail not in GENERATE_DETAILS:
+        detail = "medium"
+
+    detail_hints = {
+        "short": (
+            "==== USER LENGTH PREFERENCE: SHORT ====\n"
+            "The reader wants this concise. Cover only the most essential points; "
+            "prefer tight bullets over long narrative. Do not lose key names, "
+            "numbers, or decisions — be concise, not vague.\n\n"
+        ),
+        "medium": "",
+        "detailed": (
+            "==== USER LENGTH PREFERENCE: DETAILED ====\n"
+            "The reader wants maximum depth. Be thorough and comprehensive — more "
+            "detail, more sub-points, more verbatim quotes where they add value. "
+            "Do not pad with filler.\n\n"
+        ),
+    }
+
+    focus_hint = ""
+    f = (focus or "").strip()[:300]
+    if f:
+        focus_hint = (
+            "==== USER FOCUS ====\n"
+            f'The reader especially cares about: "{f}". Prioritize and expand on '
+            "anything related to this; you may compress less-relevant parts. Never "
+            "invent — if the transcript does not cover the focus, note that briefly.\n\n"
+        )
+
+    return {"detail_hint": detail_hints[detail], "focus_hint": focus_hint}
 
 
 def _format_segments_for_llm(segments: list[dict], speaker_names: dict[str, str] | None = None) -> str:
@@ -2588,7 +2635,9 @@ def generate_endpoint():
         text = full_text  # both gpt-oss-20b and Gemini have enough context
     else:
         text = full_text[:12000]
-    prompt = GENERATE_TEMPLATES[template_name].format(text=text, lang_hint=lang_hint)
+    # Детальность вывода + фокус (опционально, дефолт = базовое поведение)
+    extras = _build_generate_extras(data.get("detail"), data.get("focus") or "")
+    prompt = GENERATE_TEMPLATES[template_name].format(text=text, lang_hint=lang_hint, **extras)
 
     # Privacy Mode path: self-hosted gpt-oss-20b on Modal L40S, no Gemini API call.
     if privacy_mode:
@@ -2701,7 +2750,8 @@ def lab_compare():
         language = _detect_transcript_language(segments) or ""
     lang_hint = LANG_HINTS.get(language, LANG_HINT_DEFAULT)
     text = full_text[:200000]   # defensive cap, all 3 models have ≥32K context
-    prompt = GENERATE_TEMPLATES[task].format(text=text, lang_hint=lang_hint)
+    prompt = GENERATE_TEMPLATES[task].format(text=text, lang_hint=lang_hint,
+                                             **_build_generate_extras("medium", ""))
 
     job_ids = {}
     errors = {}
