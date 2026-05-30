@@ -558,6 +558,25 @@
     }
     .ai-template-select:focus { border-color: var(--accent); }
 
+    /* Summary detail + focus controls */
+    .ai-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+    .ai-detail-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex-shrink: 0; }
+    .ai-seg-btn {
+      padding: 5px 12px; font-size: 12px; font-weight: 600;
+      background: transparent; color: var(--muted); border: none;
+      border-right: 1px solid var(--border); cursor: pointer; transition: background .12s, color .12s;
+    }
+    .ai-seg-btn:last-child { border-right: none; }
+    .ai-seg-btn:hover { color: var(--text); }
+    .ai-seg-btn.active { background: var(--accent); color: var(--bg); }
+    .ai-focus-input {
+      flex: 1; min-width: 160px; padding: 6px 11px; font-size: 13px;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface); color: var(--text);
+    }
+    .ai-focus-input:focus { outline: none; border-color: var(--accent); }
+    .ai-focus-input::placeholder { color: var(--muted); }
+
     .ai-result-card {
       padding: 18px 20px;
       background: var(--surface);
@@ -1856,11 +1875,27 @@
 
   <!-- ── Summary panel ── -->
   <div class="tab-panel" id="tabPanel_summary" style="display:none">
+    <div class="ai-controls">
+      <div class="ai-detail-seg">
+        <button type="button" class="ai-seg-btn" data-detail="short" data-i18n="aiDetailShort">Short</button>
+        <button type="button" class="ai-seg-btn" data-detail="medium" data-i18n="aiDetailMedium">Medium</button>
+        <button type="button" class="ai-seg-btn" data-detail="detailed" data-i18n="aiDetailDetailed">Detailed</button>
+      </div>
+      <input type="text" class="ai-focus-input" id="summaryFocus" data-i18n-ph="aiFocusPh" placeholder="Focus on… (optional)">
+    </div>
     <div id="summaryPanel"></div>
   </div>
 
   <!-- ── Actions panel ── -->
   <div class="tab-panel" id="tabPanel_actions" style="display:none">
+    <div class="ai-controls">
+      <div class="ai-detail-seg">
+        <button type="button" class="ai-seg-btn" data-detail="short" data-i18n="aiDetailShort">Short</button>
+        <button type="button" class="ai-seg-btn" data-detail="medium" data-i18n="aiDetailMedium">Medium</button>
+        <button type="button" class="ai-seg-btn" data-detail="detailed" data-i18n="aiDetailDetailed">Detailed</button>
+      </div>
+      <input type="text" class="ai-focus-input" id="actionsFocus" data-i18n-ph="aiFocusPh" placeholder="Focus on… (optional)">
+    </div>
     <div id="actionsPanel"></div>
   </div>
 
@@ -2508,6 +2543,10 @@ const T = {
     tabSummary: 'Summary',
     tabActions: 'Actions',
     aiPanelEmpty: 'Click the button above to generate.',
+    aiDetailShort: 'Short',
+    aiDetailMedium: 'Medium',
+    aiDetailDetailed: 'Detailed',
+    aiFocusPh: 'Focus on… (optional)',
     // Shortcuts
     shortcutsTitle: 'Keyboard shortcuts',
     shortcutRec: 'Start / stop recording',
@@ -2758,6 +2797,10 @@ const T = {
     tabSummary: 'Резюме',
     tabActions: 'Завдання',
     aiPanelEmpty: 'Натисніть кнопку вище, щоб згенерувати.',
+    aiDetailShort: 'Коротко',
+    aiDetailMedium: 'Середньо',
+    aiDetailDetailed: 'Детально',
+    aiFocusPh: 'Сфокусуватися на… (необов\'язково)',
     // Shortcuts
     shortcutsTitle: 'Гарячі клавіші',
     shortcutRec: 'Почати / зупинити запис',
@@ -3432,22 +3475,43 @@ applyI18n();
 
 // ── Settings persistence ──────────────────────────────────────
 const SETTINGS_KEY = 'transcriptor_settings';
+// Детальность AI-вывода (объём саммари/actions) — глобальный пресет, запоминается.
+let aiDetailPref = 'medium';
 function loadSettings() {
   try {
     const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
     if (s.lang !== undefined)         langSel.value       = s.lang;
     if (s.numSpeakers !== undefined)  numSpeakersEl.value = s.numSpeakers;
+    if (s.aiDetail && ['short','medium','detailed'].includes(s.aiDetail)) aiDetailPref = s.aiDetail;
   } catch {}
 }
 function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     lang: langSel.value,
     numSpeakers: numSpeakersEl.value,
+    aiDetail: aiDetailPref,
   }));
 }
 langSel.addEventListener('change', saveSettings);
 numSpeakersEl.addEventListener('input', saveSettings);
 loadSettings();
+
+// AI detail segmented control — глобальный пресет, синхронизируем все группы.
+function syncAIDetailButtons() {
+  document.querySelectorAll('.ai-seg-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.detail === aiDetailPref));
+}
+function initAIControls() {
+  document.querySelectorAll('.ai-seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      aiDetailPref = btn.dataset.detail;
+      syncAIDetailButtons();
+      saveSettings();
+    });
+  });
+  syncAIDetailButtons();
+}
+initAIControls();
 
 // ── Recording state ────────────────────────────────────────────
 let micStream     = null;
@@ -5560,11 +5624,14 @@ async function runAI(template) {
   renderAIPanel(template);
 
   try {
+    const focusEl = document.getElementById(template + 'Focus');
     const jobId = await submitJob(`${API_BASE}/api/generate`, {
       segments: currentSegments,
       speakerNames: currentSpeakerNames,
       template,
       language: langSel.value || null,
+      detail: aiDetailPref,
+      focus: focusEl ? focusEl.value.trim() : '',
     });
     const result = await pollJob(jobId);
     currentAIResults[template] = result.result || '';
