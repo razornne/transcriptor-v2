@@ -1826,6 +1826,8 @@
   <div class="controls">
     <button id="startBtn" class="btn-primary" data-i18n="startBtn">Start recording</button>
     <button id="stopBtn"  class="btn-danger" disabled data-i18n="stopBtn">Stop</button>
+    <button id="uploadBtn" class="btn-ghost" data-i18n="uploadBtn" title="Upload an audio or video file">Upload file</button>
+    <input type="file" id="audioFileInput" accept="audio/*,video/*,.mp3,.m4a,.wav,.ogg,.oga,.opus,.aac,.flac,.mp4,.m4v,.mov" style="display:none">
     <div class="status">
       <span class="dot" id="dot"></span>
       <span class="timer" id="timer" style="display:none"></span>
@@ -2424,6 +2426,7 @@ const T = {
     contextPh: 'Topic, names, terms — helps Whisper get them right',
     startBtn: 'Start recording',
     stopBtn: 'Stop',
+    uploadBtn: 'Upload file',
     // Status
     statusReady: 'ready',
     statusPermissions: 'requesting permissions…',
@@ -2689,6 +2692,7 @@ const T = {
     contextPh: 'Тема, імена, терміни — допомагає Whisper розпізнати правильно',
     startBtn: 'Почати запис',
     stopBtn: 'Стоп',
+    uploadBtn: 'Завантажити файл',
     // Status
     statusReady: 'готово',
     statusPermissions: 'запит дозволів…',
@@ -4877,6 +4881,57 @@ async function handleFullStop() {
 
   await transcribeBlob(blob);
 }
+
+// ── Upload audio/video file for transcription ──────────────────
+// Бэкенд /api/transcribe принимает любой ffmpeg-читаемый файл, поэтому
+// переиспользуем transcribeBlob: достаём длительность из media-элемента,
+// выставляем recordingDurationSec (для роутинга в long-pipeline + лимитов).
+function getMediaDuration(file) {
+  return new Promise((resolve) => {
+    let url;
+    try { url = URL.createObjectURL(file); } catch { return resolve(0); }
+    const isVideo = (file.type || '').startsWith('video');
+    const el = document.createElement(isVideo ? 'video' : 'audio');
+    el.preload = 'metadata';
+    const done = (d) => { try { URL.revokeObjectURL(url); } catch {} resolve(Number.isFinite(d) && d > 0 ? d : 0); };
+    el.onloadedmetadata = () => done(el.duration);
+    el.onerror = () => done(0);   // не смогли прочитать → 0, бэк оценит по размеру
+    el.src = url;
+  });
+}
+
+async function uploadAndTranscribe(file) {
+  if (!file || isRecording || waitingForFull) return;  // не во время записи/обработки
+  // Pre-flight лимит (как в startBtn) — не грузим большой файл ради 402
+  if (currentMinutesLimit > 0 && currentMinutesUsed >= currentMinutesLimit) {
+    if (window.posthog) posthog.capture('upgrade_prompt_shown', { reason: 'minutes_limit' });
+    showUpgradePrompt(tFmt('upgradeLimitMsg', { limit: currentMinutesLimit }));
+    return;
+  }
+  setStatus(t('statusUploading'), 'working');
+  const dur = await getMediaDuration(file);
+  recordingDurationSec = dur ? Math.round(dur) : 0;  // 0 → transcribeBlob fallback на размер
+  lastRecordingBlob = file;
+  currentSessionId = null;  // загрузка файла — не IDB-сессия записи
+  if (window.posthog) posthog.capture('file_uploaded', {
+    type: file.type || 'unknown',
+    size_mb: +(file.size / 1048576).toFixed(1),
+    duration_sec: recordingDurationSec || null,
+  });
+  await transcribeBlob(file);
+}
+
+(function wireUpload() {
+  const btn = document.getElementById('uploadBtn');
+  const inp = document.getElementById('audioFileInput');
+  if (!btn || !inp) return;
+  btn.addEventListener('click', () => { if (!isRecording && !waitingForFull) inp.click(); });
+  inp.addEventListener('change', () => {
+    const f = inp.files && inp.files[0];
+    inp.value = '';   // сброс — чтобы тот же файл можно было выбрать повторно
+    if (f) uploadAndTranscribe(f);
+  });
+})();
 
 async function transcribeBlob(blob) {
   waitingForFull = true;
