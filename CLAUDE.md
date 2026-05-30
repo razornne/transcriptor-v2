@@ -278,6 +278,9 @@ python app.py
 - **Detail + Focus контролы** (`.ai-controls`, статичный HTML над `#summaryPanel`/`#actionsPanel`, не перерисовывается `renderAIPanel`): сегмент-контрол Short/Medium/Detailed (`aiDetailPref`, глобальный пресет в localStorage `transcriptor_settings.aiDetail`) + поле Focus (`#summaryFocus`/`#actionsFocus`). `runAI` шлёт `detail`+`focus` в `/api/generate`; бэк через `_build_generate_extras` подставляет `{detail_hint}`/`{focus_hint}` в `GENERATE_TEMPLATES`. Regenerate перечитывает текущие значения.
 - `currentAIResults` хранит результаты обоих templates в памяти. При загрузке из истории — восстанавливается.
 - **Notes section** — отдельной секцией под табами (не в табе). Видима когда `isRecording || hasSegments`. Debounce 600ms на save.
+
+### Insights дашборд (`#dashboardModal`)
+Оверлей "Insights" (кнопка-график `#sidebarInsightsBtn` в sidebar-user рядом с шестерёнкой). `renderDashboard()` считает всё **клиентски** из `_historyCache` (segments→длительность `max(segment.end)`, lang, created_at) + профиля (`currentMinutesUsed/Limit`) + `currentVocabulary` (топ-термины, `vocabulary` добавлен в `/api/profile`). Метрики: записей всего, всего часов, за месяц, использование лимита, активность 14 дней, языки, топ-термины. Графики — чистый CSS (`.dash-*`), без библиотек. Миграция не нужна. **v1 в `/app`; план — перенести в v2 Studio (`/v2/insights`) и сделать красивее.**
 - **Best Quality toggle** — чекбокс `qualityBestToggle` под Controls. Виден только если `currentPlan === 'max'`. При checked → отправляется `quality=best` в FormData.
 
 ### Search и filter
@@ -517,6 +520,7 @@ posthog.setPersonProperties(props);
 | `notion_connect_started` / `notion_sent` / `notion_disconnected` | Notion integration | — |
 | `transcription_cancelled` | Cancel button во время processing | `duration_sec` |
 | `lab_compare_ran` | Admin Lab сравнение | `task`, `models`, `wall_ms` |
+| `dashboard_opened` | Открыли Insights дашборд | — |
 
 ### Autocapture + Error tracking (включён)
 - `autocapture: true` — pageviews + все клики/inputs автоматом. Дополняет наши named events базовой engagement-картой без instrumentation каждой кнопки.

@@ -1150,6 +1150,7 @@ def profile_endpoint():
             "privacy_mode":          bool(profile.get("privacy_mode")),
             "privacy_mode_available": plan in PRIVACY_MODE_ALLOWED_PLANS,
             "is_admin":              _is_admin(),
+            "vocabulary":            profile.get("vocabulary") or [],  # для Insights дашборда
         })
     except Exception as e:
         print(f"[profile] error: {e}")
