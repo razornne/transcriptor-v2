@@ -968,14 +968,13 @@
       visibility: hidden;
       pointer-events: none;
     }
-    /* Плавное переключение темы */
-    .theme-transitioning,
-    .theme-transitioning * {
-      transition:
-        background-color .3s ease,
-        color .3s ease,
-        border-color .3s ease,
-        box-shadow .3s ease !important;
+    /* Плавное переключение темы — GPU-кроссфейд всей страницы через
+       View Transitions API. НЕ навешиваем transition на каждый элемент
+       (на больших транскриптах это лагало: браузер анимировал тысячи узлов). */
+    ::view-transition-old(root),
+    ::view-transition-new(root) {
+      animation-duration: .28s;
+      animation-timing-function: ease;
     }
 
     .modal-card {
@@ -3571,15 +3570,21 @@ const TEMPLATE_LABELS = {
 
 // ── Theme toggle ───────────────────────────────────────────────
 function applyTheme(theme, animate = false) {
-  if (animate) {
-    document.documentElement.classList.add('theme-transitioning');
-    setTimeout(() => document.documentElement.classList.remove('theme-transitioning'), 350);
+  const apply = () => {
+    document.documentElement.dataset.theme = theme;
+    themeToggle.textContent = theme === 'dark' ? t('themeLight') : t('themeDark');
+    const stb = document.getElementById('settingsThemeBtn');
+    if (stb) stb.textContent = theme === 'dark' ? t('settingsThemeLight') : t('settingsThemeDark');
+    localStorage.setItem('theme', theme);
+  };
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // GPU-кроссфейд всей страницы — плавно независимо от размера транскрипта.
+  // Фоллбэк (Firefox / нет API / reduced-motion) — мгновенное переключение.
+  if (animate && !reduce && document.startViewTransition) {
+    document.startViewTransition(apply);
+  } else {
+    apply();
   }
-  document.documentElement.dataset.theme = theme;
-  themeToggle.textContent = theme === 'dark' ? t('themeLight') : t('themeDark');
-  const stb = document.getElementById('settingsThemeBtn');
-  if (stb) stb.textContent = theme === 'dark' ? t('settingsThemeLight') : t('settingsThemeDark');
-  localStorage.setItem('theme', theme);
 }
 applyTheme(document.documentElement.dataset.theme || 'dark');
 themeToggle.addEventListener('click', () => {
