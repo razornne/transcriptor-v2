@@ -1158,6 +1158,61 @@ def profile_endpoint():
                         "bonus_minutes": 0, "referral_code": None})
 
 
+# ── Personal vocabulary management (ручное редактирование) ───────
+@app.route("/api/vocabulary", methods=["POST"])
+def update_vocabulary_endpoint():
+    """Заменяет персональный словарь юзера присланным списком.
+
+    Ручное управление из Insights дашборда: rename / delete / add терминов
+    (когда auto-learned термин определился неверно). Принимает весь массив,
+    валидирует/санитизирует, кладёт в user_profiles.vocabulary через service role.
+    Возвращает канонический (очищенный) список для синка фронта.
+    """
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        return jsonify({"error": "service unavailable"}), 503
+
+    data = request.get_json(silent=True) or {}
+    items = data.get("vocabulary")
+    if not isinstance(items, list):
+        return jsonify({"error": "vocabulary must be a list"}), 400
+
+    now_iso = datetime.now().isoformat()
+    cleaned: list[dict] = []
+    seen: set[str] = set()
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        term = (it.get("term") or "").strip()
+        if not term or len(term) > 80:
+            continue
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        entry = {
+            "term": term,
+            "freq": max(1, min(9999, int(it.get("freq") or 1))),
+            "lang": (it.get("lang") or "manual"),
+            "last_seen": it.get("last_seen") or now_iso,
+        }
+        wrong = (it.get("wrong") or "").strip()
+        if wrong:
+            entry["wrong"] = wrong[:80]
+        cleaned.append(entry)
+
+    cleaned = sorted(cleaned, key=lambda x: (-int(x.get("freq", 1)), x.get("last_seen", "")))[:VOCAB_MAX_ITEMS]
+    try:
+        _sb_admin("user_profiles", method="PATCH",
+                  params={"id": f"eq.{g.user_id}"},
+                  data={"vocabulary": cleaned})
+    except Exception as e:
+        print(f"[vocab] manual update failed: {e}")
+        return jsonify({"error": f"save failed: {e}"}), 500
+    return jsonify({"ok": True, "vocabulary": cleaned})
+
+
 # ── Privacy Mode toggle ────────────────────────────────────────
 @app.route("/api/profile/privacy-mode", methods=["POST"])
 def set_privacy_mode():

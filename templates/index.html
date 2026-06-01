@@ -604,9 +604,19 @@
     .dash-lang-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
     .dash-lang-fill { height: 100%; background: var(--accent); border-radius: 4px; }
     .dash-lang-count { width: 34px; text-align: right; color: var(--muted); font-size: 12px; }
-    .dash-terms { display: flex; flex-wrap: wrap; gap: 7px; }
-    .dash-term { background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; font-size: 12px; color: var(--text); }
-    .dash-term-freq { color: var(--muted); margin-left: 4px; }
+    .dash-terms { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+    .dash-term { display: inline-flex; align-items: center; gap: 5px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 12px; color: var(--text); transition: border-color .12s; }
+    .dash-term:hover { border-color: var(--dim); }
+    .dash-term-text { line-height: 1.2; }
+    .dash-term-freq { color: var(--muted); font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+    .dash-term-edit, .dash-term-del { background: none; border: none; padding: 0; margin: 0; cursor: pointer; font-size: 12px; line-height: 1; color: var(--muted); opacity: .4; transition: opacity .12s, color .12s; }
+    .dash-term:hover .dash-term-edit, .dash-term:hover .dash-term-del { opacity: .85; }
+    .dash-term-edit:hover { color: var(--accent); opacity: 1; }
+    .dash-term-del:hover { color: var(--danger); opacity: 1; font-weight: 700; }
+    .dash-term-editinput, .dash-term-addinput { font: inherit; font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 999px; padding: 4px 10px; min-width: 90px; outline: none; }
+    .dash-term-addinput { border: 1px dashed var(--border); min-width: 120px; }
+    .dash-term-addinput:focus { border: 1px solid var(--accent); }
+    .dash-section-hint { font-weight: 400; color: var(--dim); text-transform: none; letter-spacing: 0; font-size: 11px; margin-left: 8px; }
     .dash-empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
     @media (max-width: 680px) { .dash-cards { grid-template-columns: repeat(2, 1fr); } }
 
@@ -2610,6 +2620,11 @@ const T = {
     dashTopTerms: 'Top recognized terms',
     dashNoData: 'No data yet',
     dashNoTerms: 'Terms will appear here as you record more.',
+    dashTermEdit: 'Edit',
+    dashTermDel: 'Remove',
+    dashTermWas: 'was',
+    dashTermsHint: 'hover to edit · type below to add',
+    dashAddTerm: '+ Add a term',
     // Shortcuts
     shortcutsTitle: 'Keyboard shortcuts',
     shortcutRec: 'Start / stop recording',
@@ -2876,6 +2891,11 @@ const T = {
     dashTopTerms: 'Топ розпізнаних термінів',
     dashNoData: 'Поки немає даних',
     dashNoTerms: 'Терміни з\'являться тут із часом.',
+    dashTermEdit: 'Редагувати',
+    dashTermDel: 'Видалити',
+    dashTermWas: 'було',
+    dashTermsHint: 'наведіть щоб редагувати · додайте свій нижче',
+    dashAddTerm: '+ Додати термін',
     // Shortcuts
     shortcutsTitle: 'Гарячі клавіші',
     shortcutRec: 'Почати / зупинити запис',
@@ -6383,6 +6403,79 @@ async function openDashboard() {
 }
 function closeDashboard() { dashboardModal.classList.add('hidden'); }
 
+// ── Vocabulary management (rename / delete / add терминов) ──────
+function _wireDashboardTerms() {
+  const cont = document.getElementById('dashTerms');
+  if (!cont) return;
+  cont.querySelectorAll('.dash-term-del').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); _vocabDelete(btn.closest('.dash-term').dataset.term); });
+  });
+  cont.querySelectorAll('.dash-term-edit').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); _vocabStartEdit(btn.closest('.dash-term')); });
+  });
+  const add = document.getElementById('dashTermAdd');
+  if (add) {
+    add.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { const v = add.value.trim(); if (v) _vocabAdd(v); }
+      else if (e.key === 'Escape') add.value = '';
+    });
+  }
+}
+
+function _vocabStartEdit(chip) {
+  if (!chip) return;
+  const term = chip.dataset.term;
+  chip.innerHTML = '<input class="dash-term-editinput" maxlength="80">';
+  const inp = chip.querySelector('input');
+  inp.value = term; inp.focus(); inp.select();
+  let done = false;
+  const commit = (save) => {
+    if (done) return; done = true;
+    const nv = inp.value.trim();
+    if (save && nv && nv !== term) _vocabRename(term, nv);
+    else renderDashboard();
+  };
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  });
+  inp.addEventListener('blur', () => commit(true));
+}
+
+async function _persistVocabulary() {
+  try {
+    const res = await authFetch(`${API_BASE}/api/vocabulary`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vocabulary: currentVocabulary }),
+    });
+    const data = await safeJson(res);
+    if (res.ok && Array.isArray(data.vocabulary)) currentVocabulary = data.vocabulary;
+  } catch (e) {
+    console.error('[vocab] save failed:', e);
+  }
+  if (!dashboardModal.classList.contains('hidden')) renderDashboard();
+}
+
+function _vocabRename(oldTerm, newTerm) {
+  const it = currentVocabulary.find(v => (v.term || '').toLowerCase() === oldTerm.toLowerCase());
+  if (it) it.term = newTerm;
+  renderDashboard();            // оптимистично
+  _persistVocabulary();
+}
+function _vocabDelete(term) {
+  currentVocabulary = currentVocabulary.filter(v => (v.term || '').toLowerCase() !== term.toLowerCase());
+  renderDashboard();
+  _persistVocabulary();
+}
+function _vocabAdd(term) {
+  if (currentVocabulary.some(v => (v.term || '').toLowerCase() === term.toLowerCase())) { renderDashboard(); return; }
+  // freq=10 чтобы ручной термин попал в топ-30 Whisper prompt
+  currentVocabulary.unshift({ term, freq: 10, lang: 'manual', last_seen: new Date().toISOString() });
+  renderDashboard();
+  _persistVocabulary();
+}
+
 function renderDashboard() {
   const body = document.getElementById('dashboardBody');
   if (!body) return;
@@ -6452,17 +6545,30 @@ function renderDashboard() {
   }
   const langs = `<div class="dash-section"><div class="dash-section-title">${escapeHtml(t('dashLanguages'))}</div><div class="dash-langs">${langRows}</div></div>`;
 
-  // Top terms
-  const vocab = (currentVocabulary || []).slice().sort((a, b) => (+b.freq || 0) - (+a.freq || 0)).slice(0, 16);
-  let terms = '';
-  if (vocab.length) {
-    vocab.forEach(v => { terms += `<span class="dash-term">${escapeHtml(v.term || '')}<span class="dash-term-freq">${+v.freq || 1}</span></span>`; });
-  } else {
-    terms = `<div class="dash-empty">${escapeHtml(t('dashNoTerms'))}</div>`;
-  }
-  const termsSec = `<div class="dash-section"><div class="dash-section-title">${escapeHtml(t('dashTopTerms'))}</div><div class="dash-terms">${terms}</div></div>`;
+  // Top terms — редактируемые чипы (rename / delete / add)
+  const vocab = (currentVocabulary || []).slice()
+    .sort((a, b) => (+b.freq || 0) - (+a.freq || 0)).slice(0, 60);
+  let termsHtml = '';
+  vocab.forEach(v => {
+    const term = v.term || '';
+    const freq = +v.freq || 1;
+    const wrongAttr = v.wrong ? ` title="${escapeHtml(t('dashTermWas'))}: ${escapeHtml(v.wrong)}"` : '';
+    termsHtml += `<span class="dash-term" data-term="${escapeHtml(term)}"${wrongAttr}>` +
+      `<span class="dash-term-text">${escapeHtml(term)}</span>` +
+      (freq > 1 ? `<span class="dash-term-freq">${freq}</span>` : '') +
+      `<button class="dash-term-edit" title="${escapeHtml(t('dashTermEdit'))}" aria-label="edit">✎</button>` +
+      `<button class="dash-term-del" title="${escapeHtml(t('dashTermDel'))}" aria-label="remove">×</button>` +
+      `</span>`;
+  });
+  const emptyHint = vocab.length ? '' : `<div class="dash-empty">${escapeHtml(t('dashNoTerms'))}</div>`;
+  const termsSec = `<div class="dash-section">
+    <div class="dash-section-title">${escapeHtml(t('dashTopTerms'))} <span class="dash-section-hint">${escapeHtml(t('dashTermsHint'))}</span></div>
+    ${emptyHint}
+    <div class="dash-terms" id="dashTerms">${termsHtml}<input class="dash-term-addinput" id="dashTermAdd" placeholder="${escapeHtml(t('dashAddTerm'))}" maxlength="80"></div>
+  </div>`;
 
   body.innerHTML = cards + activity + langs + termsSec;
+  _wireDashboardTerms();
 }
 
 document.getElementById('sidebarInsightsBtn').addEventListener('click', openDashboard);
