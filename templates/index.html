@@ -613,19 +613,22 @@
     .dash-close { background: none; border: none; color: var(--muted); font-size: 24px; line-height: 1; cursor: pointer; padding: 0 4px; }
     .dash-close:hover { color: var(--text); }
     .dash-body { padding: 20px 22px; overflow-y: auto; }
-    .dash-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
-    .dash-stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
-    .dash-stat-val { font-size: 25px; font-weight: 700; color: var(--text); line-height: 1.05; }
-    .dash-stat-label { font-size: 12px; color: var(--muted); margin-top: 5px; }
-    .dash-usage-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 9px; }
+    .dash-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 28px; }
+    .dash-stat { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; overflow: hidden; }
+    .dash-stat::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: var(--accent); opacity: .55; }
+    .dash-stat-val { font-size: 28px; font-weight: 700; color: var(--text); line-height: 1.05; letter-spacing: -.01em; }
+    .dash-stat-label { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+    .dash-usage-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 10px; }
     .dash-usage-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
-    .dash-section { margin-bottom: 24px; }
-    .dash-section-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 13px; }
-    .dash-activity { display: flex; align-items: flex-end; gap: 4px; height: 110px; }
-    .dash-act-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; }
-    .dash-act-bar { width: 100%; max-width: 26px; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; }
-    .dash-act-bar.empty { background: var(--border); }
-    .dash-act-label { font-size: 9px; color: var(--muted); white-space: nowrap; }
+    .dash-section { margin-bottom: 26px; }
+    .dash-section-title { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 14px; }
+    .dash-act-bars { display: flex; align-items: flex-end; gap: 6px; height: 116px; border-bottom: 1px solid var(--border); }
+    .dash-act-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+    .dash-act-cnt { font-size: 10px; color: var(--muted); font-family: 'JetBrains Mono', monospace; margin-bottom: 4px; min-height: 13px; }
+    .dash-act-bar { width: 100%; max-width: 30px; background: var(--accent); border-radius: 5px 5px 0 0; min-height: 4px; }
+    .dash-act-bar.empty { background: var(--border); height: 4px !important; opacity: .7; }
+    .dash-act-axis { display: flex; gap: 6px; margin-top: 7px; }
+    .dash-act-tick { flex: 1; text-align: center; font-size: 10px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
     .dash-langs { display: flex; flex-direction: column; gap: 9px; }
     .dash-lang-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
     .dash-lang-name { width: 90px; color: var(--text); flex-shrink: 0; }
@@ -645,6 +648,8 @@
     .dash-term-addinput { border: 1px dashed var(--border); min-width: 120px; }
     .dash-term-addinput:focus { border: 1px solid var(--accent); }
     .dash-section-hint { font-weight: 400; color: var(--dim); text-transform: none; letter-spacing: 0; font-size: 11px; margin-left: 8px; }
+    .dash-terms-toggle { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; padding: 8px 2px 0; }
+    .dash-terms-toggle:hover { text-decoration: underline; }
     .dash-empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
     @media (max-width: 680px) { .dash-cards { grid-template-columns: repeat(2, 1fr); } }
 
@@ -2650,6 +2655,8 @@ const T = {
     dashTermWas: 'was',
     dashTermsHint: 'hover to edit · type below to add',
     dashAddTerm: '+ Add a term',
+    dashShowAll: 'Show all ({n})',
+    dashShowLess: 'Show less',
     // Shortcuts
     shortcutsTitle: 'Keyboard shortcuts',
     shortcutRec: 'Start / stop recording',
@@ -2921,6 +2928,8 @@ const T = {
     dashTermWas: 'було',
     dashTermsHint: 'наведіть щоб редагувати · додайте свій нижче',
     dashAddTerm: '+ Додати термін',
+    dashShowAll: 'Показати всі ({n})',
+    dashShowLess: 'Згорнути',
     // Shortcuts
     shortcutsTitle: 'Гарячі клавіші',
     shortcutRec: 'Почати / зупинити запис',
@@ -3117,6 +3126,8 @@ let currentIsAdmin = false;
 let currentPrivacyMode = false;
 let currentPrivacyAvailable = false;
 let currentVocabulary = [];   // для Insights дашборда (топ-термины)
+let _dashShowAllTerms = false;          // развёрнут ли полный список терминов
+const DASH_TERMS_COLLAPSED = 18;        // сколько показывать в свёрнутом виде
 
 async function fetchProfile() {
   if (!currentUser) return;
@@ -6451,6 +6462,8 @@ function _wireDashboardTerms() {
       else if (e.key === 'Escape') add.value = '';
     });
   }
+  const toggle = document.getElementById('dashTermsToggle');
+  if (toggle) toggle.addEventListener('click', () => { _dashShowAllTerms = !_dashShowAllTerms; renderDashboard(); });
 }
 
 function _vocabStartEdit(chip) {
@@ -6550,15 +6563,15 @@ function renderDashboard() {
     if (diff >= 0 && diff < days) counts[days - 1 - diff]++;
   });
   const maxC = Math.max(1, ...counts);
-  let actBars = '';
+  let actBars = '', actAxis = '';
   for (let i = 0; i < days; i++) {
     const c = counts[i];
-    const h = c > 0 ? Math.max(6, c / maxC * 100) : 0;
+    const h = c > 0 ? Math.max(8, c / maxC * 100) : 0;
     const d = new Date(todayStart - (days - 1 - i) * dayMs);
-    const lbl = (i % 2 === 1) ? String(d.getDate()) : '';
-    actBars += `<div class="dash-act-col"><div class="dash-act-bar${c === 0 ? ' empty' : ''}" style="height:${h.toFixed(1)}%" title="${c}"></div><div class="dash-act-label">${lbl}</div></div>`;
+    actBars += `<div class="dash-act-col"><span class="dash-act-cnt">${c || ''}</span><div class="dash-act-bar${c === 0 ? ' empty' : ''}" style="height:${h.toFixed(1)}%"></div></div>`;
+    actAxis += `<div class="dash-act-tick">${(i % 2 === 1) ? d.getDate() : ''}</div>`;
   }
-  const activity = `<div class="dash-section"><div class="dash-section-title">${escapeHtml(t('dashActivity'))}</div><div class="dash-activity">${actBars}</div></div>`;
+  const activity = `<div class="dash-section"><div class="dash-section-title">${escapeHtml(t('dashActivity'))}</div><div class="dash-act-bars">${actBars}</div><div class="dash-act-axis">${actAxis}</div></div>`;
 
   // Languages
   const langCounts = {};
@@ -6576,9 +6589,12 @@ function renderDashboard() {
   }
   const langs = `<div class="dash-section"><div class="dash-section-title">${escapeHtml(t('dashLanguages'))}</div><div class="dash-langs">${langRows}</div></div>`;
 
-  // Top terms — редактируемые чипы (rename / delete / add)
-  const vocab = (currentVocabulary || []).slice()
-    .sort((a, b) => (+b.freq || 0) - (+a.freq || 0)).slice(0, 60);
+  // Top terms — редактируемые чипы (rename / delete / add). Свёрнуто до
+  // DASH_TERMS_COLLAPSED, разворачивается кнопкой (иначе сотни чипов = каша).
+  const allVocab = (currentVocabulary || []).slice()
+    .sort((a, b) => (+b.freq || 0) - (+a.freq || 0));
+  const collapsed = DASH_TERMS_COLLAPSED;
+  const vocab = (_dashShowAllTerms ? allVocab : allVocab.slice(0, collapsed));
   let termsHtml = '';
   vocab.forEach(v => {
     const term = v.term || '';
@@ -6591,11 +6607,18 @@ function renderDashboard() {
       `<button class="dash-term-del" title="${escapeHtml(t('dashTermDel'))}" aria-label="remove">×</button>` +
       `</span>`;
   });
-  const emptyHint = vocab.length ? '' : `<div class="dash-empty">${escapeHtml(t('dashNoTerms'))}</div>`;
+  const emptyHint = allVocab.length ? '' : `<div class="dash-empty">${escapeHtml(t('dashNoTerms'))}</div>`;
+  let toggleBtn = '';
+  if (allVocab.length > collapsed) {
+    toggleBtn = _dashShowAllTerms
+      ? `<button class="dash-terms-toggle" id="dashTermsToggle">${escapeHtml(t('dashShowLess'))}</button>`
+      : `<button class="dash-terms-toggle" id="dashTermsToggle">${escapeHtml(tFmt('dashShowAll', { n: allVocab.length }))}</button>`;
+  }
   const termsSec = `<div class="dash-section">
     <div class="dash-section-title">${escapeHtml(t('dashTopTerms'))} <span class="dash-section-hint">${escapeHtml(t('dashTermsHint'))}</span></div>
     ${emptyHint}
     <div class="dash-terms" id="dashTerms">${termsHtml}<input class="dash-term-addinput" id="dashTermAdd" placeholder="${escapeHtml(t('dashAddTerm'))}" maxlength="80"></div>
+    ${toggleBtn}
   </div>`;
 
   body.innerHTML = cards + activity + langs + termsSec;
