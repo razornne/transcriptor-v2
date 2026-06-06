@@ -133,9 +133,11 @@ orchestrator_image = (
 # укладывается в таймаут Transcriptor (1200с) с большим запасом.
 CHUNK_LEN_S = int(os.environ.get("CHUNK_LEN_S", "1200"))
 # Порог cosine-расстояния для глобальной кластеризации спикеров между чанками.
-# ~0.7 типично для wespeaker-эмбеддингов. Меньше → больше спикеров (дробит),
-# больше → меньше (сливает). Используется только если num_speakers не задан.
-GLOBAL_SPK_THRESHOLD = float(os.environ.get("GLOBAL_SPK_THRESHOLD", "0.7"))
+# Точка EER wespeaker-эмбеддингов (граница "тот же/другой спикер") ~0.5 distance.
+# 0.55 — чуть консервативнее EER. Меньше → больше спикеров (дробит), больше →
+# меньше (сливает). Было 0.7 — склеивало похожие голоса на звонках в одного.
+# Используется только если num_speakers не задан. Тюнится через env.
+GLOBAL_SPK_THRESHOLD = float(os.environ.get("GLOBAL_SPK_THRESHOLD", "0.55"))
 
 # Language prompts — зеркало из transcriber.py
 _LANG_PROMPTS: dict[str, str] = {
@@ -631,7 +633,15 @@ class Transcriptor:
                     print(f"[modal] embedding crop failed for {label}: {e}", flush=True)
                     continue
             if vecs:
-                centroid = np.mean(np.stack(vecs), axis=0)
+                # L2-нормализуем каждый сегментный embedding ДО усреднения —
+                # центроид = среднее направление (устойчивее для cosine, не
+                # перекошен магнитудой). Потом нормализуем сам центроид.
+                arr = np.stack(vecs)
+                arr = arr / np.clip(np.linalg.norm(arr, axis=1, keepdims=True), 1e-8, None)
+                centroid = arr.mean(axis=0)
+                cn = float(np.linalg.norm(centroid))
+                if cn > 1e-8:
+                    centroid = centroid / cn
                 centroids[label] = [float(x) for x in centroid]
         return centroids
 
@@ -1167,6 +1177,12 @@ def transcribe_long(
                     items.append((i, label))
                     vecs.append(vec)
 
+        # diag: сколько локальных спикеров pyannote нашёл в каждом чанке
+        per_chunk: dict[int, int] = {}
+        for (ci, _lbl) in items:
+            per_chunk[ci] = per_chunk.get(ci, 0) + 1
+        print(f"[long] centroids={len(vecs)} per-chunk-speakers={[per_chunk.get(i, 0) for i in range(n)]} num_speakers={num_speakers}", flush=True)
+
         label_map: dict[tuple[int, str], int] = {}
         if len(vecs) == 1:
             label_map = {items[0]: 0}
@@ -1184,7 +1200,19 @@ def transcribe_long(
                     metric="cosine", linkage="average",
                 )
             cluster_ids = clusterer.fit_predict(X)
-            label_map = {items[k]: int(cluster_ids[k]) for k in range(len(items))}
+            label_map = {items[kk]: int(cluster_ids[kk]) for kk in range(len(items))}
+            # diag: разделимость центроидов (off-diagonal cosine distance).
+            # Если min мал (<0.3) — голоса почти неразличимы для embedding-модели
+            # (телефон/похожие голоса), нужен num_speakers или ниже порог.
+            try:
+                Xn = X / np.clip(np.linalg.norm(X, axis=1, keepdims=True), 1e-8, None)
+                dist = 1.0 - (Xn @ Xn.T)
+                off = dist[~np.eye(len(X), dtype=bool)]
+                print(f"[long] global_speakers={len(set(cluster_ids))} "
+                      f"centroid_cos_dist min={off.min():.2f} mean={off.mean():.2f} max={off.max():.2f} "
+                      f"thr={GLOBAL_SPK_THRESHOLD}", flush=True)
+            except Exception as _e:
+                pass
         if not vecs:
             print("[long] no speaker embeddings — falling back to per-chunk labels", flush=True)
 
