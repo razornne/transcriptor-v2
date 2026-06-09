@@ -263,6 +263,24 @@ LLM авто-генерит 2-4 тега категории (sales / hiring / br
 
 ## 📝 Done so far (changelog highlights)
 
+### Long recordings + UX wave (2026-06) — production
+- ✅ **Long recordings (chunked pipeline)** — записи >30 мин режутся на ~20-мин
+  чанки, обрабатываются параллельно на нескольких A10G, спикеры сшиваются
+  глобально через wespeaker embedding-кластеризацию (`transcribe_long`
+  оркестратор + `transcribe_chunk`). Порог сшивания 0.55, L2-norm, диагностика.
+- ✅ **Польский язык** (pl) — дропдаун + детектор + correction/title hints.
+- ✅ **Загрузка файлов** — кнопка Upload (audio/video), переиспользует transcribeBlob.
+- ✅ **Self-learning correction dictionary (wrong→right)** — пары из Gemini-правок
+  → Whisper prompt + Gemini known-corrections. Migration 008. + **ручное
+  управление** в дашборде (rename/delete/add, `POST /api/vocabulary`).
+- ✅ **Configurable summary detail** — пресеты Short/Medium/Detailed + Focus.
+- ✅ **User-facing Insights dashboard** — часы/записи/активность/языки/топ-термины,
+  клиентский расчёт. Редизайн + collapse терминов.
+- ✅ **Controls + hint redesign** — Best Quality карточка, step-pill хинт.
+- ✅ **Theme toggle perf** — View Transitions API (убрал per-element transition,
+  лагало на больших транскриптах).
+- ✅ **Дизайн-доки** — `docs/DESIGN_CURRENT.md` + `docs/DESIGN_V2.md` (бриф для Stitch).
+
 ### Pre-launch wave (2026-05, late) — production-ready
 - ✅ **Privacy Mode** (Max + Team) — toggle полностью bypass'ит Gemini:
   - STT correction → Qwen 7B на нашем A10G (вместо Gemini Flash)
