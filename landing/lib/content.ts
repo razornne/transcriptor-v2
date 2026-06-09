@@ -89,7 +89,7 @@ const PLANS_EN: PricingPlan[] = [
     name: "Free",
     monthly: 0, annual: 0, per: "/forever",
     tagline: "For trying it out",
-    features: ["60 minutes / month", "Ukrainian + English", "Inline editing", "Markdown export"],
+    features: ["60 minutes / month", "Polish · EN · UA · RU", "Inline editing", "Markdown export"],
     cta: "Start free",
     ctaKind: "ghost",
   },
@@ -124,7 +124,7 @@ const PLANS_UA: PricingPlan[] = [
     name: "Free",
     monthly: 0, annual: 0, per: "/назавжди",
     tagline: "Спробувати",
-    features: ["60 хвилин / місяць", "Українська + англійська", "Редагування транскрипту", "Експорт у Markdown"],
+    features: ["60 хвилин / місяць", "Польська · EN · UA · RU", "Редагування транскрипту", "Експорт у Markdown"],
     cta: "Спробувати безкоштовно",
     ctaKind: "ghost",
   },
@@ -159,11 +159,11 @@ export const COPY: Record<Lang, Copy> = {
     nav: { features: "Features", pricing: "Pricing", openApp: "Open app" },
     hero: {
       eyebrow: "Skriptly · v1.0 · GPU-hosted",
-      sub: "Best-in-class Ukrainian and English. Speakers separated automatically. Audio processed and deleted — we never store it.",
+      sub: "Strong accuracy in Polish, English, Ukrainian and Russian. Speakers separated automatically. Audio processed and deleted — we never store it.",
       ctaPrimary: "Start free",
       ctaSecondary: "See how it works",
       meta: [
-        ["Languages",  "UA · EN"],
+        ["Languages",  "PL · EN · UA · RU"],
         ["Retention",  "0 seconds"],
       ],
     },
@@ -185,9 +185,9 @@ export const COPY: Record<Lang, Copy> = {
     features: {
       eyebrow: "What's inside",
       title: "Everything a transcript should be.",
-      sub: "Built for individual professionals who don't want to babysit a recording. Designed around Ukrainian — not bolted on after.",
+      sub: "Built for individual professionals who don't want to babysit a recording. Multilingual from day one — Polish, English, Ukrainian, Russian.",
       items: [
-        { tag: "UA", h: "Ukrainian + English",   p: "Best-in-class accuracy on both. Whisper-large + a Ukrainian-tuned acoustic model.", accent: true },
+        { tag: "ML", h: "Polish · EN · UA · RU",  p: "Strong accuracy across all four. Whisper large-v3 + AI correction that learns your domain terms.", accent: true },
         { tag: "SS", h: "Speaker separation",    p: "pyannote diarization. Knows who said what — even on a phone call with overlap." },
         { tag: "LV", h: "Live transcript",       p: "Text appears while the call is still going. No 20-minute wait for processing." },
         { tag: "SM", h: "Summary + action items",p: "Auto-generated at the end. Edit them, ship them — they're plain Markdown." },
@@ -258,11 +258,11 @@ export const COPY: Record<Lang, Copy> = {
     nav: { features: "Можливості", pricing: "Тарифи", openApp: "Відкрити застосунок" },
     hero: {
       eyebrow: "Skriptly · v1.0 · GPU-сервер",
-      sub: "Найкраща точність українською та англійською. Спікери розділяються автоматично. Аудіо обробляється та видаляється — ми його не зберігаємо.",
+      sub: "Висока точність польською, англійською, українською та російською. Спікери розділяються автоматично. Аудіо обробляється та видаляється — ми його не зберігаємо.",
       ctaPrimary: "Спробувати безкоштовно",
       ctaSecondary: "Як це працює",
       meta: [
-        ["Мови",         "UA · EN"],
+        ["Мови",         "PL · EN · UA · RU"],
         ["Збереження",   "0 секунд"],
       ],
     },
@@ -284,9 +284,9 @@ export const COPY: Record<Lang, Copy> = {
     features: {
       eyebrow: "Що всередині",
       title: "Все, чим має бути транскрипт.",
-      sub: "Для тих, хто не хоче няньчити запис. Розроблено навколо української, а не прикручено зверху.",
+      sub: "Для тих, хто не хоче няньчити запис. Багатомовний від початку — польська, англійська, українська, російська.",
       items: [
-        { tag: "UA", h: "Українська + англійська", p: "Найкраща точність на обох. Whisper-large + дотренована акустична модель.", accent: true },
+        { tag: "ML", h: "Польська · EN · UA · RU", p: "Висока точність усіма чотирма. Whisper large-v3 + AI-корекція, що вчить твої терміни.", accent: true },
         { tag: "SS", h: "Розділення спікерів",     p: "pyannote-діаризація. Знає, хто що сказав — навіть у телефонному дзвінку з накладаннями." },
         { tag: "LV", h: "Транскрипт наживо",       p: "Текст з’являється просто під час дзвінка. Не треба чекати 20 хвилин на обробку." },
         { tag: "SM", h: "Підсумок + дії",          p: "Генерується автоматично. Редагуй, надсилай — це звичайний Markdown." },
