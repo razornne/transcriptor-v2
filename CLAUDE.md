@@ -636,6 +636,10 @@ Privacy masking настроен в `posthog.init` в `templates/index.html`:
 > редизайн на основе мокапов `redesign v2/*.png`, бриф для дизайн-инструмента
 > (Google Stitch). Содержит cloud-adaptation заметки (мокапы рисовались как
 > local-desktop — framing меняется под облако).
+>
+> 🐛 **Открытые задачи/баги:** `docs/ISSUES.md` — живой бэклог (P0-P3, status).
+> Топ-P0: gpt-oss privacy-summary OOM на длинных записях (ISS-1), per-chunk
+> resilience в long-pipeline (ISS-2). Смотреть туда перед новой работой.
 
 ### Мокапы
 
