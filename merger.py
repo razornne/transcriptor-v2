@@ -32,6 +32,13 @@ SHORT_SEGMENT_THRESHOLD_S = float(os.environ.get("SHORT_SEGMENT_THRESHOLD_S", "2
 # ABA-паттерны после изменений предыдущего. Обычно сходится за 1-2.
 SMOOTH_PASSES = int(os.environ.get("SMOOTH_PASSES", "3"))
 
+# Слово, не пересёкшееся ни с одним pyannote-турном (пауза между турнами,
+# непокрытый край), приписывается ближайшему по времени турну, если тот не
+# дальше этого порога (сек). Дальше — SPEAKER_UNKNOWN (заполнится fill'ом).
+# Точечная атрибуция по реальной близости лучше слепого forward-fill:
+# первое слово реплики после паузы уходит СЛЕДУЮЩЕМУ турну, а не предыдущему.
+NEAREST_TURN_MAX_GAP_S = float(os.environ.get("NEAREST_TURN_MAX_GAP_S", "2.0"))
+
 
 def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
     """Длина пересечения двух интервалов (0 если не пересекаются)."""
@@ -39,13 +46,26 @@ def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> floa
 
 
 def _best_speaker_for(start: float, end: float, turns: list[dict]) -> str:
-    """Спикер с максимальным overlap по интервалу [start, end]."""
+    """Спикер с максимальным overlap по интервалу [start, end].
+
+    Если пересечений нет — ближайший турн в пределах NEAREST_TURN_MAX_GAP_S
+    (таймстемпы Whisper-слов гуляют на ±100-300мс, а pyannote часто не
+    покрывает первые/последние полслова реплики)."""
     best_speaker = "SPEAKER_UNKNOWN"
     best_overlap = 0.0
     for t in turns:
         ov = _overlap(start, end, t["start"], t["end"])
         if ov > best_overlap:
             best_overlap = ov
+            best_speaker = t["speaker"]
+    if best_overlap > 0.0:
+        return best_speaker
+
+    best_gap = NEAREST_TURN_MAX_GAP_S
+    for t in turns:
+        gap = max(t["start"] - end, start - t["end"])
+        if 0.0 <= gap < best_gap:
+            best_gap = gap
             best_speaker = t["speaker"]
     return best_speaker
 

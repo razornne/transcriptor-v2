@@ -117,7 +117,8 @@ web_image = (
 
 # Лёгкий CPU образ для оркестратора длинных записей (transcribe_long).
 # Режет аудио (ffmpeg), фанит GPU-воркеров transcribe_chunk, глобально
-# кластеризует спикеров (scikit-learn) и сшивает. Без torch/CUDA — дёшево,
+# кластеризует спикеров (собственная constrained-агломеративка на numpy,
+# sklearn больше не нужен) и сшивает. Без torch/CUDA — дёшево,
 # почти всё время ждёт GPU-воркеров (I/O bound).
 orchestrator_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -125,19 +126,35 @@ orchestrator_image = (
     .pip_install(
         "soundfile",
         "numpy",
-        "scikit-learn",
     )
 )
 
-# Длина чанка для длинных записей (сек). 1200 = 20 мин — каждый чанк-джоб
-# укладывается в таймаут Transcriptor (1200с) с большим запасом.
+# Длина чанка для длинных записей (сек). 1200 = 20 мин — базовая цель;
+# реальная длина растягивается _plan_chunk_boundaries так, чтобы все чанки
+# влезли в одну параллельную волну (см. MAX_PARALLEL_CHUNKS).
 CHUNK_LEN_S = int(os.environ.get("CHUNK_LEN_S", "1200"))
+# Лимит параллельных GPU-контейнеров на аккаунте Modal. Чанков больше этого
+# числа — вторая волна и ~2x wall-clock. Поэтому планировщик чанков целится
+# в ≤ MAX_PARALLEL_CHUNKS чанков, удлиняя каждый (та же суммарная GPU-минута,
+# сжатый wall-clock).
+MAX_PARALLEL_CHUNKS = int(os.environ.get("MAX_PARALLEL_CHUNKS", "10"))
+# Жёсткий кап длины одного чанка: 1800с аудио обрабатывается за ~10-15 мин
+# даже на best-quality — укладывается в таймаут Transcriptor (2400с) с запасом.
+MAX_CHUNK_LEN_S = int(os.environ.get("MAX_CHUNK_LEN_S", "1800"))
 # Порог cosine-расстояния для глобальной кластеризации спикеров между чанками.
 # Точка EER wespeaker-эмбеддингов (граница "тот же/другой спикер") ~0.5 distance.
-# 0.55 — чуть консервативнее EER. Меньше → больше спикеров (дробит), больше →
-# меньше (сливает). Было 0.7 — склеивало похожие голоса на звонках в одного.
+# Меньше → больше спикеров (дробит, дубли на швах), больше → меньше (сливает).
+# История: 0.7 склеивал похожие голоса на звонках 1-на-1 → опустили до 0.55 →
+# полезли ДУБЛИ одного человека на швах чанков (ISS-8). Теперь кластеризация
+# работает с cannot-link констрейнтом (спикеры одного чанка не сливаются —
+# pyannote их уже разделил в общем контексте), который структурно блокирует
+# старый фейл со склейкой, поэтому порог можно держать выше — 0.68 лечит швы.
 # Используется только если num_speakers не задан. Тюнится через env.
-GLOBAL_SPK_THRESHOLD = float(os.environ.get("GLOBAL_SPK_THRESHOLD", "0.55"))
+GLOBAL_SPK_THRESHOLD = float(os.environ.get("GLOBAL_SPK_THRESHOLD", "0.68"))
+# Сколько embedding'ов на локального спикера передаёт transcribe_chunk
+# оркестратору. Несколько векторов (вместо одного центроида) делают
+# average-linkage устойчивее к шумным сегментам (overlap, телефонное сжатие).
+EMB_PER_SPEAKER = int(os.environ.get("EMB_PER_SPEAKER", "6"))
 
 # Language prompts — зеркало из transcriber.py
 _LANG_PROMPTS: dict[str, str] = {
@@ -189,6 +206,12 @@ _CORRECTION_INSTRUCTIONS: dict[str, str] = {
     ),
 }
 
+# Анти-галлюцинация Whisper: при подозрении на галлюцинацию (по таймстемпам
+# слов) пропускать тихие участки длиннее порога (сек). Требует
+# word_timestamps=True (у нас включён). Лечит мультиязычную кашу на сильно
+# повторяющемся контенте — Whisper зацикливается и начинает выдумывать (ISS-9).
+HALLUCINATION_SILENCE_S = float(os.environ.get("HALLUCINATION_SILENCE_S", "2.0"))
+
 # Gemini correction model. Flash дешёвый и быстрый — дефолт для всех.
 # Pro даёт лучшее качество на длинных контекстах — можно включать для Max
 # юзеров (override через env CORRECTION_MODEL=gemini-2.5-pro).
@@ -202,7 +225,9 @@ GEMINI_CORRECTION_MODEL = os.environ.get("CORRECTION_MODEL", "gemini-2.5-flash")
     image=image,
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
-    timeout=1200,                 # 20 мин макс (длинные созвоны)
+    timeout=2400,                 # 40 мин макс: монолит до 30 мин аудио + запас
+                                  # на best-quality (large-v3 ~3x медленнее turbo)
+                                  # и на удлинённые чанки long-пайплайна
     scaledown_window=300,         # держать тёплым 5 мин после последнего вызова
     retries=modal.Retries(max_retries=2, backoff_coefficient=1),  # retry on code-level exceptions
 )
@@ -386,6 +411,7 @@ class Transcriptor:
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
                 no_speech_threshold=0.6,
+                hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
                 condition_on_previous_text=True,
                 vad_filter=True,
                 vad_parameters={
@@ -501,7 +527,7 @@ class Transcriptor:
 
         Returns:
           { "segments": [{speaker, start, end, text}, ...],   # chunk-relative
-            "embeddings": {"SPEAKER_00": [float, ...], ...},
+            "embeddings": {"SPEAKER_00": [[float, ...], ...], ...},  # до EMB_PER_SPEAKER векторов
             "vocab_additions": [term, ...] }
         """
         import soundfile as sf
@@ -533,6 +559,7 @@ class Transcriptor:
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
                 no_speech_threshold=0.6,
+                hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
                 condition_on_previous_text=True,
                 vad_filter=True,
                 vad_parameters={
@@ -606,10 +633,15 @@ class Transcriptor:
                 pass
 
     def _speaker_centroids(self, wav_path: str, annotation) -> dict:
-        """Считает усреднённый embedding (centroid) каждого локального спикера.
+        """Embedding'и каждого локального спикера для глобального сшивания.
 
-        Кропаем аудио по самым длинным сегментам спикера и усредняем
-        embedding'и. Возвращает {label: list[float]} (нативные Python float —
+        Кропаем аудио по самым длинным сегментам спикера и возвращаем до
+        EMB_PER_SPEAKER L2-нормированных векторов на спикера (НЕ один
+        centroid): несколько точек на голос делают average-linkage
+        кластеризацию в оркестраторе устойчивее к шумным сегментам —
+        один забитый overlap'ом вектор не утащит всё сравнение (ISS-8).
+
+        Возвращает {label: [[float, ...], ...]} (нативные Python float —
         Flask-контейнер без numpy не десериализует numpy типы).
         Версионно-независимо: не полагается на pyannote return_embeddings.
         """
@@ -618,32 +650,28 @@ class Transcriptor:
         if self.embedding_inference is None:
             return {}
 
-        centroids: dict[str, list[float]] = {}
+        out: dict[str, list[list[float]]] = {}
         for label in annotation.labels():
             timeline = annotation.label_timeline(label)
             segs = sorted(timeline, key=lambda s: s.duration, reverse=True)
-            vecs = []
-            for seg in segs[:10]:  # топ-10 самых длинных сегментов спикера
+            vecs: list[list[float]] = []
+            for seg in segs[: EMB_PER_SPEAKER + 4]:  # запас на неудачные кропы
+                if len(vecs) >= EMB_PER_SPEAKER:
+                    break
                 if seg.duration < 0.5:  # слишком короткие — embedding нестабилен
                     continue
                 try:
                     emb = self.embedding_inference.crop(wav_path, seg)
-                    vecs.append(np.asarray(emb, dtype="float32").reshape(-1))
                 except Exception as e:
                     print(f"[modal] embedding crop failed for {label}: {e}", flush=True)
                     continue
+                v = np.asarray(emb, dtype="float32").reshape(-1)
+                norm = float(np.linalg.norm(v))
+                if norm > 1e-8:
+                    vecs.append([float(x) for x in v / norm])
             if vecs:
-                # L2-нормализуем каждый сегментный embedding ДО усреднения —
-                # центроид = среднее направление (устойчивее для cosine, не
-                # перекошен магнитудой). Потом нормализуем сам центроид.
-                arr = np.stack(vecs)
-                arr = arr / np.clip(np.linalg.norm(arr, axis=1, keepdims=True), 1e-8, None)
-                centroid = arr.mean(axis=0)
-                cn = float(np.linalg.norm(centroid))
-                if cn > 1e-8:
-                    centroid = centroid / cn
-                centroids[label] = [float(x) for x in centroid]
-        return centroids
+                out[label] = vecs
+        return out
 
     def _correct_segments(self, segments: list[dict], language: str | None,
                           privacy_mode: bool = False,
@@ -1057,31 +1085,149 @@ def _parse_silences(stderr: str) -> list[tuple[float, float]]:
 
 
 def _plan_chunk_boundaries(duration: float, silences: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """Планирует границы чанков ~CHUNK_LEN_S, привязывая разрезы к ближайшим
-    точкам тишины (чтобы не резать посреди слова). Фоллбэк — жёсткий рез.
+    """Планирует границы чанков, привязывая разрезы к ближайшим точкам тишины
+    (чтобы не резать посреди слова). Фоллбэк — жёсткий рез.
+
+    Число чанков выбирается так, чтобы все они влезли в одну параллельную
+    волну GPU (≤ MAX_PARALLEL_CHUNKS): для 4ч записи это ~24-мин чанки вместо
+    12×20-мин в две волны → ~2x по wall-clock при той же суммарной GPU-минуте.
+    Длина чанка не превышает MAX_CHUNK_LEN_S (кап под таймаут Transcriptor).
     """
+    import math
+
     if duration <= CHUNK_LEN_S * 1.5:
         return [(0.0, duration)]
 
+    n = math.ceil(duration / CHUNK_LEN_S)
+    if n > MAX_PARALLEL_CHUNKS:
+        # Меньше чанков, длиннее каждый — но не длиннее жёсткого капа.
+        # Если даже с капом чанков больше лимита (5ч+) — принимаем 2 волны.
+        n = max(MAX_PARALLEL_CHUNKS, math.ceil(duration / MAX_CHUNK_LEN_S))
+    chunk_len = duration / n
+
     sil_mids = [(s + e) / 2 for s, e in silences]
-    window = max(120.0, CHUNK_LEN_S * 0.25)  # окно поиска тишины вокруг цели
+    window = max(120.0, chunk_len * 0.25)  # окно поиска тишины вокруг цели
     cuts: list[float] = []
-    target = float(CHUNK_LEN_S)
-    while target < duration - CHUNK_LEN_S * 0.5:
-        floor = (cuts[-1] if cuts else 0.0) + 60.0  # минимум 60с от прошлого реза
-        candidates = [m for m in sil_mids if abs(m - target) < window and m > floor]
-        cut = min(candidates, key=lambda m: abs(m - target)) if candidates else target
+    # Цели фиксированы на i*chunk_len (не относительно прошлого реза) — drift
+    # от снэппинга к тишине не накапливается, чанков выходит ровно n.
+    for i in range(1, n):
+        target = i * chunk_len
+        lo = (cuts[-1] if cuts else 0.0) + 60.0  # минимум 60с от прошлого реза
+        hi = duration - 60.0
+        candidates = [m for m in sil_mids if abs(m - target) < window and lo < m < hi]
+        cut = min(candidates, key=lambda m: abs(m - target)) if candidates else min(max(target, lo), hi)
         cuts.append(cut)
-        target = cut + CHUNK_LEN_S
 
     points = [0.0] + cuts + [duration]
     return [(points[i], points[i + 1]) for i in range(len(points) - 1)]
 
 
+def _cluster_speaker_embeddings(
+    chunk_ids: list[int],
+    vec_groups: list[list[list[float]]],
+    num_speakers: int | None,
+    threshold: float,
+) -> list[int]:
+    """Агломеративная кластеризация локальных спикеров между чанками
+    с cannot-link констрейнтом. Возвращает cluster_id для каждого элемента.
+
+    chunk_ids[i]  — индекс чанка, из которого пришёл локальный спикер i.
+    vec_groups[i] — его embedding'и (1+ векторов; нормализуются здесь).
+
+    Cannot-link: два локальных спикера ОДНОГО чанка — заведомо разные люди
+    (pyannote разделил их, слыша обоих в общем контексте) — их кластеры не
+    сливаются никогда. Это структурно блокирует склейку похожих голосов
+    (старый фейл на звонках 1-на-1, где оба спикера есть в каждом чанке)
+    и позволяет держать порог выше — лечит дубли одного человека на швах
+    чанков (ISS-8). Linkage: average по всем парам векторов двух кластеров.
+
+    При заданном num_speakers сливаем до k, игнорируя порог; если
+    cannot-link не даёт дойти до k (фантомный локальный спикер в чанке),
+    наименьшие кластеры вливаются в ближайший принудительно.
+    """
+    import numpy as np
+
+    n = len(chunk_ids)
+    if n == 0:
+        return []
+    if n == 1:
+        return [0]
+
+    mats = []
+    for g in vec_groups:
+        m = np.asarray(g, dtype="float64")
+        m = m / np.clip(np.linalg.norm(m, axis=1, keepdims=True), 1e-8, None)
+        mats.append(m)
+
+    # Парные расстояния элементов: средняя cosine-дистанция всех пар векторов
+    big = np.vstack(mats)
+    owners = np.repeat(np.arange(n), [m.shape[0] for m in mats])
+    dist = 1.0 - big @ big.T
+    D = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i + 1, n):
+            D[i, j] = D[j, i] = float(dist[np.ix_(owners == i, owners == j)].mean())
+
+    clusters: list[set[int]] = [{i} for i in range(n)]
+    chunksets: list[set[int]] = [{chunk_ids[i]} for i in range(n)]
+
+    def cdist(a: int, b: int) -> float:
+        s = sum(D[i, j] for i in clusters[a] for j in clusters[b])
+        return s / (len(clusters[a]) * len(clusters[b]))
+
+    def best_allowed_pair() -> tuple[int | None, int | None, float]:
+        best = (None, None, float("inf"))
+        for a in range(len(clusters)):
+            for b in range(a + 1, len(clusters)):
+                if chunksets[a] & chunksets[b]:
+                    continue  # cannot-link: общий чанк
+                d = cdist(a, b)
+                if d < best[2]:
+                    best = (a, b, d)
+        return best
+
+    def do_merge(a: int, b: int):
+        clusters[a] |= clusters[b]
+        chunksets[a] |= chunksets[b]
+        del clusters[b]
+        del chunksets[b]
+
+    target_k = num_speakers if (num_speakers and num_speakers >= 1) else None
+    while len(clusters) > (target_k or 1):
+        a, b, d = best_allowed_pair()
+        if a is None:
+            break  # допустимых слияний не осталось
+        if target_k is None and d >= threshold:
+            break
+        do_merge(a, b)
+
+    # Форс-фаза для явного num_speakers: вливаем наименьшие кластеры в
+    # ближайший, игнорируя cannot-link — лишние локальные спикеры в чанке
+    # обычно фантомы pyannote с парой коротких сегментов.
+    if target_k is not None:
+        while len(clusters) > target_k:
+            smallest = min(range(len(clusters)), key=lambda c: len(clusters[c]))
+            others = [c for c in range(len(clusters)) if c != smallest]
+            nearest = min(others, key=lambda c: cdist(smallest, c))
+            print(f"[long] force-merging phantom cluster (size "
+                  f"{len(clusters[smallest])}) to reach num_speakers={target_k}",
+                  flush=True)
+            a, b = sorted((smallest, nearest))
+            do_merge(a, b)
+
+    labels = [0] * n
+    for cid, members in enumerate(clusters):
+        for i in members:
+            labels[i] = cid
+    return labels
+
+
 @app.function(
     image=orchestrator_image,
     secrets=[hf_secret],
-    timeout=7200,                # 2ч с запасом — оркестратор почти всё время ждёт GPU
+    timeout=14400,               # 4ч с запасом — оркестратор почти всё время ждёт GPU;
+                                 # при сериализации чанков (GPU-лимит) 4ч+ запись
+                                 # может легко выйти за старые 2ч
     scaledown_window=60,
     min_containers=0,
 )
@@ -1153,72 +1299,90 @@ def transcribe_long(
             )
             with open(ch_path, "rb") as f:
                 chunk_bytes = f.read()
+            # Файл чанка больше не нужен — байты ушли в spawn. Чистим сразу,
+            # иначе к концу джобы на диске лежит полный дубль записи в wav.
+            try:
+                os.remove(ch_path)
+            except OSError:
+                pass
             call = Transcriptor().transcribe_chunk.spawn(
                 chunk_bytes, language, prompt, quality, privacy_mode, correction_hints,
             )
             calls.append((i, start, call))
 
-        # 4. Сбор результатов (чанки крутятся параллельно на Modal)
-        results: list[tuple[float, dict]] = [None] * n  # type: ignore
+        # 4. Сбор результатов (чанки крутятся параллельно на Modal).
+        # Падение одного чанка (после Modal-ретраев) НЕ должно убивать всю
+        # джобу: логируем, помечаем как gap и продолжаем — частичный транскрипт
+        # 4ч записи ценнее, чем ничего (ISS-2).
+        results: list[tuple[float, dict | None]] = [None] * n  # type: ignore
         done = 0
+        failed_chunks: list[int] = []
         for i, start, call in calls:
-            res = call.get()
+            try:
+                res = call.get()
+            except Exception as e:
+                print(f"[long] chunk {i + 1}/{n} FAILED after retries: {e}", flush=True)
+                failed_chunks.append(i)
+                res = None
             results[i] = (start, res)
             done += 1
-            _progress(stage="processing", chunks_total=n, chunks_done=done)
+            _progress(stage="processing", chunks_total=n, chunks_done=done,
+                      chunks_failed=len(failed_chunks))
+        if len(failed_chunks) == n:
+            raise RuntimeError(f"all {n} chunks failed — cannot produce a transcript")
 
         # 5. Глобальная кластеризация спикеров по centroid-эмбеддингам
         _progress(stage="merge")
         items: list[tuple[int, str]] = []   # (chunk_idx, local_label)
-        vecs: list[list[float]] = []
+        groups: list[list[list[float]]] = []
         for i, (_start, res) in enumerate(results):
+            if not res:
+                continue  # упавший чанк — пропускаем (gap-маркер добавится при стиче)
             for label, vec in (res.get("embeddings") or {}).items():
-                if vec:
-                    items.append((i, label))
-                    vecs.append(vec)
+                if not vec:
+                    continue
+                # Новый формат — список векторов на спикера; старый (in-flight
+                # джобы во время деплоя) — один плоский вектор float'ов.
+                group = vec if isinstance(vec[0], (list, tuple)) else [vec]
+                items.append((i, label))
+                groups.append(group)
 
         # diag: сколько локальных спикеров pyannote нашёл в каждом чанке
         per_chunk: dict[int, int] = {}
         for (ci, _lbl) in items:
             per_chunk[ci] = per_chunk.get(ci, 0) + 1
-        print(f"[long] centroids={len(vecs)} per-chunk-speakers={[per_chunk.get(i, 0) for i in range(n)]} num_speakers={num_speakers}", flush=True)
+        print(f"[long] speakers-with-embeddings={len(items)} per-chunk-speakers={[per_chunk.get(i, 0) for i in range(n)]} num_speakers={num_speakers}", flush=True)
 
         label_map: dict[tuple[int, str], int] = {}
-        if len(vecs) == 1:
-            label_map = {items[0]: 0}
-        elif len(vecs) >= 2:
-            from sklearn.cluster import AgglomerativeClustering
-            X = np.stack([np.asarray(v, dtype="float64") for v in vecs])
-            if num_speakers and num_speakers >= 1:
-                k = min(num_speakers, len(vecs))
-                clusterer = AgglomerativeClustering(
-                    n_clusters=k, metric="cosine", linkage="average",
-                )
-            else:
-                clusterer = AgglomerativeClustering(
-                    n_clusters=None, distance_threshold=GLOBAL_SPK_THRESHOLD,
-                    metric="cosine", linkage="average",
-                )
-            cluster_ids = clusterer.fit_predict(X)
+        if items:
+            chunk_ids = [ci for ci, _ in items]
+            cluster_ids = _cluster_speaker_embeddings(
+                chunk_ids, groups, num_speakers, GLOBAL_SPK_THRESHOLD,
+            )
             label_map = {items[kk]: int(cluster_ids[kk]) for kk in range(len(items))}
-            # diag: разделимость центроидов (off-diagonal cosine distance).
-            # Если min мал (<0.3) — голоса почти неразличимы для embedding-модели
-            # (телефон/похожие голоса), нужен num_speakers или ниже порог.
+            # diag: разделимость спикеров (off-diagonal cosine distance по
+            # усреднённым векторам спикеров). Если min мал (<0.3) — голоса
+            # почти неразличимы для embedding-модели (телефон/похожие голоса),
+            # надёжнее задать num_speakers вручную.
             try:
+                X = np.stack([np.asarray(g, dtype="float64").mean(axis=0) for g in groups])
                 Xn = X / np.clip(np.linalg.norm(X, axis=1, keepdims=True), 1e-8, None)
-                dist = 1.0 - (Xn @ Xn.T)
-                off = dist[~np.eye(len(X), dtype=bool)]
-                print(f"[long] global_speakers={len(set(cluster_ids))} "
-                      f"centroid_cos_dist min={off.min():.2f} mean={off.mean():.2f} max={off.max():.2f} "
-                      f"thr={GLOBAL_SPK_THRESHOLD}", flush=True)
-            except Exception as _e:
+                if len(X) > 1:
+                    dist = 1.0 - (Xn @ Xn.T)
+                    off = dist[~np.eye(len(X), dtype=bool)]
+                    print(f"[long] global_speakers={len(set(cluster_ids))} "
+                          f"centroid_cos_dist min={off.min():.2f} mean={off.mean():.2f} max={off.max():.2f} "
+                          f"thr={GLOBAL_SPK_THRESHOLD}", flush=True)
+            except Exception:
                 pass
-        if not vecs:
+        else:
             print("[long] no speaker embeddings — falling back to per-chunk labels", flush=True)
 
         # 6. Стич: offset таймстемпов + релейбл local→global + сорт по времени
         all_segs: list[dict] = []
         for i, (start, res) in enumerate(results):
+            if not res:
+                continue
             for seg in (res.get("segments") or []):
                 cluster = label_map.get((i, seg["speaker"]))
                 # Фоллбэк если эмбеддинга не было — уникальный per-chunk лейбл
@@ -1229,19 +1393,41 @@ def transcribe_long(
                     "text":  seg["text"],
                     "_k":    key,
                 })
+
+        # Gap-маркеры за упавшие чанки: явная дыра в транскрипте честнее, чем
+        # тихо пропавшие ~20 минут. Спикер — SPEAKER_UNKNOWN, в нумерацию
+        # глобальных спикеров гэпы не попадают.
+        _GAP_TEXTS = {
+            "ru": "[~{m} мин аудио не удалось обработать]",
+            "uk": "[~{m} хв аудіо не вдалося обробити]",
+            "pl": "[~{m} min nagrania nie udało się przetworzyć]",
+            "en": "[~{m} min of audio could not be processed]",
+        }
+        for i in failed_chunks:
+            g_start, g_end = boundaries[i]
+            tmpl = _GAP_TEXTS.get(language or "", _GAP_TEXTS["en"])
+            all_segs.append({
+                "start": g_start,
+                "end":   g_end,
+                "text":  tmpl.format(m=max(1, round((g_end - g_start) / 60))),
+                "_k":    ("gap", i),
+            })
         all_segs.sort(key=lambda s: s["start"])
 
         # Глобальная нумерация спикеров по времени первого появления
         order: dict = {}
         for s in all_segs:
+            if isinstance(s["_k"], tuple):
+                continue  # gap-маркер — не спикер
             if s["_k"] not in order:
                 order[s["_k"]] = len(order)
 
         # 7. Re-merge соседних сегментов одного (глобального) спикера
         final: list[dict] = []
         for s in all_segs:
-            spk = f"SPEAKER_{order[s['_k']]:02d}"
-            if final and final[-1]["speaker"] == spk:
+            is_gap = isinstance(s["_k"], tuple)
+            spk = "SPEAKER_UNKNOWN" if is_gap else f"SPEAKER_{order[s['_k']]:02d}"
+            if not is_gap and final and final[-1]["speaker"] == spk:
                 final[-1]["end"]   = s["end"]
                 final[-1]["text"] += " " + s["text"]
             else:
@@ -1251,6 +1437,8 @@ def transcribe_long(
         vocab: list[dict] = []
         seen: set[str] = set()
         for _i, (_start, res) in enumerate(results):
+            if not res:
+                continue
             for p in (res.get("vocab_additions") or []):
                 # tolerate старый формат (str) на случай in-flight несовместимости
                 key = (p.get("right") if isinstance(p, dict) else p) or ""
@@ -1259,8 +1447,10 @@ def transcribe_long(
                     seen.add(kl)
                     vocab.append(p)
 
-        _progress(stage="correct", chunks_total=n, chunks_done=n)
-        print(f"[long] done: {len(final)} segments, {len(order)} speakers, vocab+{len(vocab)}", flush=True)
+        _progress(stage="correct", chunks_total=n, chunks_done=n,
+                  chunks_failed=len(failed_chunks))
+        print(f"[long] done: {len(final)} segments, {len(order)} speakers, "
+              f"vocab+{len(vocab)}, failed_chunks={failed_chunks or 'none'}", flush=True)
         return {"segments": final, "vocab_additions": vocab}
 
     finally:
@@ -1329,6 +1519,42 @@ def _llm_chat_generate(
     if post_process:
         text = post_process(text)
     return text
+
+
+# Сентинел для подстановки текста транскрипта в готовые промпты
+# generate_mapreduce. Flask собирает промпты сам (шаблон + языковые хинты +
+# detail/focus), а текст подставляется уже в GPU-контейнере — str.replace
+# вместо str.format, чтобы фигурные скобки в шаблонах не требовали
+# экранирования.
+MAPREDUCE_TEXT_SLOT = "<<TRANSCRIPT_TEXT>>"
+
+
+def _split_text_windows(text: str, window_chars: int) -> list[str]:
+    """Режет текст на окна ≤ window_chars по границам строк (реплик).
+
+    Сверхдлинная одиночная строка (без переносов) режется жёстко.
+    Пустой текст → одно пустое окно (вызывающий код не падает).
+    """
+    if len(text) <= window_chars:
+        return [text]
+    windows: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for line in text.split("\n"):
+        while len(line) > window_chars:
+            if cur:
+                windows.append("\n".join(cur))
+                cur, cur_len = [], 0
+            windows.append(line[:window_chars])
+            line = line[window_chars:]
+        if cur and cur_len + len(line) + 1 > window_chars:
+            windows.append("\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(line)
+        cur_len += len(line) + 1
+    if cur:
+        windows.append("\n".join(cur))
+    return windows
 
 
 def _strip_gpt_oss_analysis(text: str) -> str:
@@ -1425,7 +1651,8 @@ class LabMamayLM9B:
     gpu="L40S",                  # 48GB needed: 12GB model + eager-attn O(n²) on long ctx
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
-    timeout=600,
+    timeout=2400,                # map-reduce на 4ч транскрипте — до ~25 последовательных
+                                 # LLM-вызовов в одном контейнере (~20 мин worst case)
     scaledown_window=120,
     min_containers=0,
 )
@@ -1464,13 +1691,91 @@ class LabGPTOSS20B:
         self.model.eval()
         print("[lab/gptoss20b] ready", flush=True)
 
-    @modal.method()
-    def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:
+    def _generate_once(self, prompt: str, max_tokens: int, temperature: float) -> str:
         return _llm_chat_generate(
             self.model, self.tokenizer, prompt, max_tokens, temperature,
             # gpt-oss specific: short thinking, then final answer
             template_kwargs={"reasoning_effort": "low"},
             post_process=_strip_gpt_oss_analysis,
+        )
+
+    @modal.method()
+    def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:
+        return self._generate_once(prompt, max_tokens, temperature)
+
+    @modal.method()
+    def generate_mapreduce(
+        self,
+        transcript_text: str,
+        reduce_prompt: str,
+        map_prompt: str,
+        max_tokens: int = 4096,
+        temperature: float = 0.3,
+        window_chars: int = 12000,
+    ) -> str:
+        """Map-reduce генерация для длинных транскриптов (Privacy Mode, ISS-1).
+
+        gpt-oss-20b в transformers поддерживает только eager attention —
+        матрица внимания [heads × seq × seq] это O(n²) памяти. На 3-4ч
+        транскрипте префилл пытается аллоцировать сотни ГБ → CUDA OOM.
+
+        Лечение (модель-агностичное): транскрипт режется на окна
+        ~window_chars, каждое сжимается в плотные заметки (map), финальный
+        ответ генерируется по объединённым заметкам исходным шаблоном
+        (reduce). Каждый отдельный контекст мал → нет O(n²) взрыва.
+
+        reduce_prompt / map_prompt приходят из Flask готовыми, с
+        MAPREDUCE_TEXT_SLOT на месте текста. Короткий транскрипт
+        (≤ window_chars) идёт одним вызовом — поведение идентично generate().
+
+        window_chars=12000 ≈ 8.5k токенов худшего случая (кириллица) —
+        eager-матрица ~19ГБ transient, безопасно на L40S 48GB.
+        """
+        windows = _split_text_windows(transcript_text, window_chars)
+        if len(windows) == 1:
+            return self._generate_once(
+                reduce_prompt.replace(MAPREDUCE_TEXT_SLOT, transcript_text),
+                max_tokens, temperature,
+            )
+
+        print(f"[lab/gptoss20b] map-reduce: {len(transcript_text)} chars → "
+              f"{len(windows)} windows", flush=True)
+        t0 = time.time()
+        notes: list[str] = []
+        for k, win in enumerate(windows):
+            part = self._generate_once(
+                map_prompt.replace(MAPREDUCE_TEXT_SLOT, win),
+                max_tokens=512, temperature=0.2,
+            )
+            notes.append(f"--- Part {k + 1}/{len(windows)} ---\n{part}")
+            print(f"[lab/gptoss20b] map {k + 1}/{len(windows)} done "
+                  f"({len(part)} chars, {time.time() - t0:.0f}s elapsed)", flush=True)
+        combined = "\n\n".join(notes)
+
+        # Заметки сами могут не влезть в безопасное окно (6-8ч записи) —
+        # сжимаем рекурсивно тем же map-промптом.
+        for _pass in range(3):
+            if len(combined) <= window_chars:
+                break
+            re_windows = _split_text_windows(combined, window_chars)
+            print(f"[lab/gptoss20b] collapse pass {_pass + 1}: "
+                  f"{len(combined)} chars → {len(re_windows)} windows", flush=True)
+            combined = "\n\n".join(
+                self._generate_once(
+                    map_prompt.replace(MAPREDUCE_TEXT_SLOT, w),
+                    max_tokens=512, temperature=0.2,
+                )
+                for w in re_windows
+            )
+        # Последний рубеж против OOM: усечь, но не упасть
+        if len(combined) > int(window_chars * 1.3):
+            print(f"[lab/gptoss20b] notes still {len(combined)} chars after "
+                  f"collapse — hard truncating", flush=True)
+            combined = combined[: int(window_chars * 1.3)]
+
+        return self._generate_once(
+            reduce_prompt.replace(MAPREDUCE_TEXT_SLOT, combined),
+            max_tokens, temperature,
         )
 
 

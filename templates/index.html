@@ -5030,8 +5030,9 @@ async function transcribeBlob(blob) {
 
     // Длинные записи идут в chunked pipeline — обработка дольше по wall-clock
     // (cold start нескольких контейнеров + параллельные чанки), поэтому даём
-    // большой poll-таймаут. Короткие — стандартные 22 мин.
-    const _pollTimeout = (audioDur > 1800) ? 60 * 60 * 1000 : 22 * 60 * 1000;
+    // большой poll-таймаут: 120 мин покрывает 4ч+ записи даже при
+    // сериализации чанков из-за GPU-лимита. Короткие — стандартные 22 мин.
+    const _pollTimeout = (audioDur > 1800) ? 120 * 60 * 1000 : 22 * 60 * 1000;
     const result = await pollJob(jobId, (progress) => {
       // Real backend stage signal — advance ring to confirmed position
       if (progress && progress.stage) _applyRealStage(progress.stage);
