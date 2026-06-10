@@ -386,6 +386,39 @@ GENERATE_TEMPLATES = {
 # Остальные (если появятся в будущем) — через локальный Qwen.
 GEMINI_TEMPLATES = {"summary", "actions"}
 
+# ── Privacy Mode: map-reduce промпты ────────────────────────────
+# gpt-oss-20b (privacy-путь) не тянет длинный контекст одним вызовом: eager
+# attention → O(n²) память → CUDA OOM на 3-4ч транскриптах (ISS-1). Flask
+# передаёт в LabGPTOSS20B.generate_mapreduce ГОТОВЫЕ промпты: reduce — обычный
+# шаблон из GENERATE_TEMPLATES, map — этот. Оба с PRIVACY_TEXT_SLOT на месте
+# текста (подстановка через str.replace в контейнере — фигурные скобки
+# шаблонов не требуют экранирования).
+PRIVACY_TEXT_SLOT = "<<TRANSCRIPT_TEXT>>"
+
+PRIVACY_MAP_PROMPT = (
+    "You are compressing PART of a long meeting transcript into dense "
+    "factual notes. Notes from all parts will be combined and turned into a "
+    "final report by another step, so preserve everything a report writer "
+    "could need.\n\n"
+    "{lang_hint}\n\n"
+    "KEEP (verbatim where possible):\n"
+    "- decisions and agreements\n"
+    "- tasks and commitments with owner and deadline\n"
+    "- concrete numbers, dates, money amounts\n"
+    "- names of people, companies, products, places — EXACTLY as written, "
+    "original alphabet, never transliterate\n"
+    "- problems raised and their root causes\n"
+    "- distinct positions and arguments of speakers (attribute them: "
+    "[Name] argued that...)\n"
+    "- open questions\n\n"
+    "RULES: dense bullet points only; no introduction, no conclusion, no "
+    "meta-commentary; do NOT invent or interpret beyond the text; if this "
+    "part contains nothing substantive, output the single line 'No "
+    "substantive content.' Target 150-300 words.\n\n"
+    "==== TRANSCRIPT PART ====\n"
+    "<<TRANSCRIPT_TEXT>>"
+)
+
 # Детальность вывода (объём саммари / actions). Пресет → инструкция-модификатор,
 # подставляется в {detail_hint}. Default medium = пустая строка (базовое поведение).
 GENERATE_DETAILS = {"short", "medium", "detailed"}
@@ -2692,26 +2725,31 @@ def generate_endpoint():
     use_gemini = USE_MODAL and template_name in GEMINI_TEMPLATES and not privacy_mode
 
     # Gemini 2.5 Pro: контекст 2M токенов, влезает любой созвон без обрезки.
-    # gpt-oss-20b: ~32K context — feed full text too (similar capacity to Gemini at this scale).
+    # Privacy (gpt-oss-20b): полный текст уходит в map-reduce (см. ниже).
     # Qwen 7B (legacy fallback) — режем до 12k символов, иначе деградирует.
-    if use_gemini or privacy_mode:
-        text = full_text  # both gpt-oss-20b and Gemini have enough context
-    else:
-        text = full_text[:12000]
+    text = full_text if use_gemini else full_text[:12000]
     # Детальность вывода + фокус (опционально, дефолт = базовое поведение)
     extras = _build_generate_extras(data.get("detail"), data.get("focus") or "")
-    prompt = GENERATE_TEMPLATES[template_name].format(text=text, lang_hint=lang_hint, **extras)
 
-    # Privacy Mode path: self-hosted gpt-oss-20b on Modal L40S, no Gemini API call.
+    # Privacy Mode path: self-hosted gpt-oss-20b on Modal L40S, no Gemini API
+    # call. Текст не вшивается в один промпт — generate_mapreduce сам режет
+    # длинный транскрипт на окна (eager attention OOM'ится на длинном
+    # контексте, ISS-1); короткий идёт одним вызовом как раньше.
     if privacy_mode:
+        reduce_prompt = GENERATE_TEMPLATES[template_name].format(
+            text=PRIVACY_TEXT_SLOT, lang_hint=lang_hint, **extras)
+        map_prompt = PRIVACY_MAP_PROMPT.format(lang_hint=lang_hint)
         try:
             cls = _modal.Cls.from_name("transcriptor-v2", "LabGPTOSS20B")
             inst = cls()
-            call = inst.generate.spawn(prompt, 4096, 0.3)
+            call = inst.generate_mapreduce.spawn(
+                full_text, reduce_prompt, map_prompt, 4096, 0.3)
         except Exception as e:
             return jsonify({"error": f"privacy generate spawn failed: {e}"}), 502
         return jsonify({"job_id": JOB_PREFIX_GENERATE + call.object_id,
                         "status": "queued", "privacy_mode": True})
+
+    prompt = GENERATE_TEMPLATES[template_name].format(text=text, lang_hint=lang_hint, **extras)
 
     # Gemini-путь для summary/actions: внешний LLM, отдельная Modal функция.
     if use_gemini:

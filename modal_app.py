@@ -1408,6 +1408,42 @@ def _llm_chat_generate(
     return text
 
 
+# Сентинел для подстановки текста транскрипта в готовые промпты
+# generate_mapreduce. Flask собирает промпты сам (шаблон + языковые хинты +
+# detail/focus), а текст подставляется уже в GPU-контейнере — str.replace
+# вместо str.format, чтобы фигурные скобки в шаблонах не требовали
+# экранирования.
+MAPREDUCE_TEXT_SLOT = "<<TRANSCRIPT_TEXT>>"
+
+
+def _split_text_windows(text: str, window_chars: int) -> list[str]:
+    """Режет текст на окна ≤ window_chars по границам строк (реплик).
+
+    Сверхдлинная одиночная строка (без переносов) режется жёстко.
+    Пустой текст → одно пустое окно (вызывающий код не падает).
+    """
+    if len(text) <= window_chars:
+        return [text]
+    windows: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for line in text.split("\n"):
+        while len(line) > window_chars:
+            if cur:
+                windows.append("\n".join(cur))
+                cur, cur_len = [], 0
+            windows.append(line[:window_chars])
+            line = line[window_chars:]
+        if cur and cur_len + len(line) + 1 > window_chars:
+            windows.append("\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(line)
+        cur_len += len(line) + 1
+    if cur:
+        windows.append("\n".join(cur))
+    return windows
+
+
 def _strip_gpt_oss_analysis(text: str) -> str:
     """gpt-oss has two output channels (analysis + final) that the standard
     skip_special_tokens=True decoding flattens — leaving the analysis 'thinking'
@@ -1502,7 +1538,8 @@ class LabMamayLM9B:
     gpu="L40S",                  # 48GB needed: 12GB model + eager-attn O(n²) on long ctx
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
-    timeout=600,
+    timeout=2400,                # map-reduce на 4ч транскрипте — до ~25 последовательных
+                                 # LLM-вызовов в одном контейнере (~20 мин worst case)
     scaledown_window=120,
     min_containers=0,
 )
@@ -1541,13 +1578,91 @@ class LabGPTOSS20B:
         self.model.eval()
         print("[lab/gptoss20b] ready", flush=True)
 
-    @modal.method()
-    def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:
+    def _generate_once(self, prompt: str, max_tokens: int, temperature: float) -> str:
         return _llm_chat_generate(
             self.model, self.tokenizer, prompt, max_tokens, temperature,
             # gpt-oss specific: short thinking, then final answer
             template_kwargs={"reasoning_effort": "low"},
             post_process=_strip_gpt_oss_analysis,
+        )
+
+    @modal.method()
+    def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:
+        return self._generate_once(prompt, max_tokens, temperature)
+
+    @modal.method()
+    def generate_mapreduce(
+        self,
+        transcript_text: str,
+        reduce_prompt: str,
+        map_prompt: str,
+        max_tokens: int = 4096,
+        temperature: float = 0.3,
+        window_chars: int = 12000,
+    ) -> str:
+        """Map-reduce генерация для длинных транскриптов (Privacy Mode, ISS-1).
+
+        gpt-oss-20b в transformers поддерживает только eager attention —
+        матрица внимания [heads × seq × seq] это O(n²) памяти. На 3-4ч
+        транскрипте префилл пытается аллоцировать сотни ГБ → CUDA OOM.
+
+        Лечение (модель-агностичное): транскрипт режется на окна
+        ~window_chars, каждое сжимается в плотные заметки (map), финальный
+        ответ генерируется по объединённым заметкам исходным шаблоном
+        (reduce). Каждый отдельный контекст мал → нет O(n²) взрыва.
+
+        reduce_prompt / map_prompt приходят из Flask готовыми, с
+        MAPREDUCE_TEXT_SLOT на месте текста. Короткий транскрипт
+        (≤ window_chars) идёт одним вызовом — поведение идентично generate().
+
+        window_chars=12000 ≈ 8.5k токенов худшего случая (кириллица) —
+        eager-матрица ~19ГБ transient, безопасно на L40S 48GB.
+        """
+        windows = _split_text_windows(transcript_text, window_chars)
+        if len(windows) == 1:
+            return self._generate_once(
+                reduce_prompt.replace(MAPREDUCE_TEXT_SLOT, transcript_text),
+                max_tokens, temperature,
+            )
+
+        print(f"[lab/gptoss20b] map-reduce: {len(transcript_text)} chars → "
+              f"{len(windows)} windows", flush=True)
+        t0 = time.time()
+        notes: list[str] = []
+        for k, win in enumerate(windows):
+            part = self._generate_once(
+                map_prompt.replace(MAPREDUCE_TEXT_SLOT, win),
+                max_tokens=512, temperature=0.2,
+            )
+            notes.append(f"--- Part {k + 1}/{len(windows)} ---\n{part}")
+            print(f"[lab/gptoss20b] map {k + 1}/{len(windows)} done "
+                  f"({len(part)} chars, {time.time() - t0:.0f}s elapsed)", flush=True)
+        combined = "\n\n".join(notes)
+
+        # Заметки сами могут не влезть в безопасное окно (6-8ч записи) —
+        # сжимаем рекурсивно тем же map-промптом.
+        for _pass in range(3):
+            if len(combined) <= window_chars:
+                break
+            re_windows = _split_text_windows(combined, window_chars)
+            print(f"[lab/gptoss20b] collapse pass {_pass + 1}: "
+                  f"{len(combined)} chars → {len(re_windows)} windows", flush=True)
+            combined = "\n\n".join(
+                self._generate_once(
+                    map_prompt.replace(MAPREDUCE_TEXT_SLOT, w),
+                    max_tokens=512, temperature=0.2,
+                )
+                for w in re_windows
+            )
+        # Последний рубеж против OOM: усечь, но не упасть
+        if len(combined) > int(window_chars * 1.3):
+            print(f"[lab/gptoss20b] notes still {len(combined)} chars after "
+                  f"collapse — hard truncating", flush=True)
+            combined = combined[: int(window_chars * 1.3)]
+
+        return self._generate_once(
+            reduce_prompt.replace(MAPREDUCE_TEXT_SLOT, combined),
+            max_tokens, temperature,
         )
 
 
