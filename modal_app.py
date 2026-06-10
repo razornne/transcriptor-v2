@@ -206,6 +206,12 @@ _CORRECTION_INSTRUCTIONS: dict[str, str] = {
     ),
 }
 
+# Анти-галлюцинация Whisper: при подозрении на галлюцинацию (по таймстемпам
+# слов) пропускать тихие участки длиннее порога (сек). Требует
+# word_timestamps=True (у нас включён). Лечит мультиязычную кашу на сильно
+# повторяющемся контенте — Whisper зацикливается и начинает выдумывать (ISS-9).
+HALLUCINATION_SILENCE_S = float(os.environ.get("HALLUCINATION_SILENCE_S", "2.0"))
+
 # Gemini correction model. Flash дешёвый и быстрый — дефолт для всех.
 # Pro даёт лучшее качество на длинных контекстах — можно включать для Max
 # юзеров (override через env CORRECTION_MODEL=gemini-2.5-pro).
@@ -405,6 +411,7 @@ class Transcriptor:
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
                 no_speech_threshold=0.6,
+                hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
                 condition_on_previous_text=True,
                 vad_filter=True,
                 vad_parameters={
@@ -552,6 +559,7 @@ class Transcriptor:
                 compression_ratio_threshold=2.4,
                 log_prob_threshold=-1.0,
                 no_speech_threshold=0.6,
+                hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
                 condition_on_previous_text=True,
                 vad_filter=True,
                 vad_parameters={
