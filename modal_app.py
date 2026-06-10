@@ -202,7 +202,9 @@ GEMINI_CORRECTION_MODEL = os.environ.get("CORRECTION_MODEL", "gemini-2.5-flash")
     image=image,
     volumes={MODELS_DIR: volume},
     secrets=[hf_secret],
-    timeout=1200,                 # 20 мин макс (длинные созвоны)
+    timeout=2400,                 # 40 мин макс: монолит до 30 мин аудио + запас
+                                  # на best-quality (large-v3 ~3x медленнее turbo)
+                                  # и на удлинённые чанки long-пайплайна
     scaledown_window=300,         # держать тёплым 5 мин после последнего вызова
     retries=modal.Retries(max_retries=2, backoff_coefficient=1),  # retry on code-level exceptions
 )
@@ -1081,7 +1083,9 @@ def _plan_chunk_boundaries(duration: float, silences: list[tuple[float, float]])
 @app.function(
     image=orchestrator_image,
     secrets=[hf_secret],
-    timeout=7200,                # 2ч с запасом — оркестратор почти всё время ждёт GPU
+    timeout=14400,               # 4ч с запасом — оркестратор почти всё время ждёт GPU;
+                                 # при сериализации чанков (GPU-лимит) 4ч+ запись
+                                 # может легко выйти за старые 2ч
     scaledown_window=60,
     min_containers=0,
 )
