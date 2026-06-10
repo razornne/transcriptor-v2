@@ -117,7 +117,8 @@ web_image = (
 
 # Лёгкий CPU образ для оркестратора длинных записей (transcribe_long).
 # Режет аудио (ffmpeg), фанит GPU-воркеров transcribe_chunk, глобально
-# кластеризует спикеров (scikit-learn) и сшивает. Без torch/CUDA — дёшево,
+# кластеризует спикеров (собственная constrained-агломеративка на numpy,
+# sklearn больше не нужен) и сшивает. Без torch/CUDA — дёшево,
 # почти всё время ждёт GPU-воркеров (I/O bound).
 orchestrator_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -125,7 +126,6 @@ orchestrator_image = (
     .pip_install(
         "soundfile",
         "numpy",
-        "scikit-learn",
     )
 )
 
@@ -143,10 +143,18 @@ MAX_PARALLEL_CHUNKS = int(os.environ.get("MAX_PARALLEL_CHUNKS", "10"))
 MAX_CHUNK_LEN_S = int(os.environ.get("MAX_CHUNK_LEN_S", "1800"))
 # Порог cosine-расстояния для глобальной кластеризации спикеров между чанками.
 # Точка EER wespeaker-эмбеддингов (граница "тот же/другой спикер") ~0.5 distance.
-# 0.55 — чуть консервативнее EER. Меньше → больше спикеров (дробит), больше →
-# меньше (сливает). Было 0.7 — склеивало похожие голоса на звонках в одного.
+# Меньше → больше спикеров (дробит, дубли на швах), больше → меньше (сливает).
+# История: 0.7 склеивал похожие голоса на звонках 1-на-1 → опустили до 0.55 →
+# полезли ДУБЛИ одного человека на швах чанков (ISS-8). Теперь кластеризация
+# работает с cannot-link констрейнтом (спикеры одного чанка не сливаются —
+# pyannote их уже разделил в общем контексте), который структурно блокирует
+# старый фейл со склейкой, поэтому порог можно держать выше — 0.68 лечит швы.
 # Используется только если num_speakers не задан. Тюнится через env.
-GLOBAL_SPK_THRESHOLD = float(os.environ.get("GLOBAL_SPK_THRESHOLD", "0.55"))
+GLOBAL_SPK_THRESHOLD = float(os.environ.get("GLOBAL_SPK_THRESHOLD", "0.68"))
+# Сколько embedding'ов на локального спикера передаёт transcribe_chunk
+# оркестратору. Несколько векторов (вместо одного центроида) делают
+# average-linkage устойчивее к шумным сегментам (overlap, телефонное сжатие).
+EMB_PER_SPEAKER = int(os.environ.get("EMB_PER_SPEAKER", "6"))
 
 # Language prompts — зеркало из transcriber.py
 _LANG_PROMPTS: dict[str, str] = {
@@ -512,7 +520,7 @@ class Transcriptor:
 
         Returns:
           { "segments": [{speaker, start, end, text}, ...],   # chunk-relative
-            "embeddings": {"SPEAKER_00": [float, ...], ...},
+            "embeddings": {"SPEAKER_00": [[float, ...], ...], ...},  # до EMB_PER_SPEAKER векторов
             "vocab_additions": [term, ...] }
         """
         import soundfile as sf
@@ -617,10 +625,15 @@ class Transcriptor:
                 pass
 
     def _speaker_centroids(self, wav_path: str, annotation) -> dict:
-        """Считает усреднённый embedding (centroid) каждого локального спикера.
+        """Embedding'и каждого локального спикера для глобального сшивания.
 
-        Кропаем аудио по самым длинным сегментам спикера и усредняем
-        embedding'и. Возвращает {label: list[float]} (нативные Python float —
+        Кропаем аудио по самым длинным сегментам спикера и возвращаем до
+        EMB_PER_SPEAKER L2-нормированных векторов на спикера (НЕ один
+        centroid): несколько точек на голос делают average-linkage
+        кластеризацию в оркестраторе устойчивее к шумным сегментам —
+        один забитый overlap'ом вектор не утащит всё сравнение (ISS-8).
+
+        Возвращает {label: [[float, ...], ...]} (нативные Python float —
         Flask-контейнер без numpy не десериализует numpy типы).
         Версионно-независимо: не полагается на pyannote return_embeddings.
         """
@@ -629,32 +642,28 @@ class Transcriptor:
         if self.embedding_inference is None:
             return {}
 
-        centroids: dict[str, list[float]] = {}
+        out: dict[str, list[list[float]]] = {}
         for label in annotation.labels():
             timeline = annotation.label_timeline(label)
             segs = sorted(timeline, key=lambda s: s.duration, reverse=True)
-            vecs = []
-            for seg in segs[:10]:  # топ-10 самых длинных сегментов спикера
+            vecs: list[list[float]] = []
+            for seg in segs[: EMB_PER_SPEAKER + 4]:  # запас на неудачные кропы
+                if len(vecs) >= EMB_PER_SPEAKER:
+                    break
                 if seg.duration < 0.5:  # слишком короткие — embedding нестабилен
                     continue
                 try:
                     emb = self.embedding_inference.crop(wav_path, seg)
-                    vecs.append(np.asarray(emb, dtype="float32").reshape(-1))
                 except Exception as e:
                     print(f"[modal] embedding crop failed for {label}: {e}", flush=True)
                     continue
+                v = np.asarray(emb, dtype="float32").reshape(-1)
+                norm = float(np.linalg.norm(v))
+                if norm > 1e-8:
+                    vecs.append([float(x) for x in v / norm])
             if vecs:
-                # L2-нормализуем каждый сегментный embedding ДО усреднения —
-                # центроид = среднее направление (устойчивее для cosine, не
-                # перекошен магнитудой). Потом нормализуем сам центроид.
-                arr = np.stack(vecs)
-                arr = arr / np.clip(np.linalg.norm(arr, axis=1, keepdims=True), 1e-8, None)
-                centroid = arr.mean(axis=0)
-                cn = float(np.linalg.norm(centroid))
-                if cn > 1e-8:
-                    centroid = centroid / cn
-                centroids[label] = [float(x) for x in centroid]
-        return centroids
+                out[label] = vecs
+        return out
 
     def _correct_segments(self, segments: list[dict], language: str | None,
                           privacy_mode: bool = False,
@@ -1105,6 +1114,106 @@ def _plan_chunk_boundaries(duration: float, silences: list[tuple[float, float]])
     return [(points[i], points[i + 1]) for i in range(len(points) - 1)]
 
 
+def _cluster_speaker_embeddings(
+    chunk_ids: list[int],
+    vec_groups: list[list[list[float]]],
+    num_speakers: int | None,
+    threshold: float,
+) -> list[int]:
+    """Агломеративная кластеризация локальных спикеров между чанками
+    с cannot-link констрейнтом. Возвращает cluster_id для каждого элемента.
+
+    chunk_ids[i]  — индекс чанка, из которого пришёл локальный спикер i.
+    vec_groups[i] — его embedding'и (1+ векторов; нормализуются здесь).
+
+    Cannot-link: два локальных спикера ОДНОГО чанка — заведомо разные люди
+    (pyannote разделил их, слыша обоих в общем контексте) — их кластеры не
+    сливаются никогда. Это структурно блокирует склейку похожих голосов
+    (старый фейл на звонках 1-на-1, где оба спикера есть в каждом чанке)
+    и позволяет держать порог выше — лечит дубли одного человека на швах
+    чанков (ISS-8). Linkage: average по всем парам векторов двух кластеров.
+
+    При заданном num_speakers сливаем до k, игнорируя порог; если
+    cannot-link не даёт дойти до k (фантомный локальный спикер в чанке),
+    наименьшие кластеры вливаются в ближайший принудительно.
+    """
+    import numpy as np
+
+    n = len(chunk_ids)
+    if n == 0:
+        return []
+    if n == 1:
+        return [0]
+
+    mats = []
+    for g in vec_groups:
+        m = np.asarray(g, dtype="float64")
+        m = m / np.clip(np.linalg.norm(m, axis=1, keepdims=True), 1e-8, None)
+        mats.append(m)
+
+    # Парные расстояния элементов: средняя cosine-дистанция всех пар векторов
+    big = np.vstack(mats)
+    owners = np.repeat(np.arange(n), [m.shape[0] for m in mats])
+    dist = 1.0 - big @ big.T
+    D = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i + 1, n):
+            D[i, j] = D[j, i] = float(dist[np.ix_(owners == i, owners == j)].mean())
+
+    clusters: list[set[int]] = [{i} for i in range(n)]
+    chunksets: list[set[int]] = [{chunk_ids[i]} for i in range(n)]
+
+    def cdist(a: int, b: int) -> float:
+        s = sum(D[i, j] for i in clusters[a] for j in clusters[b])
+        return s / (len(clusters[a]) * len(clusters[b]))
+
+    def best_allowed_pair() -> tuple[int | None, int | None, float]:
+        best = (None, None, float("inf"))
+        for a in range(len(clusters)):
+            for b in range(a + 1, len(clusters)):
+                if chunksets[a] & chunksets[b]:
+                    continue  # cannot-link: общий чанк
+                d = cdist(a, b)
+                if d < best[2]:
+                    best = (a, b, d)
+        return best
+
+    def do_merge(a: int, b: int):
+        clusters[a] |= clusters[b]
+        chunksets[a] |= chunksets[b]
+        del clusters[b]
+        del chunksets[b]
+
+    target_k = num_speakers if (num_speakers and num_speakers >= 1) else None
+    while len(clusters) > (target_k or 1):
+        a, b, d = best_allowed_pair()
+        if a is None:
+            break  # допустимых слияний не осталось
+        if target_k is None and d >= threshold:
+            break
+        do_merge(a, b)
+
+    # Форс-фаза для явного num_speakers: вливаем наименьшие кластеры в
+    # ближайший, игнорируя cannot-link — лишние локальные спикеры в чанке
+    # обычно фантомы pyannote с парой коротких сегментов.
+    if target_k is not None:
+        while len(clusters) > target_k:
+            smallest = min(range(len(clusters)), key=lambda c: len(clusters[c]))
+            others = [c for c in range(len(clusters)) if c != smallest]
+            nearest = min(others, key=lambda c: cdist(smallest, c))
+            print(f"[long] force-merging phantom cluster (size "
+                  f"{len(clusters[smallest])}) to reach num_speakers={target_k}",
+                  flush=True)
+            a, b = sorted((smallest, nearest))
+            do_merge(a, b)
+
+    labels = [0] * n
+    for cid, members in enumerate(clusters):
+        for i in members:
+            labels[i] = cid
+    return labels
+
+
 @app.function(
     image=orchestrator_image,
     secrets=[hf_secret],
@@ -1217,52 +1326,48 @@ def transcribe_long(
         # 5. Глобальная кластеризация спикеров по centroid-эмбеддингам
         _progress(stage="merge")
         items: list[tuple[int, str]] = []   # (chunk_idx, local_label)
-        vecs: list[list[float]] = []
+        groups: list[list[list[float]]] = []
         for i, (_start, res) in enumerate(results):
             if not res:
                 continue  # упавший чанк — пропускаем (gap-маркер добавится при стиче)
             for label, vec in (res.get("embeddings") or {}).items():
-                if vec:
-                    items.append((i, label))
-                    vecs.append(vec)
+                if not vec:
+                    continue
+                # Новый формат — список векторов на спикера; старый (in-flight
+                # джобы во время деплоя) — один плоский вектор float'ов.
+                group = vec if isinstance(vec[0], (list, tuple)) else [vec]
+                items.append((i, label))
+                groups.append(group)
 
         # diag: сколько локальных спикеров pyannote нашёл в каждом чанке
         per_chunk: dict[int, int] = {}
         for (ci, _lbl) in items:
             per_chunk[ci] = per_chunk.get(ci, 0) + 1
-        print(f"[long] centroids={len(vecs)} per-chunk-speakers={[per_chunk.get(i, 0) for i in range(n)]} num_speakers={num_speakers}", flush=True)
+        print(f"[long] speakers-with-embeddings={len(items)} per-chunk-speakers={[per_chunk.get(i, 0) for i in range(n)]} num_speakers={num_speakers}", flush=True)
 
         label_map: dict[tuple[int, str], int] = {}
-        if len(vecs) == 1:
-            label_map = {items[0]: 0}
-        elif len(vecs) >= 2:
-            from sklearn.cluster import AgglomerativeClustering
-            X = np.stack([np.asarray(v, dtype="float64") for v in vecs])
-            if num_speakers and num_speakers >= 1:
-                k = min(num_speakers, len(vecs))
-                clusterer = AgglomerativeClustering(
-                    n_clusters=k, metric="cosine", linkage="average",
-                )
-            else:
-                clusterer = AgglomerativeClustering(
-                    n_clusters=None, distance_threshold=GLOBAL_SPK_THRESHOLD,
-                    metric="cosine", linkage="average",
-                )
-            cluster_ids = clusterer.fit_predict(X)
+        if items:
+            chunk_ids = [ci for ci, _ in items]
+            cluster_ids = _cluster_speaker_embeddings(
+                chunk_ids, groups, num_speakers, GLOBAL_SPK_THRESHOLD,
+            )
             label_map = {items[kk]: int(cluster_ids[kk]) for kk in range(len(items))}
-            # diag: разделимость центроидов (off-diagonal cosine distance).
-            # Если min мал (<0.3) — голоса почти неразличимы для embedding-модели
-            # (телефон/похожие голоса), нужен num_speakers или ниже порог.
+            # diag: разделимость спикеров (off-diagonal cosine distance по
+            # усреднённым векторам спикеров). Если min мал (<0.3) — голоса
+            # почти неразличимы для embedding-модели (телефон/похожие голоса),
+            # надёжнее задать num_speakers вручную.
             try:
+                X = np.stack([np.asarray(g, dtype="float64").mean(axis=0) for g in groups])
                 Xn = X / np.clip(np.linalg.norm(X, axis=1, keepdims=True), 1e-8, None)
-                dist = 1.0 - (Xn @ Xn.T)
-                off = dist[~np.eye(len(X), dtype=bool)]
-                print(f"[long] global_speakers={len(set(cluster_ids))} "
-                      f"centroid_cos_dist min={off.min():.2f} mean={off.mean():.2f} max={off.max():.2f} "
-                      f"thr={GLOBAL_SPK_THRESHOLD}", flush=True)
-            except Exception as _e:
+                if len(X) > 1:
+                    dist = 1.0 - (Xn @ Xn.T)
+                    off = dist[~np.eye(len(X), dtype=bool)]
+                    print(f"[long] global_speakers={len(set(cluster_ids))} "
+                          f"centroid_cos_dist min={off.min():.2f} mean={off.mean():.2f} max={off.max():.2f} "
+                          f"thr={GLOBAL_SPK_THRESHOLD}", flush=True)
+            except Exception:
                 pass
-        if not vecs:
+        else:
             print("[long] no speaker embeddings — falling back to per-chunk labels", flush=True)
 
         # 6. Стич: offset таймстемпов + релейбл local→global + сорт по времени
