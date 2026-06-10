@@ -141,6 +141,36 @@ MAX_PARALLEL_CHUNKS = int(os.environ.get("MAX_PARALLEL_CHUNKS", "10"))
 # Жёсткий кап длины одного чанка: 1800с аудио обрабатывается за ~10-15 мин
 # даже на best-quality — укладывается в таймаут Transcriptor (2400с) с запасом.
 MAX_CHUNK_LEN_S = int(os.environ.get("MAX_CHUNK_LEN_S", "1800"))
+# Нахлёст чанков (сек с каждой стороны). Резы идут по тишине, но при жёстком
+# фоллбэке (тишины рядом нет) слово рвалось пополам, и Whisper терял контекст
+# на границе. Пад даёт дослушать фразу через шов; дедуп — в transcribe_chunk
+# по midpoint Whisper-сегмента в core-диапазон (_trim_to_core), поэтому один
+# и тот же кусок речи в финальный транскрипт попадает ровно один раз.
+CHUNK_PAD_S = float(os.environ.get("CHUNK_PAD_S", "3.0"))
+
+
+def _trim_to_core(segments: list[dict], lead_s: float, core_len_s: float,
+                  is_last: bool) -> list[dict]:
+    """Отбрасывает Whisper-сегменты из пад-зон чанка (ISS-13/стыки).
+
+    Сегмент принадлежит чанку, если СЕРЕДИНА сегмента лежит в core-диапазоне
+    [lead_s, lead_s + core_len_s). Соседние чанки покрывают пады друг друга,
+    midpoint-правило разбивает речь на шве детерминированно: один и тот же
+    сегмент (одна середина) остаётся ровно в одном чанке. Для последнего
+    чанка правая граница открыта (хвост записи).
+
+    Вызывается ДО merge со спикер-турнами — на мелких Whisper-сегментах
+    (≤30с), пока спикер-блоки не склеились в многоминутные.
+    """
+    out = []
+    for seg in segments:
+        mid = (float(seg["start"]) + float(seg["end"])) / 2.0
+        if mid < lead_s:
+            continue
+        if not is_last and mid >= lead_s + core_len_s:
+            continue
+        out.append(seg)
+    return out
 # Порог cosine-расстояния для глобальной кластеризации спикеров между чанками.
 # Точка EER wespeaker-эмбеддингов (граница "тот же/другой спикер") ~0.5 distance.
 # Меньше → больше спикеров (дробит, дубли на швах), больше → меньше (сливает).
@@ -228,7 +258,11 @@ GEMINI_CORRECTION_MODEL = os.environ.get("CORRECTION_MODEL", "gemini-2.5-flash")
     timeout=2400,                 # 40 мин макс: монолит до 30 мин аудио + запас
                                   # на best-quality (large-v3 ~3x медленнее turbo)
                                   # и на удлинённые чанки long-пайплайна
-    scaledown_window=300,         # держать тёплым 5 мин после последнего вызова
+    scaledown_window=150,         # было 300: после длинной джобы 10 GPU-контейнеров
+                                  # висели тёплыми по 5 мин = ~50 GPU-мин idle-хвоста
+                                  # (~30% стоимости 4ч джобы). 150с хватает для
+                                  # follow-up run_llm (title стартует сразу после
+                                  # транскрипции) и повторной записи подряд
     retries=modal.Retries(max_retries=2, backoff_coefficient=1),  # retry on code-level exceptions
 )
 class Transcriptor:
@@ -513,6 +547,9 @@ class Transcriptor:
         quality: str = "fast",
         privacy_mode: bool = False,
         correction_hints: str = "",
+        core_lead_s: float = 0.0,
+        core_len_s: float | None = None,
+        is_last_chunk: bool = True,
     ) -> dict:
         """Обрабатывает ОДИН чанк длинной записи (для transcribe_long).
 
@@ -524,6 +561,12 @@ class Transcriptor:
           • дополнительно возвращает centroid-эмбеддинги каждого ЛОКАЛЬНОГО
             спикера, чтобы оркестратор глобально сшил спикеров между чанками;
           • таймстемпы chunk-relative (оркестратор сам добавит offset).
+
+        core_lead_s / core_len_s / is_last_chunk — границы "ядра" чанка внутри
+        паддед-аудио (оркестратор режет с нахлёстом CHUNK_PAD_S): Whisper
+        слышит контекст через шов, но сегменты из пад-зон отбрасываются
+        (_trim_to_core) — их отдаёт соседний чанк. Дефолты = трим выключен
+        (обратная совместимость).
 
         Returns:
           { "segments": [{speaker, start, end, text}, ...],   # chunk-relative
@@ -582,6 +625,9 @@ class Transcriptor:
                 for s in segments_iter
                 if s.text.strip()
             ]
+            # Дедуп пад-зон: текст из нахлёста отдаёт соседний чанк
+            if core_len_s is not None:
+                segments = _trim_to_core(segments, core_lead_s, core_len_s, is_last_chunk)
             if not segments:
                 return {"segments": [], "embeddings": {}, "vocab_additions": []}
 
@@ -1283,17 +1329,26 @@ def transcribe_long(
         n = len(boundaries)
         print(f"[long] duration={duration:.0f}s → {n} chunks (silences={len(silences)})", flush=True)
 
-        # 3. Фан-аут: извлекаем чанк и сразу спавним воркер (память — один чанк за раз)
+        # 3. Фан-аут: извлекаем чанк и сразу спавним воркер (память — один чанк за раз).
+        # Каждый чанк вырезается с нахлёстом CHUNK_PAD_S с обеих сторон: Whisper
+        # дослушивает фразу через шов (hard-cut больше не рвёт слово), а
+        # transcribe_chunk отбрасывает сегменты из пад-зон (_trim_to_core) —
+        # дубликатов на стыках нет. pad_starts[i] — глобальное время начала
+        # ПАДДЕД-аудио чанка (нужно для оффсета при стиче).
         _progress(stage="processing", chunks_total=n, chunks_done=0)
         calls = []
+        pad_starts: list[float] = []
         for i, (start, end) in enumerate(boundaries):
             ch_fd, ch_path = tempfile.mkstemp(suffix=f".chunk{i}.wav")
             os.close(ch_fd)
             chunk_paths.append(ch_path)
+            ss = max(0.0, start - CHUNK_PAD_S)
+            to = min(duration, end + CHUNK_PAD_S)
+            pad_starts.append(ss)
             # -ss/-t (не -to): -t = длительность, однозначно во всех версиях
             # ffmpeg (в отличие от -to, который может быть абсолютным/относительным).
             subprocess.run(
-                ["ffmpeg", "-y", "-ss", str(start), "-t", str(end - start),
+                ["ffmpeg", "-y", "-ss", str(ss), "-t", str(to - ss),
                  "-i", wav_path, "-ar", "16000", "-ac", "1", ch_path],
                 check=True, capture_output=True,
             )
@@ -1307,6 +1362,9 @@ def transcribe_long(
                 pass
             call = Transcriptor().transcribe_chunk.spawn(
                 chunk_bytes, language, prompt, quality, privacy_mode, correction_hints,
+                core_lead_s=start - ss,
+                core_len_s=end - start,
+                is_last_chunk=(i == n - 1),
             )
             calls.append((i, start, call))
 
@@ -1378,18 +1436,21 @@ def transcribe_long(
         else:
             print("[long] no speaker embeddings — falling back to per-chunk labels", flush=True)
 
-        # 6. Стич: offset таймстемпов + релейбл local→global + сорт по времени
+        # 6. Стич: offset таймстемпов + релейбл local→global + сорт по времени.
+        # Таймстемпы чанка относительны ПАДДЕД-аудио → оффсет = pad_starts[i]
+        # (начало паддед-вырезки), не start ядра.
         all_segs: list[dict] = []
         for i, (start, res) in enumerate(results):
             if not res:
                 continue
+            offset = pad_starts[i] if i < len(pad_starts) else start
             for seg in (res.get("segments") or []):
                 cluster = label_map.get((i, seg["speaker"]))
                 # Фоллбэк если эмбеддинга не было — уникальный per-chunk лейбл
                 key = cluster if cluster is not None else f"c{i}_{seg['speaker']}"
                 all_segs.append({
-                    "start": float(seg["start"]) + start,
-                    "end":   float(seg["end"]) + start,
+                    "start": float(seg["start"]) + offset,
+                    "end":   float(seg["end"]) + offset,
                     "text":  seg["text"],
                     "_k":    key,
                 })
@@ -1586,65 +1647,9 @@ def _strip_gpt_oss_analysis(text: str) -> str:
 # A100 80GB has comfortable headroom. Scale-to-zero so we only pay when
 # someone runs a Compare or a Privacy Mode generation.
 
-@app.cls(
-    image=image,
-    gpu="A10G",                  # 9B in int4 ~5GB — easily fits A10G's 24GB
-    volumes={MODELS_DIR: volume},
-    secrets=[hf_secret],
-    timeout=600,
-    scaledown_window=120,
-    min_containers=0,
-)
-class LabMamayLM9B:
-    """MamayLM — Ukrainian-focused fine-tune of Google Gemma 2 9B.
-    Built specifically for ru/uk; expected to outperform generic models
-    on Cyrillic analytical tasks despite being much smaller (9B vs 32B).
-
-    Note: requires accepting Gemma 2 license on HuggingFace before
-    HF_TOKEN can download. Set MAMAY_MODEL_ID env var to override the
-    repo if the default doesn't match the actual release name."""
-
-    @modal.enter()
-    def load_model(self):
-        import os, torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-        from huggingface_hub import login
-
-        hf_token = os.environ.get("HF_TOKEN")
-        if hf_token:
-            try: login(token=hf_token)
-            except Exception: pass
-
-        # Default repo guess — verify against HF or override via env
-        model_id = os.environ.get(
-            "MAMAY_MODEL_ID",
-            "INSAIT-Institute/MamayLM-Gemma-2-9B-IT-v0.1",
-        )
-        print(f"[lab/mamaylm] loading {model_id}...", flush=True)
-        bnb = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-        )
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_id, cache_dir=f"{MODELS_DIR}/lab", token=hf_token,
-        )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            quantization_config=bnb,
-            device_map="cuda",
-            cache_dir=f"{MODELS_DIR}/lab",
-            token=hf_token,
-            attn_implementation="sdpa",
-        )
-        self.model.eval()
-        print("[lab/mamaylm] ready", flush=True)
-
-    @modal.method()
-    def generate(self, prompt: str, max_tokens: int = 2048, temperature: float = 0.3) -> str:
-        return _llm_chat_generate(self.model, self.tokenizer, prompt, max_tokens, temperature)
-
+# LabMamayLM9B (Gemma 2 9B UA fine-tune) удалён 2026-06-10: Lab-сравнение
+# завершено, для Privacy Mode выбран gpt-oss-20b. Класс висел в деплое мёртвым
+# грузом (A10G, большой GPU-образ). Вернуть при необходимости — git history.
 
 @app.cls(
     image=image,
