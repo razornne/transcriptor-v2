@@ -1158,20 +1158,34 @@ def transcribe_long(
             )
             calls.append((i, start, call))
 
-        # 4. Сбор результатов (чанки крутятся параллельно на Modal)
-        results: list[tuple[float, dict]] = [None] * n  # type: ignore
+        # 4. Сбор результатов (чанки крутятся параллельно на Modal).
+        # Падение одного чанка (после Modal-ретраев) НЕ должно убивать всю
+        # джобу: логируем, помечаем как gap и продолжаем — частичный транскрипт
+        # 4ч записи ценнее, чем ничего (ISS-2).
+        results: list[tuple[float, dict | None]] = [None] * n  # type: ignore
         done = 0
+        failed_chunks: list[int] = []
         for i, start, call in calls:
-            res = call.get()
+            try:
+                res = call.get()
+            except Exception as e:
+                print(f"[long] chunk {i + 1}/{n} FAILED after retries: {e}", flush=True)
+                failed_chunks.append(i)
+                res = None
             results[i] = (start, res)
             done += 1
-            _progress(stage="processing", chunks_total=n, chunks_done=done)
+            _progress(stage="processing", chunks_total=n, chunks_done=done,
+                      chunks_failed=len(failed_chunks))
+        if len(failed_chunks) == n:
+            raise RuntimeError(f"all {n} chunks failed — cannot produce a transcript")
 
         # 5. Глобальная кластеризация спикеров по centroid-эмбеддингам
         _progress(stage="merge")
         items: list[tuple[int, str]] = []   # (chunk_idx, local_label)
         vecs: list[list[float]] = []
         for i, (_start, res) in enumerate(results):
+            if not res:
+                continue  # упавший чанк — пропускаем (gap-маркер добавится при стиче)
             for label, vec in (res.get("embeddings") or {}).items():
                 if vec:
                     items.append((i, label))
@@ -1219,6 +1233,8 @@ def transcribe_long(
         # 6. Стич: offset таймстемпов + релейбл local→global + сорт по времени
         all_segs: list[dict] = []
         for i, (start, res) in enumerate(results):
+            if not res:
+                continue
             for seg in (res.get("segments") or []):
                 cluster = label_map.get((i, seg["speaker"]))
                 # Фоллбэк если эмбеддинга не было — уникальный per-chunk лейбл
@@ -1229,19 +1245,41 @@ def transcribe_long(
                     "text":  seg["text"],
                     "_k":    key,
                 })
+
+        # Gap-маркеры за упавшие чанки: явная дыра в транскрипте честнее, чем
+        # тихо пропавшие ~20 минут. Спикер — SPEAKER_UNKNOWN, в нумерацию
+        # глобальных спикеров гэпы не попадают.
+        _GAP_TEXTS = {
+            "ru": "[~{m} мин аудио не удалось обработать]",
+            "uk": "[~{m} хв аудіо не вдалося обробити]",
+            "pl": "[~{m} min nagrania nie udało się przetworzyć]",
+            "en": "[~{m} min of audio could not be processed]",
+        }
+        for i in failed_chunks:
+            g_start, g_end = boundaries[i]
+            tmpl = _GAP_TEXTS.get(language or "", _GAP_TEXTS["en"])
+            all_segs.append({
+                "start": g_start,
+                "end":   g_end,
+                "text":  tmpl.format(m=max(1, round((g_end - g_start) / 60))),
+                "_k":    ("gap", i),
+            })
         all_segs.sort(key=lambda s: s["start"])
 
         # Глобальная нумерация спикеров по времени первого появления
         order: dict = {}
         for s in all_segs:
+            if isinstance(s["_k"], tuple):
+                continue  # gap-маркер — не спикер
             if s["_k"] not in order:
                 order[s["_k"]] = len(order)
 
         # 7. Re-merge соседних сегментов одного (глобального) спикера
         final: list[dict] = []
         for s in all_segs:
-            spk = f"SPEAKER_{order[s['_k']]:02d}"
-            if final and final[-1]["speaker"] == spk:
+            is_gap = isinstance(s["_k"], tuple)
+            spk = "SPEAKER_UNKNOWN" if is_gap else f"SPEAKER_{order[s['_k']]:02d}"
+            if not is_gap and final and final[-1]["speaker"] == spk:
                 final[-1]["end"]   = s["end"]
                 final[-1]["text"] += " " + s["text"]
             else:
@@ -1251,6 +1289,8 @@ def transcribe_long(
         vocab: list[dict] = []
         seen: set[str] = set()
         for _i, (_start, res) in enumerate(results):
+            if not res:
+                continue
             for p in (res.get("vocab_additions") or []):
                 # tolerate старый формат (str) на случай in-flight несовместимости
                 key = (p.get("right") if isinstance(p, dict) else p) or ""
@@ -1259,8 +1299,10 @@ def transcribe_long(
                     seen.add(kl)
                     vocab.append(p)
 
-        _progress(stage="correct", chunks_total=n, chunks_done=n)
-        print(f"[long] done: {len(final)} segments, {len(order)} speakers, vocab+{len(vocab)}", flush=True)
+        _progress(stage="correct", chunks_total=n, chunks_done=n,
+                  chunks_failed=len(failed_chunks))
+        print(f"[long] done: {len(final)} segments, {len(order)} speakers, "
+              f"vocab+{len(vocab)}, failed_chunks={failed_chunks or 'none'}", flush=True)
         return {"segments": final, "vocab_additions": vocab}
 
     finally:
