@@ -129,9 +129,18 @@ orchestrator_image = (
     )
 )
 
-# Длина чанка для длинных записей (сек). 1200 = 20 мин — каждый чанк-джоб
-# укладывается в таймаут Transcriptor (1200с) с большим запасом.
+# Длина чанка для длинных записей (сек). 1200 = 20 мин — базовая цель;
+# реальная длина растягивается _plan_chunk_boundaries так, чтобы все чанки
+# влезли в одну параллельную волну (см. MAX_PARALLEL_CHUNKS).
 CHUNK_LEN_S = int(os.environ.get("CHUNK_LEN_S", "1200"))
+# Лимит параллельных GPU-контейнеров на аккаунте Modal. Чанков больше этого
+# числа — вторая волна и ~2x wall-clock. Поэтому планировщик чанков целится
+# в ≤ MAX_PARALLEL_CHUNKS чанков, удлиняя каждый (та же суммарная GPU-минута,
+# сжатый wall-clock).
+MAX_PARALLEL_CHUNKS = int(os.environ.get("MAX_PARALLEL_CHUNKS", "10"))
+# Жёсткий кап длины одного чанка: 1800с аудио обрабатывается за ~10-15 мин
+# даже на best-quality — укладывается в таймаут Transcriptor (2400с) с запасом.
+MAX_CHUNK_LEN_S = int(os.environ.get("MAX_CHUNK_LEN_S", "1800"))
 # Порог cosine-расстояния для глобальной кластеризации спикеров между чанками.
 # Точка EER wespeaker-эмбеддингов (граница "тот же/другой спикер") ~0.5 distance.
 # 0.55 — чуть консервативнее EER. Меньше → больше спикеров (дробит), больше →
@@ -1059,22 +1068,38 @@ def _parse_silences(stderr: str) -> list[tuple[float, float]]:
 
 
 def _plan_chunk_boundaries(duration: float, silences: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """Планирует границы чанков ~CHUNK_LEN_S, привязывая разрезы к ближайшим
-    точкам тишины (чтобы не резать посреди слова). Фоллбэк — жёсткий рез.
+    """Планирует границы чанков, привязывая разрезы к ближайшим точкам тишины
+    (чтобы не резать посреди слова). Фоллбэк — жёсткий рез.
+
+    Число чанков выбирается так, чтобы все они влезли в одну параллельную
+    волну GPU (≤ MAX_PARALLEL_CHUNKS): для 4ч записи это ~24-мин чанки вместо
+    12×20-мин в две волны → ~2x по wall-clock при той же суммарной GPU-минуте.
+    Длина чанка не превышает MAX_CHUNK_LEN_S (кап под таймаут Transcriptor).
     """
+    import math
+
     if duration <= CHUNK_LEN_S * 1.5:
         return [(0.0, duration)]
 
+    n = math.ceil(duration / CHUNK_LEN_S)
+    if n > MAX_PARALLEL_CHUNKS:
+        # Меньше чанков, длиннее каждый — но не длиннее жёсткого капа.
+        # Если даже с капом чанков больше лимита (5ч+) — принимаем 2 волны.
+        n = max(MAX_PARALLEL_CHUNKS, math.ceil(duration / MAX_CHUNK_LEN_S))
+    chunk_len = duration / n
+
     sil_mids = [(s + e) / 2 for s, e in silences]
-    window = max(120.0, CHUNK_LEN_S * 0.25)  # окно поиска тишины вокруг цели
+    window = max(120.0, chunk_len * 0.25)  # окно поиска тишины вокруг цели
     cuts: list[float] = []
-    target = float(CHUNK_LEN_S)
-    while target < duration - CHUNK_LEN_S * 0.5:
-        floor = (cuts[-1] if cuts else 0.0) + 60.0  # минимум 60с от прошлого реза
-        candidates = [m for m in sil_mids if abs(m - target) < window and m > floor]
-        cut = min(candidates, key=lambda m: abs(m - target)) if candidates else target
+    # Цели фиксированы на i*chunk_len (не относительно прошлого реза) — drift
+    # от снэппинга к тишине не накапливается, чанков выходит ровно n.
+    for i in range(1, n):
+        target = i * chunk_len
+        lo = (cuts[-1] if cuts else 0.0) + 60.0  # минимум 60с от прошлого реза
+        hi = duration - 60.0
+        candidates = [m for m in sil_mids if abs(m - target) < window and lo < m < hi]
+        cut = min(candidates, key=lambda m: abs(m - target)) if candidates else min(max(target, lo), hi)
         cuts.append(cut)
-        target = cut + CHUNK_LEN_S
 
     points = [0.0] + cuts + [duration]
     return [(points[i], points[i + 1]) for i in range(len(points) - 1)]
@@ -1157,6 +1182,12 @@ def transcribe_long(
             )
             with open(ch_path, "rb") as f:
                 chunk_bytes = f.read()
+            # Файл чанка больше не нужен — байты ушли в spawn. Чистим сразу,
+            # иначе к концу джобы на диске лежит полный дубль записи в wav.
+            try:
+                os.remove(ch_path)
+            except OSError:
+                pass
             call = Transcriptor().transcribe_chunk.spawn(
                 chunk_bytes, language, prompt, quality, privacy_mode, correction_hints,
             )
