@@ -915,10 +915,15 @@ def _require_jwt():
     if not path.startswith("/api/") or path in _PUBLIC_API_PATHS:
         return None
 
-    # Если SUPABASE_URL не задан — считаем что auth не настроен (локальная разработка).
-    # На Modal должен быть выставлен через Secret.
+    # Если SUPABASE_URL не задан — auth не настроен. В локальной разработке
+    # это сознательный режим (пропускаем). В Modal-режиме это значит, что
+    # секрет сломан (например, --force без SUPABASE_URL) — МОЛЧА отключать
+    # auth нельзя, иначе все /api/* становятся публичными. Отдаём 503.
     jwks_client = _get_jwks_client()
     if jwks_client is None:
+        if USE_MODAL:
+            print("[auth] FATAL: SUPABASE_URL missing in Modal mode — refusing requests", flush=True)
+            return jsonify({"error": "auth is not configured on the server"}), 503
         return None
 
     auth_header = request.headers.get("Authorization", "")
@@ -2791,9 +2796,10 @@ def generate_endpoint():
 # returns side-by-side results so we can pick the best candidate for
 # Privacy Mode (Max + Team feature replacing Gemini with self-hosted).
 
+# mamaylm (LabMamayLM9B) удалён из деплоя 2026-06-10 — сравнение завершено,
+# для Privacy Mode выбран gpt-oss-20b. Вернуть: git history (modal_app.py).
 LAB_MODELS = {
     "gemini":    {"label": "Gemini 2.5 Pro",                "modal_fn": ("gemini_generate", None)},
-    "mamaylm":   {"label": "MamayLM 9B (Gemma 2 / UA)",     "modal_fn": ("LabMamayLM9B",  "generate")},
     "gptoss20b": {"label": "gpt-oss-20b (L40S MXFP4)",      "modal_fn": ("LabGPTOSS20B",  "generate")},
 }
 
