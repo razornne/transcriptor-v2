@@ -42,10 +42,11 @@ Modal Transcriptor (A10G GPU, scaledown_window=300)
    - Gemini 2.5 Flash REST call (direct from container) — STT correction
    - методы: transcribe_full (монолит), transcribe_chunk (один чанк), run_llm
 
-Modal transcribe_long (CPU orchestrator, timeout 7200с)  ← ДЛИННЫЕ ЗАПИСИ
-   - ffmpeg silence-aware split на ~20-мин чанки
+Modal transcribe_long (CPU orchestrator, timeout 14400с)  ← ДЛИННЫЕ ЗАПИСИ
+   - ffmpeg silence-aware split: ≤10 чанков одной GPU-волной (20-30 мин каждый)
    - параллельный fan-out в Transcriptor.transcribe_chunk на нескольких A10G
-   - глобальное сшивание спикеров (sklearn AgglomerativeClustering по cosine)
+   - упавший чанк → gap-маркер, не валит джобу (per-chunk resilience)
+   - глобальное сшивание спикеров (своя cannot-link агломеративка по cosine)
    - стич + релейбл + re-merge. Контракт ответа = transcribe_full
 
 Modal gemini_generate (CPU, scaledown_window=60)
@@ -96,11 +97,11 @@ Supabase Postgres
   - `web_image` — лёгкий CPU образ (Flask + flask-cors + pyjwt[crypto] + requests + stripe)
   - `Transcriptor` (cls, A10G) — `load_models()` грузит **две модели Whisper** (turbo + large-v3 для Max), pyannote, **wespeaker embedding model** (для сшивания чанков, cache на Volume), Qwen в `@modal.enter()`. Методы:
     - `transcribe_full(audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode, correction_hints)` → `{"segments": [...], "vocab_additions": [...]}`. Монолит для коротких записей. Выбирает модель Whisper по `quality`. Pyannote `min_speakers=1, max_speakers=6` если `num_speakers` не задан. После merge — Gemini correction.
-    - `transcribe_chunk(wav_bytes, language, prompt, quality, privacy_mode, correction_hints)` — обрабатывает ОДИН чанк длинной записи (готовый 16k wav). Как transcribe_full, но дополнительно возвращает `embeddings` (centroid каждого локального спикера, через `_speaker_centroids`) для глобального сшивания. Per-chunk не форсит num_speakers.
+    - `transcribe_chunk(wav_bytes, language, prompt, quality, privacy_mode, correction_hints)` — обрабатывает ОДИН чанк длинной записи (готовый 16k wav). Как transcribe_full, но дополнительно возвращает `embeddings` (до `EMB_PER_SPEAKER` L2-нормированных векторов на локального спикера, через `_speaker_centroids`) для глобального сшивания. Per-chunk не форсит num_speakers.
     - `run_llm(prompt, max_tokens, temperature)` — title / chat / tags через Qwen 7B.
   - `transcribe_long(audio_bytes, ...)` — **CPU оркестратор длинных записей** (`orchestrator_image`, timeout 7200с). ffmpeg silence-aware split (`_plan_chunk_boundaries`, `_parse_silences`) на `CHUNK_LEN_S`-чанки → `Transcriptor().transcribe_chunk.spawn(...)` параллельно → глобальная кластеризация спикеров (`sklearn AgglomerativeClustering`, cosine, `GLOBAL_SPK_THRESHOLD`) → стич с offset + релейбл local→global + re-merge. Контракт ответа = transcribe_full. Прогресс в modal.Dict ("chunk k/N").
   - `_correct_segments` стратегия: Gemini 2.5 Flash → Qwen fallback на ошибке. `_correct_segments_gemini` принимает `correction_hints` (пары wrong→right юзера) + собирает `vocab_additions` (теперь **list of dicts** `{wrong, right}` через `_extract_vocab_pairs`/difflib).
-  - **Env-константы:** `CHUNK_LEN_S` (1200, длина чанка), `GLOBAL_SPK_THRESHOLD` (0.55, cosine-порог сшивания спикеров — ниже = больше спикеров), `WHISPER_MODEL`, `LOAD_BEST_QUALITY`, `EMBEDDING_MODEL`, `CORRECTION_MODEL`, `GEMINI_MODEL`.
+  - **Env-константы:** `CHUNK_LEN_S` (1200, базовая длина чанка), `MAX_PARALLEL_CHUNKS` (10, лимит GPU-волны — планировщик целится в ≤ этого числа чанков), `MAX_CHUNK_LEN_S` (1800, кап длины чанка), `GLOBAL_SPK_THRESHOLD` (0.68, cosine-порог сшивания спикеров при cannot-link кластеризации — ниже = больше спикеров), `EMB_PER_SPEAKER` (6, embedding'ов на локального спикера), `HALLUCINATION_SILENCE_S` (2.0, анти-галлюцинация Whisper), `WHISPER_MODEL`, `LOAD_BEST_QUALITY`, `EMBEDDING_MODEL`, `CORRECTION_MODEL`, `GEMINI_MODEL`.
   - `gemini_generate(prompt, max_output_tokens, temperature)` — CPU функция на `web_image` для summary/actions через Gemini 2.5 **Pro**. Промпт строится с `{detail_hint}`/`{focus_hint}` (детальность + фокус).
   - `flask_app()` — `@modal.wsgi_app()` декоратор. Принудительно `USE_MODAL=true`.
 
@@ -240,7 +241,10 @@ $env:USE_MODAL = "true"
 python app.py
 ```
 
-Нет тестов, нет линтера, нет билд-шага.
+Линтера и билд-шага нет. **Тесты есть**: `tests/test_*.py` — чистая логика
+(merger, планировщик чанков, кластеризация спикеров, map-reduce сплиттер).
+Запуск: `python tests/test_merger.py` (или все: каждый файл — самодостаточный
+runner; merger-тесты идут на голом Python, остальным нужен numpy/modal из venv).
 
 ## Frontend (templates/index.html) — ключевые куски
 
@@ -407,14 +411,14 @@ Toggle в Settings → Subscription tab. Видим только Max и Team pla
 | Whisper (transcription) | Modal A10G | Modal A10G (unchanged) |
 | Pyannote (diarization) | Modal A10G | Modal A10G (unchanged) |
 | STT correction | Gemini 2.5 Flash REST | Qwen 7B on same A10G |
-| Summary / Action items | Gemini 2.5 Pro REST | gpt-oss-20b on L40S |
+| Summary / Action items | Gemini 2.5 Pro REST | gpt-oss-20b on L40S (map-reduce на длинных, см. ниже) |
 
 **Backend gating** (`app.py`):
 - `PRIVACY_MODE_ALLOWED_PLANS = {"max", "team"}`
 - `_privacy_mode_active(profile, effective_plan)` — true только если флаг ON И plan eligible (defence-in-depth: даже если юзер на Pro как-то выставил флаг — backend игнорит)
 - `/api/profile/privacy-mode POST` отвергает с 402 если plan ниже Max
 - `/api/transcribe` читает privacy_mode из профиля → пассует в `Transcriptor.transcribe_full.spawn(..., privacy_mode=True)` → `_correct_segments(privacy_mode=True)` идёт сразу в Qwen-ветку, минуя Gemini
-- `/api/generate` для summary/actions: если privacy_mode → spawn'ит `LabGPTOSS20B.generate` вместо `gemini_generate`
+- `/api/generate` для summary/actions: если privacy_mode → spawn'ит `LabGPTOSS20B.generate_mapreduce` вместо `gemini_generate`. **Map-reduce (ISS-1):** gpt-oss-20b поддерживает только eager attention (O(n²) память) → на 3-4ч транскрипте одним промптом ловил CUDA OOM. Теперь транскрипт режется на окна ~12k символов (`_split_text_windows`), каждое сжимается в плотные заметки (map, `PRIVACY_MAP_PROMPT` из app.py), финал генерируется по заметкам исходным шаблоном (reduce). Текст подставляется в промпты через сентинел `<<TRANSCRIPT_TEXT>>` (`PRIVACY_TEXT_SLOT`/`MAPREDUCE_TEXT_SLOT` — литералы должны совпадать, есть тест). Короткие транскрипты — одним вызовом как раньше. Worst case 4ч ≈ 15-20 мин (внутри 22-мин poll-таймаута фронта).
 
 **Frontend UI:**
 - Settings → Subscription → "Privacy Mode" чекбокс, optimistic UI с rollback при ошибке save
@@ -447,25 +451,38 @@ Admin-only инструмент для side-by-side сравнения LLM на 
 
 **Поток:** Flask `/api/transcribe` по `duration_sec` → `transcribe_long.spawn()`
 (CPU оркестратор) → ffmpeg decode → **silence-aware split** (`_parse_silences` +
-`_plan_chunk_boundaries`) на `CHUNK_LEN_S` (1200с) чанки → параллельный
-`Transcriptor.transcribe_chunk.spawn()` на нескольких A10G → **глобальная
-кластеризация спикеров** → стич (offset таймстемпов + релейбл local→global +
-re-merge) → `{segments, vocab_additions}`. Прогресс "chunk k/N" в modal.Dict.
+`_plan_chunk_boundaries`; число чанков подгоняется под ≤`MAX_PARALLEL_CHUNKS`
+(10) чтобы все шли ОДНОЙ волной GPU, длина чанка ≤`MAX_CHUNK_LEN_S` 1800с;
+4ч = 10×~24-мин чанков) → параллельный `Transcriptor.transcribe_chunk.spawn()`
+на нескольких A10G → **глобальная кластеризация спикеров** → стич (offset
+таймстемпов + релейбл local→global + re-merge) → `{segments, vocab_additions}`.
+Прогресс "chunk k/N" в modal.Dict.
+
+**Per-chunk resilience (ISS-2):** каждый `call.get()` в try/except — упавший
+после Modal-ретраев чанк логируется и пропускается, в транскрипт вставляется
+локализованный gap-маркер (`SPEAKER_UNKNOWN`, "[~N мин аудио не удалось
+обработать]"), прогресс отдаёт `chunks_failed`. Падают ВСЕ чанки → RuntimeError.
 
 **Сшивание спикеров (ключевое и хрупкое):**
-- Каждый `transcribe_chunk` возвращает per-speaker **centroid embeddings**
-  (`_speaker_centroids`, wespeaker-модель, эмбеддинги L2-нормализованы до
-  усреднения).
-- Оркестратор: `sklearn AgglomerativeClustering(metric="cosine", linkage="average")`.
-  Если `num_speakers` задан юзером → `n_clusters=num_speakers` (надёжно). Иначе →
-  `distance_threshold=GLOBAL_SPK_THRESHOLD` (**0.55**, ближе к EER wespeaker).
-- **Тюнинг порога:** было 0.7 — склеивало похожие голоса (телефонный звонок) в
-  одного спикера. 0.55 разделяет лучше. Если всё ещё мерджит — снизить ещё ИЛИ
-  юзер задаёт Speakers вручную. Логи дают `[long] global_speakers=N
-  centroid_cos_dist min=X` — если `min < 0.3`, голоса почти неразличимы для
-  embedding-модели (overlap/похожие/телефон).
-- **Диагностика в логах:** `[long] centroids=N per-chunk-speakers=[...]`,
-  `global_speakers`, `centroid_cos_dist min/mean/max`.
+- Каждый `transcribe_chunk` возвращает до `EMB_PER_SPEAKER` (6) **L2-нормированных
+  embedding'ов на локального спикера** (`_speaker_centroids`, wespeaker-модель) —
+  несколько точек на голос устойчивее одного центроида к шумным сегментам.
+- Оркестратор: **собственная агломеративка** `_cluster_speaker_embeddings`
+  (average linkage по всем парам векторов, numpy, sklearn выкинут) с
+  **cannot-link констрейнтом**: два локальных спикера ОДНОГО чанка — заведомо
+  разные люди (pyannote разделил их в общем контексте) и не сливаются никогда.
+  Это структурно блокирует склейку похожих голосов на звонках 1-на-1.
+- Если `num_speakers` задан юзером → сливаем до k; когда cannot-link не даёт
+  дойти (фантомный локальный спикер) — наименьшие кластеры вливаются в
+  ближайший принудительно (лог "force-merging phantom").
+- **Порог:** `GLOBAL_SPK_THRESHOLD` (**0.68**). История: 0.7 склеивал похожие
+  голоса → 0.55 разделял, но плодил ДУБЛИ одного человека на швах чанков →
+  с cannot-link порог снова поднят, швы сшиваются. Логи дают `[long]
+  global_speakers=N centroid_cos_dist min=X` — если `min < 0.3`, голоса почти
+  неразличимы для embedding-модели (overlap/похожие/телефон) — задать Speakers.
+- **Диагностика в логах:** `[long] speakers-with-embeddings=N
+  per-chunk-speakers=[...]`, `global_speakers`, `centroid_cos_dist min/mean/max`.
+- Юнит-тесты: `tests/test_speaker_clustering.py`.
 
 **Gotchas:**
 - **wespeaker embedding model** грузится в `load_models` с `cache_dir` на Volume
@@ -474,8 +491,9 @@ re-merge) → `{segments, vocab_additions}`. Прогресс "chunk k/N" в mod
 - **Modal body limit ~250МБ** — прямой аплоад длинного файла может упереться;
   тогда нужен resumable upload (Phase 4 long-recording в ROADMAP, условный).
 - Per-chunk Gemini correction (каждый чанк ~20мин → один вызов, параллельно).
-- **Протестировано:** польский подкаст (3 чанка) — спикеры сшились верно. Реальный
-  2ч звонок — фикс порога 0.55 + L2-norm задеплоен, ждёт верификации (см. логи).
+- **Протестировано:** польский подкаст (3 чанка) — спикеры сшились верно.
+  Cannot-link кластеризация + порог 0.68 + multi-embeddings (2026-06-10) —
+  юнит-тесты зелёные, ждёт деплоя и верификации на реальном звонке 1-на-1.
 - Тест дёшево: временно `CHUNK_LEN_S=120` + `LONG_AUDIO_THRESHOLD_S=90` → короткий
   файл режется на чанки. Откатить после.
 
