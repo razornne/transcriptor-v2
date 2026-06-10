@@ -33,7 +33,7 @@ Modal flask_app (CPU, scale-to-zero)
    │   • короткие (<30 мин) → Transcriptor.transcribe_full.spawn()
    │   • длинные  (>30 мин) → transcribe_long.spawn()  (chunked)
    ▼
-Modal Transcriptor (A10G GPU, scaledown_window=300)
+Modal Transcriptor (A10G GPU, scaledown_window=150)
    - faster-whisper large-v3-turbo (fast, default)
    - faster-whisper large-v3 (best quality, Max plan only)
    - pyannote-3.1 (с bounds min_speakers=1, max_speakers=6)
@@ -325,7 +325,7 @@ runner; merger-тесты идут на голом Python, остальным н
 ## Modal app — ключевые куски
 
 ### Container reuse
-- **`Transcriptor` cls** (`@app.cls(gpu="A10G", scaledown_window=300)`) — держится тёплым 5 мин. Первый запуск ~60-90с (загрузка моделей + первый прогрев большой модели). VRAM: turbo (3GB) + large-v3 (3GB) + pyannote (2GB) + wespeaker embedding (~0.1GB) + Qwen 4-bit (5GB) ≈ 13GB на 24GB A10G.
+- **`Transcriptor` cls** (`@app.cls(gpu="A10G", scaledown_window=150)`) — держится тёплым 2.5 мин (было 300: после длинной джобы 10 контейнеров висели по 5 мин = ~50 GPU-мин idle-хвоста, ~30% стоимости 4ч джобы; 150с хватает на follow-up title). Первый запуск ~60-90с (загрузка моделей + первый прогрев большой модели). VRAM: turbo (3GB) + large-v3 (3GB) + pyannote (2GB) + wespeaker embedding (~0.1GB) + Qwen 4-bit (5GB) ≈ 13GB на 24GB A10G.
 - **`flask_app` wsgi** (`@app.function(min_containers=0, scaledown_window=60)`) — scale-to-zero. Cold start ~3-5с.
 - Persistent Volume `transcriptor-models` — модели кэшируются между рестартами.
 
@@ -438,7 +438,7 @@ Admin-only инструмент для side-by-side сравнения LLM на 
 
 **Зарегистрированные модели** (`LAB_MODELS` в `app.py`):
 - `gemini` → `gemini_generate` (Gemini 2.5 Pro baseline)
-- `mamaylm` → `LabMamayLM9B.generate` — Gemma 2 9B fine-tuned на UA (`INSAIT-Institute/MamayLM-Gemma-2-9B-IT-v0.1`), int4 на A10G. Strong UA, shallow depth.
+- ~~`mamaylm` → `LabMamayLM9B.generate`~~ — **удалён из деплоя 2026-06-10** (сравнение завершено, gpt-oss выбран). Вернуть — git history.
 - `gptoss20b` → `LabGPTOSS20B.generate` — gpt-oss-20b MXFP4 на L40S. Eager attention, `reasoning_effort="low"`, post-process `_strip_gpt_oss_analysis` убирает "analysis" channel из output'a. **Текущий Privacy Mode backend.**
 
 **UI Lab modal:** task dropdown + model checkboxes + run → side-by-side колонки + Download .md экспорт результатов.
@@ -453,7 +453,10 @@ Admin-only инструмент для side-by-side сравнения LLM на 
 (CPU оркестратор) → ffmpeg decode → **silence-aware split** (`_parse_silences` +
 `_plan_chunk_boundaries`; число чанков подгоняется под ≤`MAX_PARALLEL_CHUNKS`
 (10) чтобы все шли ОДНОЙ волной GPU, длина чанка ≤`MAX_CHUNK_LEN_S` 1800с;
-4ч = 10×~24-мин чанков) → параллельный `Transcriptor.transcribe_chunk.spawn()`
+4ч = 10×~24-мин чанков; каждый чанк вырезается с **нахлёстом `CHUNK_PAD_S`
+(3с)** с обеих сторон — Whisper слышит контекст через шов, hard-cut не рвёт
+слово; дедуп пад-зон по midpoint в `_trim_to_core` внутри transcribe_chunk,
+оффсет стича = `pad_starts[i]`) → параллельный `Transcriptor.transcribe_chunk.spawn()`
 на нескольких A10G → **глобальная кластеризация спикеров** → стич (offset
 таймстемпов + релейбл local→global + re-merge) → `{segments, vocab_additions}`.
 Прогресс "chunk k/N" в modal.Dict.
