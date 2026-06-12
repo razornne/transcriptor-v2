@@ -257,5 +257,14 @@ Context → локальный state карточки → FormData `prompt`.
 |---|---|
 | Auth, запись (mic+tab), upload, транскрипция+волны, история CRUD, AI-табы, rename, title, экспорт md, профиль | ✅ shipped |
 | Safety net: IDB autosave, recovery, retry, wake lock/silent audio/notify/battery | ✅ shipped |
-| Сегментед-контрол, типографика, физика мыши v1 | ✅ shipped (перерабатывается в S1) |
-| Спринты 1–7 | ⬜ очередь |
+| Сегментед-контрол, типографика, физика мыши v1 | ✅ shipped |
+| **Спринт 1** — стейт-машина (transcript-first), SDF-дымка (зазор 44px), viewport-fixed canvas + React.memo + useRef hot-path + reading mode, `+Context`→prompt, content-visibility на сегментах | ✅ shipped (`acb0015`) |
+| Спринты 2–7 | ⬜ очередь |
+
+### Заметка для исполнителя по верификации в preview
+`mcp__Claude_Preview` рендерит страницу в **hidden**-состоянии (`document.hidden=true`)
+→ `requestAnimationFrame` на паузе, скриншотер часто виснет. Анимацию точек
+(мышь/волны) пиксельно в preview НЕ проверить — она оживает только в видимой
+вкладке. Проверяй: (1) `npm run build` зелёный; (2) eval-замером canvas
+`getImageData` — статический base-профиль (SDF-кольцо); (3) `getComputedStyle`
+для раскладки/цветов; (4) реальная анимация — глазами в обычном браузере.
