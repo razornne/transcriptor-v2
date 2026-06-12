@@ -28,10 +28,12 @@ const WAVE_SIGMA = 48;   // ширина гребня волны
 type Dot = { x: number; y: number; d: number; base: number };
 type Wave = { start: number; amp: number };
 
+// anchorRef — блок, вокруг которого живёт ореол (заголовок + карточка +
+// результат, .i-stage). Текст ВНУТРИ блока — точки туда не заходят.
 export const DotField = forwardRef<
   DotFieldHandle,
-  { cardRef: React.RefObject<HTMLDivElement | null> }
->(function DotField({ cardRef }, ref) {
+  { anchorRef: React.RefObject<HTMLDivElement | null> }
+>(function DotField({ anchorRef: cardRef }, ref) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wavesRef = useRef<Wave[]>([]);
   const runningRef = useRef(false);

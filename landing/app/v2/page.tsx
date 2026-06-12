@@ -19,7 +19,7 @@ export default function InkPage() {
   const [done, setDone] = useState(false);
   const [status, setStatus] = useState("");
   const dotsRef = useRef<DotFieldHandle>(null);
-  const cardRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const timersRef = useRef<number[]>([]);
 
   const clearTimers = () => {
@@ -110,14 +110,15 @@ export default function InkPage() {
       </header>
 
       <main className="i-hero">
-        <DotField ref={dotsRef} cardRef={cardRef} />
+        <DotField ref={dotsRef} anchorRef={stageRef} />
         <div className="i-center">
+          <div ref={stageRef}>
           <h1 className="i-title">
             Say it <em>messy</em>.
           </h1>
           <p className="i-sub">Talk it into shape — come back to clean, structured text.</p>
 
-          <InputCard ref={cardRef} cooking={cooking} onCook={startCook} />
+          <InputCard cooking={cooking} onCook={startCook} />
 
           <p className="i-status" aria-live="polite">{status}</p>
 
@@ -146,6 +147,7 @@ export default function InkPage() {
               </div>
             </div>
           )}
+          </div>
         </div>
       </main>
     </div>
