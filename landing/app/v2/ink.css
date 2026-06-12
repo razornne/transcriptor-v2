@@ -48,6 +48,10 @@
 /* ── каркас ─────────────────────────────────────────────────── */
 .ink-root {
   position: relative;
+  /* width 100% обязателен: globals.css лендинга (общий root layout) даёт
+     родителю flex-контекст, в котором div схлопывается до контента */
+  width: 100%;
+  min-width: 0;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
