@@ -113,7 +113,9 @@ export const DotField = forwardRef<
           lift += w.amp * Math.exp(-(dd * dd) / (2 * WAVE_SIGMA * WAVE_SIGMA));
         }
         const alpha = Math.min(0.9, p.base * 0.55 + lift * 0.45);
-        if (alpha < 0.015) continue;
+        // Порог 0.045: статичный ореол обрывается ~130px от кромки, дальше
+        // точки «спят» (невидимы) и проявляются только под гребнем волны
+        if (alpha < 0.045) continue;
         const radius = 1.0 + p.base * 1.35 + lift * 1.5;
         ctx!.fillStyle = `rgba(${rgb},${alpha.toFixed(3)})`;
         ctx!.beginPath();
