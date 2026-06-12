@@ -1,10 +1,15 @@
 "use client";
+import { idbCreateSession, idbAppendChunk } from "./idb";
 
 // Запись: микрофон + (опционально) аудио вкладки/системы через getDisplayMedia,
 // смикшированные AudioContext'ом — порт схемы из боевого /app. Если юзер
 // отказал в share — пишем только микрофон, это не ошибка.
+//
+// Safety net: каждый 5с-chunk дублируется в IndexedDB (idb.ts). Сессия
+// удаляется вызывающим кодом ТОЛЬКО после успешной транскрипции.
 
 export type Recorder = {
+  sessionId: string | null;
   stop: () => Promise<{ blob: Blob; durationSec: number }>;
 };
 
@@ -29,13 +34,20 @@ export async function startRecording(): Promise<Recorder> {
   ctx.createMediaStreamSource(mic).connect(dest);
   if (display) ctx.createMediaStreamSource(display).connect(dest);
 
+  const sessionId = await idbCreateSession();
   const chunks: Blob[] = [];
   const rec = new MediaRecorder(dest.stream);
-  rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+  rec.ondataavailable = (e) => {
+    if (e.data.size > 0) {
+      chunks.push(e.data);
+      if (sessionId) void idbAppendChunk(sessionId, e.data);
+    }
+  };
   const startedAt = Date.now();
-  rec.start(5000); // timeslice как в старом app (задел под IDB-autosave)
+  rec.start(5000); // timeslice: каждый кусок сразу в память + IndexedDB
 
   return {
+    sessionId,
     stop: () =>
       new Promise((resolve) => {
         rec.onstop = () => {
