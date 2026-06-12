@@ -16,9 +16,12 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 export type DotFieldHandle = { wave: (amp?: number) => void };
 
-const SPACING = 14;      // шаг сетки, px
-const MAX_DIST = 290;    // дальше карточки на это расстояние — точек нет
+const SPACING = 12;      // шаг сетки, px
+const MAX_DIST = 240;    // дальше — точек нет вообще (углы экрана чистые)
 const HIDE_DIST = 5;     // точки под самой карточкой не рисуем
+const FALLOFF = 55;      // резкое затухание: статично виден узкий ореол
+                         // ~120px у кромки; точки дальше «спят» и вспыхивают
+                         // только когда по ним проходит волна Cook
 const WAVE_SPEED = 0.27; // px за мс (≈270 px/с)
 const WAVE_SIGMA = 48;   // ширина гребня волны
 
@@ -84,8 +87,8 @@ export const DotField = forwardRef<
           const dy = Math.max(rt - y, y - rb, 0);
           const d = Math.hypot(dx, dy);
           if (d < HIDE_DIST || d > MAX_DIST) continue;
-          // База: ярче у кромки карточки, мягкое затухание наружу
-          const base = Math.exp(-d / 115);
+          // База: ярче у кромки карточки, резкое затухание наружу
+          const base = Math.exp(-d / FALLOFF);
           dots.push({ x, y, d, base });
         }
       }
@@ -109,9 +112,9 @@ export const DotField = forwardRef<
           const dd = p.d - r;
           lift += w.amp * Math.exp(-(dd * dd) / (2 * WAVE_SIGMA * WAVE_SIGMA));
         }
-        const alpha = Math.min(0.9, p.base * 0.34 + lift * 0.42);
-        if (alpha < 0.012) continue;
-        const radius = 1.05 + p.base * 1.05 + lift * 1.5;
+        const alpha = Math.min(0.9, p.base * 0.55 + lift * 0.45);
+        if (alpha < 0.015) continue;
+        const radius = 1.0 + p.base * 1.35 + lift * 1.5;
         ctx!.fillStyle = `rgba(${rgb},${alpha.toFixed(3)})`;
         ctx!.beginPath();
         ctx!.arc(p.x, p.y, radius, 0, 6.2832);
