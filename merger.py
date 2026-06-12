@@ -39,6 +39,62 @@ SMOOTH_PASSES = int(os.environ.get("SMOOTH_PASSES", "3"))
 # первое слово реплики после паузы уходит СЛЕДУЮЩЕМУ турну, а не предыдущему.
 NEAREST_TURN_MAX_GAP_S = float(os.environ.get("NEAREST_TURN_MAX_GAP_S", "2.0"))
 
+# Анти-петля: фраза из 1..LOOP_MAX_UNIT_WORDS слов, повторённая подряд
+# >= LOOP_COLLAPSE_MIN_REPEATS раз, схлопывается до двух повторов.
+# Классика Whisper — хвост записи "Пока-пока. Пока-пока. Пока-пока. ...":
+# реальные прощания заражают контекст декодера, а на тихом/шумном хвосте
+# LM-prior доминирует и зацикливается. Встроенные гейты Whisper это НЕ ловят:
+# compression_ratio неэффективен на коротких строках (gzip-заголовок съедает
+# выигрыш), avg_logprob у петли высокий (повтор = уверенность), VAD хвостовые
+# шорохи не режет. Детерминированный коллапсер — единственная жёсткая гарантия.
+# 3 повтора — порог: двойные повторы легитимны ("так-так", "пока-пока. пока-пока"
+# от обоих спикеров), тройные+ одного юнита — практически всегда петля.
+# 0 = выключить.
+LOOP_COLLAPSE_MIN_REPEATS = int(os.environ.get("LOOP_COLLAPSE_MIN_REPEATS", "3"))
+LOOP_MAX_UNIT_WORDS = int(os.environ.get("LOOP_MAX_UNIT_WORDS", "4"))
+
+
+def _collapse_text_loops(text: str) -> str:
+    """Схлопывает подряд идущие повторы короткой фразы до двух вхождений.
+
+    Сравнение нечувствительно к регистру и пунктуации ("Пока-пока." ==
+    "пока пока"), в выводе сохраняются ПЕРВЫЕ два вхождения как есть.
+    Числа и легитимные двойные повторы не трогаются (порог >= 3).
+    """
+    if LOOP_COLLAPSE_MIN_REPEATS <= 0:
+        return text
+    words = text.split()
+    if len(words) < LOOP_COLLAPSE_MIN_REPEATS:
+        return text
+
+    def norm(w: str) -> str:
+        return "".join(c for c in w.lower() if c.isalnum())
+
+    out: list[str] = []
+    i, n = 0, len(words)
+    while i < n:
+        collapsed = False
+        for unit in range(1, LOOP_MAX_UNIT_WORDS + 1):
+            if i + unit * LOOP_COLLAPSE_MIN_REPEATS > n:
+                break
+            base = [norm(w) for w in words[i:i + unit]]
+            if not any(base):
+                continue  # юнит из чистой пунктуации — не схлопываем
+            reps = 1
+            j = i + unit
+            while j + unit <= n and [norm(w) for w in words[j:j + unit]] == base:
+                reps += 1
+                j += unit
+            if reps >= LOOP_COLLAPSE_MIN_REPEATS:
+                out.extend(words[i:i + unit * 2])  # оставляем два повтора
+                i += unit * reps
+                collapsed = True
+                break
+        if not collapsed:
+            out.append(words[i])
+            i += 1
+    return " ".join(out)
+
 
 def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
     """Длина пересечения двух интервалов (0 если не пересекаются)."""
@@ -237,4 +293,16 @@ def merge(transcript_segments: list[dict], speaker_turns: list[dict]) -> list[di
         labeled = _assign_initial(transcript_segments, speaker_turns)
 
     labeled = _smooth(labeled)
-    return _merge_consecutive(labeled)
+    merged = _merge_consecutive(labeled)
+
+    # Анти-петля (после склейки соседей одного спикера — петля из нескольких
+    # сегментов к этому моменту уже сжата в один текст и видна целиком)
+    for seg in merged:
+        collapsed = _collapse_text_loops(seg["text"])
+        if collapsed != seg["text"]:
+            # ASCII-only: локальные Windows-консоли (cp1251) падают на юникоде
+            print("[merger] collapsed hallucination loop: "
+                  f"{len(seg['text'].split())} -> {len(collapsed.split())} words",
+                  flush=True)
+            seg["text"] = collapsed
+    return merged
