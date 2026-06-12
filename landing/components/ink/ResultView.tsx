@@ -107,14 +107,16 @@ export function ResultView({
         <span>{entry.lang}</span>
       </div>
 
-      <div className="i-tabs" role="tablist">
-        {(["transcript", "summary", "actions"] as Tab[]).map((t) => (
-          <button key={t} type="button" role="tab" aria-selected={tab === t}
-            className={`i-tab${tab === t ? " on" : ""}`} onClick={() => setTab(t)}>
-            {t === "transcript" ? "Transcript" : t === "summary" ? "Summary" : "Actions"}
-            {t !== "transcript" && entry.aiResults[t] && <span className="i-tab-dot" />}
-          </button>
-        ))}
+      <div className="i-tabs">
+        <div className="i-segctl" role="tablist">
+          {(["transcript", "summary", "actions"] as Tab[]).map((t) => (
+            <button key={t} type="button" role="tab" aria-selected={tab === t}
+              className={`i-tab${tab === t ? " on" : ""}`} onClick={() => setTab(t)}>
+              {t === "transcript" ? "Transcript" : t === "summary" ? "Summary" : "Action items"}
+              {t !== "transcript" && entry.aiResults[t] && <span className="i-tab-dot" />}
+            </button>
+          ))}
+        </div>
         <span className="i-spacer" />
         <button type="button" className="i-pill" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button>
         <button type="button" className="i-pill" onClick={downloadMd}>.md</button>

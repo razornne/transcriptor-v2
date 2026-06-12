@@ -62,6 +62,12 @@
 }
 .ink-root *, .ink-root *::before, .ink-root *::after { box-sizing: border-box; }
 .ink-root button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
+/* Жёсткая шрифтовая иерархия: ВЕСЬ UI — Manrope (400/500/600).
+   JetBrains Mono — только техническая мета (таймкоды, chunk k/N, kbd),
+   и никогда вперемешку с Manrope в одной строке. */
+.ink-root button, .ink-root input, .ink-root select, .ink-root textarea {
+  font-family: var(--i-ui);
+}
 
 .i-topbar {
   display: flex; justify-content: space-between; align-items: center;
@@ -139,7 +145,12 @@
   display: inline-flex; align-items: center; gap: 5px;
 }
 .i-pill:hover { border-color: var(--i-graphite); color: var(--i-ink); }
-.i-pill.on { background: var(--i-ink); color: var(--i-paper); border-color: var(--i-ink); }
+/* Активная пилюля — мягкий accent-тинт вместо тяжёлой чернильной плашки */
+.i-pill.on {
+  background: color-mix(in srgb, var(--i-accent) 9%, var(--i-surface));
+  color: var(--i-accent);
+  border-color: color-mix(in srgb, var(--i-accent) 38%, var(--i-hairline));
+}
 
 /* dropdown кастомных пресетов */
 .i-pop {
@@ -262,7 +273,7 @@
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
   text-align: left; font-size: 13px; color: var(--i-ink); padding: 0;
 }
-.i-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.i-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .i-del {
   flex: none; width: 18px; height: 18px; border-radius: 5px;
   color: var(--i-graphite); font-size: 11px; line-height: 1;
@@ -304,10 +315,24 @@
 }
 .i-status.err { color: var(--i-danger); }
 .i-error { color: var(--i-danger); font-size: 12.5px; margin-top: 8px; }
-.i-rec-timer { font-family: var(--i-mono); font-size: 11.5px; color: var(--i-signal); }
+.i-rec-timer {
+  font-family: var(--i-ui); font-weight: 600; font-size: 12px;
+  font-variant-numeric: tabular-nums; color: var(--i-signal);
+}
 .i-card.drag { border-color: var(--i-accent); box-shadow: 0 0 0 3px var(--i-ring); }
 .i-pill.off { opacity: .45; cursor: default; }
 .i-back { margin-bottom: 12px; }
+
+/* ── recovery / retry box (safety net) ──────────────────────── */
+.i-recover {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: color-mix(in srgb, var(--i-signal) 6%, var(--i-surface));
+  border: 1px solid color-mix(in srgb, var(--i-signal) 30%, var(--i-hairline));
+  border-radius: var(--i-r-lg);
+  padding: 12px 14px; margin-top: 12px;
+}
+.i-recover-text { flex: 1; min-width: 180px; font-size: 13px; color: var(--i-ink); }
+.i-recover-text .sub { display: block; font-size: 11.5px; color: var(--i-graphite); margin-top: 2px; }
 
 /* ── login ──────────────────────────────────────────────────── */
 .i-login-div {
@@ -334,24 +359,39 @@
   font-family: var(--i-mono); font-size: 11px; color: var(--i-graphite);
   margin: 6px 0 14px;
 }
-.i-tabs {
-  display: flex; align-items: center; gap: 4px;
-  border-bottom: 1px solid var(--i-hairline); padding-bottom: 8px; margin-bottom: 4px;
+/* Единый segmented control (Linear-style): тонкая подложка, равные
+   паддинги, активный таб — мягкая заливка с матовой тенью. Никаких
+   контрастных «пятен». */
+.i-tabs { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
+.i-segctl {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: color-mix(in srgb, var(--i-surface) 55%, transparent);
+  border: 1px solid var(--i-hairline);
+  border-radius: 11px;
 }
 .i-tab {
-  font-size: 13px; font-weight: 600; color: var(--i-graphite);
-  padding: 6px 11px; border-radius: var(--i-r-sm);
+  font-family: var(--i-ui); font-size: 13px; font-weight: 500;
+  color: var(--i-graphite);
+  padding: 6px 14px; border-radius: 8px;
+  border: 1px solid transparent;
   display: inline-flex; align-items: center; gap: 6px;
+  transition: color .12s ease;
 }
 .i-tab:hover { color: var(--i-ink); }
-.i-tab.on { color: var(--i-ink); background: var(--i-surface); border: 1px solid var(--i-hairline); }
+.i-tab.on {
+  color: var(--i-ink);
+  background: var(--i-surface);
+  border-color: var(--i-hairline);
+  box-shadow: 0 1px 3px rgba(20, 18, 14, 0.06);
+}
+[data-theme="dark"] .ink-root .i-tab.on { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
 .i-tab-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--i-accent); }
 
 .i-seglist { display: flex; flex-direction: column; gap: 2px; padding-top: 10px; }
 .i-seg { padding: 9px 10px; border-radius: var(--i-r-md); }
 .i-seg:hover { background: var(--i-surface); }
 .i-seg-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 3px; }
-.i-spk { font-size: 12.5px; font-weight: 700; letter-spacing: .01em; }
+.i-spk { font-family: var(--i-ui); font-size: 12.5px; font-weight: 600; letter-spacing: .01em; }
 .i-spk:hover { text-decoration: underline dotted; }
 .i-spk-edit {
   background: var(--i-surface); border: 1px solid var(--i-accent);

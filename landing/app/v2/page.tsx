@@ -8,6 +8,8 @@ import { InkSidebar } from "@/components/ink/InkSidebar";
 import { LoginScreen } from "@/components/ink/LoginScreen";
 import { ResultView, transcriptText } from "@/components/ink/ResultView";
 import { startRecording, probeDuration, type Recorder } from "@/lib/ink/audio";
+import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
+import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import { transcribe, generate, generateTitle, fetchProfile, type Profile, type JobProgress } from "@/lib/ink/api";
 import {
   fetchHistory, insertEntry, patchEntry, deleteEntry,
@@ -33,6 +35,24 @@ function autoTitle(segments: Segment[]): string {
   return words.length > 2 ? words : "Untitled recording";
 }
 
+// Safety net: незавершённая запись (crash) или упавший аплоад (failed) —
+// blob держим до успеха, юзеру даём Cook / Download / Discard
+type RecoverState = {
+  blob: Blob;
+  durationSec: number;
+  sizeMb: number;
+  sessionId: string | null;
+  source: "crash" | "failed";
+};
+
+function downloadBlob(blob: Blob) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `recording-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.webm`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 export default function InkApp() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -50,10 +70,12 @@ export default function InkApp() {
   const [language, setLanguage] = useState("");
   const [speakers, setSpeakers] = useState("");
 
+  const [recover, setRecover] = useState<RecoverState | null>(null);
   const dotsRef = useRef<DotFieldHandle>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const recTimerRef = useRef<number>(0);
+  const keepAliveStopRef = useRef<(() => void) | null>(null);
 
   // ── auth ────────────────────────────────────────────────────
   useEffect(() => {
@@ -66,7 +88,28 @@ export default function InkApp() {
     if (!session) { setEntries([]); setProfile(null); return; }
     void fetchHistory().then(setEntries).catch(() => setEntries([]));
     void fetchProfile().then(setProfile);
+    // Orphan-сессии из IndexedDB: вкладка/браузер умерли посреди записи
+    void idbGetOrphans().then((orphans) => {
+      if (!orphans.length) return;
+      const o = orphans[0];
+      setRecover({
+        blob: o.blob,
+        durationSec: o.approxMinutes * 60,
+        sizeMb: o.sizeMb,
+        sessionId: o.id,
+        source: "crash",
+      });
+    });
   }, [session]);
+
+  // Предупреждение при закрытии вкладки во время записи/обработки
+  useEffect(() => {
+    const h = (e: BeforeUnloadEvent) => {
+      if (recording || cooking) e.preventDefault();
+    };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [recording, cooking]);
 
   const activeEntry = entries.find((e) => e.id === activeId) || null;
 
@@ -120,7 +163,7 @@ export default function InkApp() {
     void autoRunPreset({ ...entry, title }, preset);
   }, [session, preset, autoRunPreset]);
 
-  const cookBlob = useCallback(async (blob: Blob, durationSec: number) => {
+  const cookBlob = useCallback(async (blob: Blob, durationSec: number, sessionId: string | null = null) => {
     if (cooking) return;
     setCooking(true);
     setSbOpen(false);
@@ -149,12 +192,20 @@ export default function InkApp() {
       if (!segments.length) {
         setStatusKind("error");
         setStatus("no speech detected in the recording");
+        if (sessionId) void idbDeleteSession(sessionId);
+        setRecover(null);
       } else {
         await finishWithSegments(segments, language);
+        if (sessionId) void idbDeleteSession(sessionId);
+        setRecover(null);
+        notify("Skriptly — transcript ready", "Your recording is processed and saved.");
       }
     } catch (e) {
       setStatusKind("error");
       setStatus(`failed: ${e instanceof Error ? e.message : e}`);
+      // Blob не теряем: retry / download / discard
+      setRecover({ blob, durationSec, sizeMb: blob.size / 1048576, sessionId, source: "failed" });
+      notify("Skriptly — transcription failed", "The recording is kept — you can retry.");
     } finally {
       setCooking(false);
     }
@@ -190,16 +241,22 @@ export default function InkApp() {
       recorderRef.current = null;
       window.clearInterval(recTimerRef.current);
       setRecording(false);
+      keepAliveStopRef.current?.();
+      keepAliveStopRef.current = null;
       if (rec) {
         const { blob, durationSec } = await rec.stop();
-        void cookBlob(blob, durationSec);
+        void cookBlob(blob, durationSec, rec.sessionId);
       }
       return;
     }
     try {
+      const warn = await batteryWarning();
+      if (warn && !window.confirm(warn)) return;
+      ensureNotifyPermission();
       setStatusKind("info");
       setStatus("requesting microphone…");
       recorderRef.current = await startRecording();
+      keepAliveStopRef.current = await startKeepAlive();
       setRecSeconds(0);
       setRecording(true);
       setActiveId(null);
@@ -211,7 +268,10 @@ export default function InkApp() {
     }
   }, [recording, cookBlob]);
 
-  useEffect(() => () => window.clearInterval(recTimerRef.current), []);
+  useEffect(() => () => {
+    window.clearInterval(recTimerRef.current);
+    keepAliveStopRef.current?.();
+  }, []);
 
   // ── шорткаты ────────────────────────────────────────────────
   useEffect(() => {
@@ -286,6 +346,30 @@ export default function InkApp() {
                   onRecToggle={() => void onRecToggle()}
                 />
                 <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">{status}</p>
+                {recover && !cooking && (
+                  <div className="i-recover">
+                    <span className="i-recover-text">
+                      {recover.source === "crash" ? "Unfinished recording found" : "Upload failed — recording kept"}
+                      <span className="sub">
+                        ≈{Math.max(1, Math.round(recover.durationSec / 60))} min · {recover.sizeMb.toFixed(1)} MB
+                      </span>
+                    </span>
+                    <button type="button" className="i-pill on"
+                      onClick={() => void cookBlob(recover.blob, recover.durationSec, recover.sessionId)}>
+                      Cook it
+                    </button>
+                    <button type="button" className="i-pill" onClick={() => downloadBlob(recover.blob)}>
+                      Download
+                    </button>
+                    <button type="button" className="i-pill"
+                      onClick={() => {
+                        if (recover.sessionId) void idbDeleteSession(recover.sessionId);
+                        setRecover(null);
+                      }}>
+                      Discard
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>
