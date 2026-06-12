@@ -61,11 +61,14 @@
   overflow: hidden;
 }
 .ink-root *, .ink-root *::before, .ink-root *::after { box-sizing: border-box; }
-.ink-root button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
+/* Ресет через :where() — нулевая специфичность внутри, иначе
+   .ink-root button (0,1,1) перебивал бы компонентные классы (0,1,0)
+   и съедал их background/border (реальный баг: бесцветная Cook-кнопка). */
+.ink-root :where(button) { font: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
 /* Жёсткая шрифтовая иерархия: ВЕСЬ UI — Manrope (400/500/600).
    JetBrains Mono — только техническая мета (таймкоды, chunk k/N, kbd),
    и никогда вперемешку с Manrope в одной строке. */
-.ink-root button, .ink-root input, .ink-root select, .ink-root textarea {
+.ink-root :where(button, input, select, textarea) {
   font-family: var(--i-ui);
 }
 
