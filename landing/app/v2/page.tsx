@@ -3,22 +3,24 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { sb } from "@/lib/ink/supabase";
 import { DotField, type DotFieldHandle } from "@/components/ink/DotField";
-import { InputCard, type PresetKey } from "@/components/ink/InputCard";
+import { InputCard } from "@/components/ink/InputCard";
 import { InkSidebar } from "@/components/ink/InkSidebar";
 import { LoginScreen } from "@/components/ink/LoginScreen";
 import { ResultView, transcriptText } from "@/components/ink/ResultView";
 import { startRecording, probeDuration, type Recorder } from "@/lib/ink/audio";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
-import { transcribe, generate, generateTitle, fetchProfile, type Profile, type JobProgress } from "@/lib/ink/api";
+import { transcribe, generateTitle, fetchProfile, type Profile, type JobProgress } from "@/lib/ink/api";
 import {
   fetchHistory, insertEntry, patchEntry, deleteEntry,
   type HistoryEntry, type Segment,
 } from "@/lib/ink/db";
 
-// /v2 — Ink & Halftone, ФУНКЦИОНАЛЬНАЯ аппка (Phase 2-3):
-// auth (Supabase) → запись/аплоад/текст → /api/transcribe + polling
-// (прогресс гонит волны по точкам) → история в Postgres → AI-табы → экспорт.
+// /v2 — Ink & Halftone, функциональная аппка.
+// Стейт-машина воркфлоу (Спринт 1): view = activeId ? OUTPUT : INPUT.
+//   INPUT  — чистая карточка ввода, БЕЗ табов; запись/аплоад/текст → cook.
+//   OUTPUT — готовый результат, segmented control Transcript/Summary/Actions.
+// Транскрипт делается ВСЕГДА и первым; AI-генерация — из готового результата.
 
 const STAGE_LABELS: Record<string, string> = {
   convert: "decoding audio…",
@@ -36,7 +38,7 @@ function autoTitle(segments: Segment[]): string {
 }
 
 // Safety net: незавершённая запись (crash) или упавший аплоад (failed) —
-// blob держим до успеха, юзеру даём Cook / Download / Discard
+// blob держим до успеха, юзеру даём Cook / Download / Discard.
 type RecoverState = {
   blob: Blob;
   durationSec: number;
@@ -66,9 +68,9 @@ export default function InkApp() {
   const [recSeconds, setRecSeconds] = useState(0);
   const [status, setStatus] = useState("");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
-  const [preset, setPreset] = useState<PresetKey>("summary");
   const [language, setLanguage] = useState("");
   const [speakers, setSpeakers] = useState("");
+  const [context, setContext] = useState("");
 
   const [recover, setRecover] = useState<RecoverState | null>(null);
   const dotsRef = useRef<DotFieldHandle>(null);
@@ -112,27 +114,14 @@ export default function InkApp() {
   }, [recording, cooking]);
 
   const activeEntry = entries.find((e) => e.id === activeId) || null;
+  const view: "INPUT" | "OUTPUT" = activeEntry ? "OUTPUT" : "INPUT";
 
   const patchLocal = useCallback((id: string, fields: Partial<HistoryEntry>, db: Record<string, unknown>) => {
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...fields } : e)));
     void patchEntry(id, db).catch((err) => console.error("[history] patch failed:", err));
   }, []);
 
-  // ── AI auto-run после транскрипции (пресет из карточки) ─────
-  const autoRunPreset = useCallback(async (entry: HistoryEntry, p: PresetKey) => {
-    if (p !== "summary" && p !== "actions") return;
-    setStatus(`cooking ${p}…`);
-    try {
-      const text = await generate(entry.segments, entry.speakerNames, p, entry.lang === "auto" ? "" : entry.lang);
-      const ai = { ...entry.aiResults, [p]: text };
-      patchLocal(entry.id, { aiResults: ai }, { ai_results: ai });
-      setStatus("");
-    } catch {
-      setStatus(""); // ResultView покажет свою ошибку при ручном Generate
-    }
-  }, [patchLocal]);
-
-  // ── основной Cook-поток ─────────────────────────────────────
+  // ── завершение: сохранить транскрипт, перейти в OUTPUT ──────
   const finishWithSegments = useCallback(async (segments: Segment[], lang: string) => {
     if (!session?.user) return;
     dotsRef.current?.wave(1.8);
@@ -149,7 +138,7 @@ export default function InkApp() {
     });
     if (!entry) { setStatusKind("error"); setStatus("saved locally only — history insert failed"); return; }
     setEntries((prev) => [entry, ...prev]);
-    setActiveId(entry.id);
+    setActiveId(entry.id);                 // → OUTPUT
     setStatus("");
 
     // Фоновый LLM-заголовок (перетирает только авто-тайтл)
@@ -159,9 +148,7 @@ export default function InkApp() {
         e.id === entry.id && e.titleIsAuto ? { ...e, title: t } : e));
       void patchEntry(entry.id, { title: t }).catch(() => {});
     });
-
-    void autoRunPreset({ ...entry, title }, preset);
-  }, [session, preset, autoRunPreset]);
+  }, [session]);
 
   const cookBlob = useCallback(async (blob: Blob, durationSec: number, sessionId: string | null = null) => {
     if (cooking) return;
@@ -173,22 +160,26 @@ export default function InkApp() {
 
     let lastStage = "";
     let lastChunks = 0;
-    const onProgress = (p: JobProgress) => {
-      if (p.chunks_total) {
-        if ((p.chunks_done || 0) > lastChunks) {
-          lastChunks = p.chunks_done || 0;
+    const onProgress = (pr: JobProgress) => {
+      if (pr.chunks_total) {
+        if ((pr.chunks_done || 0) > lastChunks) {
+          lastChunks = pr.chunks_done || 0;
           dotsRef.current?.wave(1);
         }
-        setStatus(`chunk ${p.chunks_done || 0}/${p.chunks_total} · transcribing…`);
-      } else if (p.stage && p.stage !== lastStage) {
-        lastStage = p.stage;
+        setStatus(`chunk ${pr.chunks_done || 0}/${pr.chunks_total} · transcribing…`);
+      } else if (pr.stage && pr.stage !== lastStage) {
+        lastStage = pr.stage;
         dotsRef.current?.wave(1);
-        setStatus(STAGE_LABELS[p.stage] || `${p.stage}…`);
+        setStatus(STAGE_LABELS[pr.stage] || `${pr.stage}…`);
       }
     };
 
     try {
-      const segments = await transcribe(blob, { language, numSpeakers: speakers, durationSec }, onProgress);
+      const segments = await transcribe(
+        blob,
+        { language, numSpeakers: speakers, durationSec, prompt: context },
+        onProgress,
+      );
       if (!segments.length) {
         setStatusKind("error");
         setStatus("no speech detected in the recording");
@@ -209,7 +200,7 @@ export default function InkApp() {
     } finally {
       setCooking(false);
     }
-  }, [cooking, language, speakers, finishWithSegments]);
+  }, [cooking, language, speakers, context, finishWithSegments]);
 
   const cookText = useCallback(async (text: string) => {
     if (cooking || !text) return;
@@ -316,18 +307,17 @@ export default function InkApp() {
       </header>
 
       <main className="i-hero">
-        <DotField ref={dotsRef} anchorRef={stageRef} />
+        <DotField ref={dotsRef} anchorRef={stageRef} mode={view === "OUTPUT" ? "reading" : "live"} />
         <div className="i-center">
           <div ref={stageRef}>
-            {activeEntry ? (
+            {view === "OUTPUT" && activeEntry ? (
               <>
-                <button type="button" className="i-pill i-back" onClick={() => setActiveId(null)}>
+                <button type="button" className="i-back" onClick={() => setActiveId(null)}>
                   ← New recording
                 </button>
                 <ResultView
                   key={activeEntry.id}
                   entry={activeEntry}
-                  initialTab={preset === "actions" ? "actions" : preset === "summary" ? "summary" : "transcript"}
                   onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
                 />
                 {status && <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">{status}</p>}
@@ -338,9 +328,9 @@ export default function InkApp() {
                 <p className="i-sub">Talk it into shape — come back to clean, structured text.</p>
                 <InputCard
                   cooking={cooking} recording={recording} recSeconds={recSeconds}
-                  preset={preset} onPreset={setPreset}
                   language={language} onLanguage={setLanguage}
                   speakers={speakers} onSpeakers={setSpeakers}
+                  context={context} onContext={setContext}
                   onCookText={(t) => void cookText(t)}
                   onFile={(f) => void onFile(f)}
                   onRecToggle={() => void onRecToggle()}

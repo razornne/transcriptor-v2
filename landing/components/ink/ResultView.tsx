@@ -1,10 +1,16 @@
 "use client";
-import { useState } from "react";
+import { memo, useCallback, useState } from "react";
 import type { HistoryEntry, Segment } from "@/lib/ink/db";
 import { generate, UpgradeRequiredError } from "@/lib/ink/api";
 
-// Результат: заголовок (inline-rename) + табы Transcript / Summary / Actions
-// + AI-генерация (detail/focus) + экспорт. Спикеры переименовываются кликом.
+// Результат (состояние OUTPUT): заголовок (inline-rename) + premium segmented
+// control Transcript/Summary/Action items + AI-генерация (detail/focus) +
+// экспорт. Спикеры переименовываются кликом по имени.
+//
+// Перф (Спринт 1): строка сегмента вынесена в React.memo(SegmentRow), все
+// колбэки стабилизированы useCallback → переключение вкладок / copy / detail
+// НЕ ре-рендерит весь список. Плюс CSS content-visibility:auto на .i-seg
+// (нативная виртуализация) — длинный транскрипт не роняет FPS.
 
 const SPK_COLORS = ["var(--i-accent)", "#C77D2E", "#7E6BC4", "#3E8E6E"];
 
@@ -30,16 +36,58 @@ export function transcriptText(segments: Segment[], names: Record<string, string
 
 type Tab = "transcript" | "summary" | "actions";
 
+// ── мемоизированная строка сегмента ─────────────────────────────
+const SegmentRow = memo(function SegmentRow({
+  speaker, name, displayName, color, time, text, editing,
+  onStartEdit, onRename, onCancelEdit,
+}: {
+  speaker: string;
+  name: string;
+  displayName: string;
+  color: string;
+  time: string;
+  text: string;
+  editing: boolean;
+  onStartEdit: (label: string) => void;
+  onRename: (label: string, value: string) => void;
+  onCancelEdit: () => void;
+}) {
+  return (
+    <div className="i-seg">
+      <div className="i-seg-head">
+        {editing ? (
+          <input
+            className="i-spk-edit"
+            autoFocus
+            defaultValue={name}
+            placeholder={displayName}
+            onBlur={(e) => onRename(speaker, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") onCancelEdit();
+            }}
+          />
+        ) : (
+          <button type="button" className="i-spk" style={{ color }}
+            title="Rename speaker" onClick={() => onStartEdit(speaker)}>
+            {displayName}
+          </button>
+        )}
+        <span className="i-seg-time">{time}</span>
+      </div>
+      <p className="i-seg-text">{text}</p>
+    </div>
+  );
+});
+
 export function ResultView({
   entry,
   onPatch,
-  initialTab = "transcript",
 }: {
   entry: HistoryEntry;
   onPatch: (fields: Partial<HistoryEntry>, db: Record<string, unknown>) => void;
-  initialTab?: Tab;
 }) {
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const [tab, setTab] = useState<Tab>("transcript");
   const [genBusy, setGenBusy] = useState<Tab | null>(null);
   const [genError, setGenError] = useState("");
   const [detail, setDetail] = useState("medium");
@@ -66,12 +114,24 @@ export function ResultView({
     }
   };
 
-  const renameSpeaker = (label: string, name: string) => {
-    const next = { ...names };
-    if (name.trim()) next[label] = name.trim(); else delete next[label];
-    onPatch({ speakerNames: next }, { speaker_names: next });
+  // Стабильные колбэки — иначе React.memo на строках не сработает
+  const onStartEdit = useCallback((label: string) => setEditingSpk(label), []);
+  const onCancelEdit = useCallback(() => setEditingSpk(null), []);
+  const onRename = useCallback((label: string, value: string) => {
     setEditingSpk(null);
-  };
+    onPatch(
+      (() => {
+        const next = { ...entry.speakerNames };
+        if (value.trim()) next[label] = value.trim(); else delete next[label];
+        return { speakerNames: next };
+      })() as Partial<HistoryEntry>,
+      (() => {
+        const next = { ...entry.speakerNames };
+        if (value.trim()) next[label] = value.trim(); else delete next[label];
+        return { speaker_names: next };
+      })(),
+    );
+  }, [entry.speakerNames, onPatch]);
 
   const exportText = tab === "transcript" ? transcriptText(entry.segments, names) : entry.aiResults[tab] || "";
 
@@ -125,30 +185,19 @@ export function ResultView({
       {tab === "transcript" && (
         <div className="i-seglist">
           {entry.segments.map((s, k) => (
-            <div className="i-seg" key={k}>
-              <div className="i-seg-head">
-                {editingSpk === s.speaker ? (
-                  <input
-                    className="i-spk-edit"
-                    autoFocus
-                    defaultValue={names[s.speaker] || ""}
-                    placeholder={spkDisplay(s.speaker, {})}
-                    onBlur={(e) => renameSpeaker(s.speaker, e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                      if (e.key === "Escape") setEditingSpk(null);
-                    }}
-                  />
-                ) : (
-                  <button type="button" className="i-spk" style={{ color: spkColor(s.speaker) }}
-                    title="Rename speaker" onClick={() => setEditingSpk(s.speaker)}>
-                    {spkDisplay(s.speaker, names)}
-                  </button>
-                )}
-                <span className="i-seg-time">{fmtTime(s.start)}</span>
-              </div>
-              <p className="i-seg-text">{s.text}</p>
-            </div>
+            <SegmentRow
+              key={k}
+              speaker={s.speaker}
+              name={names[s.speaker] || ""}
+              displayName={spkDisplay(s.speaker, names)}
+              color={spkColor(s.speaker)}
+              time={fmtTime(s.start)}
+              text={s.text}
+              editing={editingSpk === s.speaker}
+              onStartEdit={onStartEdit}
+              onRename={onRename}
+              onCancelEdit={onCancelEdit}
+            />
           ))}
         </div>
       )}

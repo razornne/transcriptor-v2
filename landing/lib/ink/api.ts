@@ -67,7 +67,7 @@ export async function pollJob(
 
 export async function transcribe(
   blob: Blob,
-  o: { language: string; numSpeakers: string; durationSec: number; quality?: "best" },
+  o: { language: string; numSpeakers: string; durationSec: number; prompt?: string; quality?: "best" },
   onProgress?: (p: JobProgress) => void,
 ): Promise<Segment[]> {
   const fd = new FormData();
@@ -75,6 +75,7 @@ export async function transcribe(
   if (o.language) fd.append("language", o.language);
   if (o.numSpeakers) fd.append("num_speakers", o.numSpeakers);
   if (o.durationSec) fd.append("duration_sec", String(Math.round(o.durationSec)));
+  if (o.prompt && o.prompt.trim()) fd.append("prompt", o.prompt.trim());
   if (o.quality === "best") fd.append("quality", "best");
   const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd);
   const maxWait = o.durationSec > 1800 ? 120 * 60 * 1000 : 22 * 60 * 1000;
