@@ -1,62 +1,123 @@
 "use client";
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, memo, useEffect, useImperativeHandle, useRef } from "react";
 
-// DotField v2 — живой halftone-ореол вокруг stage-блока.
+// ═══════════════════════════════════════════════════════════════════════
+// DotField v3 — дымчатый halftone-ореол вокруг stage-карточки.
 //
-// Органика вместо «коробки»: позиция каждой точки слегка сдвинута от сетки,
-// яркость и порог видимости рандомизированы per-dot — граница ореола
-// растворяется неровно (stochastic dithering), параллельных «стенок» нет.
+// ВАЖНО ДЛЯ ПЕРФОРМАНСА (Спринт 1, критический баг):
+//   Раньше canvas был absolute inset:0 внутри .i-hero, а hero растёт вместе
+//   с контентом → на длинном транскрипте битмап достигал ~15000px высоты,
+//   rAF рисовал десятки тысяч точек/кадр → интерфейс лагал тем сильнее, чем
+//   длиннее текст. ТЕПЕРЬ canvas живёт в position:fixed обёртке размером
+//   строго с вьюпорт (height:100dvh). Битмап = viewport × dpr и НИКОГДА не
+//   зависит от длины документа. Сетка точек строится только по вьюпорту и
+//   куллится в кольцо вокруг (клампленной к вьюпорту) карточки → реальное
+//   число точек ~2000-2800 при любой длине транскрипта.
 //
-// Интерактив: курсор мягко раздвигает точки (радиальное отталкивание с
-// затуханием) и подсвечивает их синусоидальной рябью вокруг себя. Эффект
-// складывается с системными волнами Cook (реальные события пайплайна) —
-// во время обработки мышь «гонит волну» поверх прогресса.
+//   Декаплинг от текстового стейта:
+//   • компонент обёрнут в React.memo — пропсы (anchorRef, mode) референциально
+//     стабильны, поэтому ввод текста / смена статуса в page.tsx НЕ вызывают
+//     ре-рендер DotField;
+//   • вся горячая память (мышь, тайминги, волны, точки) — в useRef, внутри
+//     requestAnimationFrame НЕТ ни одного setState;
+//   • волны запускаются императивно через ref.wave(), не через пропсы.
 //
-// Перфоманс: один canvas, rAF крутится только пока есть волны или активен
-// курсор; в покое — статичный кадр. prefers-reduced-motion отключает всё
-// динамическое.
+//   Reading mode (mode="reading", состояние OUTPUT): pointermove-слушатель
+//   игнорируется, rAF не крутится (физика не тратит CPU вхолостую), canvas
+//   плавно гаснет до opacity 0.35 через CSS transition.
+//
+// МАТЕМАТИКА (дымка вместо стен):
+//   base(d) = smoothstep(GAP, GAP+RAMP, d) · (1 − smoothstep(PEAK_END, R_OUT, d))
+//   где d — честный SDF до скруглённого прямоугольника карточки. Точки
+//   растворяются в ноль за ~GAP(44)px до бордера → карточка «дышит».
+//   Края дизерятся детерминированным value-noise (без Math.random в кадре):
+//   джиттер порогов ±12px, яркость ×0.6..1.4, радиус ±25%, позиция ±3px.
+//   Курсор (lerp-пружина) гонит радиальную синус-волну и слегка раздвигает
+//   точки; эффект аддитивно складывается с системными волнами Cook.
+// ═══════════════════════════════════════════════════════════════════════
 
 export type DotFieldHandle = { wave: (amp?: number) => void };
+export type DotMode = "live" | "reading";
 
-const SPACING = 12;
-const MAX_DIST = 250;     // дальше stage-блока точек нет вовсе
-const HIDE_DIST = 5;
-const FALLOFF = 70;       // мягче, чем раньше (55) — ореол «дышит» шире
-const WAVE_SPEED = 0.27;  // px/мс
-const WAVE_SIGMA = 48;
-const MOUSE_R = 150;      // радиус влияния курсора
-const MOUSE_PUSH = 13;    // макс. смещение точки от курсора, px
+const BASE_SPACING = 13;     // шаг сетки, px
+const MAX_DOTS = 2800;       // хард-кап: больше — увеличиваем SPACING
+const GAP = 44;              // растворение в ноль за столько px до бордера
+const RAMP = 36;             // ширина набора яркости
+const PEAK_END = 110;        // докуда держится максимум
+const R_OUT = 230;           // полный распад наружу
+const CARD_RADIUS = 18;      // совпадает с --i-r-lg карточки
+const WAVE_SPEED = 0.27;     // px/мс (~270 px/с)
+const WAVE_SIGMA = 48;       // ширина гребня системной волны
+const MOUSE_R = 150;         // радиус влияния курсора
+const MOUSE_PUSH = 12;       // макс. смещение точки от курсора, px
+const MOUSE_IDLE_MS = 1200;  // курсор «уснул» — гасим rAF
 
 type Dot = {
-  x: number; y: number; d: number;
-  base: number;   // статичная яркость (рандомизирована)
-  cut: number;    // per-dot порог видимости — рваная граница ореола
-  rr: number;     // вариация радиуса
+  x: number; y: number;   // позиция в координатах вьюпорта (= canvas)
+  d: number;              // SDF-расстояние до бордера карточки
+  base: number;          // статичная яркость (профиль + noise)
+  cut: number;           // per-dot порог видимости (рваный край)
+  rr: number;            // вариация радиуса
 };
 type Wave = { start: number; amp: number };
 
-export const DotField = forwardRef<
+function smoothstep(a: number, b: number, x: number): number {
+  if (a === b) return x < a ? 0 : 1;
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+// Детерминированный value-noise [0,1) по координатам (стабилен между кадрами)
+function hashNoise(x: number, y: number, s: number): number {
+  const v = Math.sin(x * 12.9898 + y * 78.233 + s * 37.719) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+// SDF до скруглённого прямоугольника: <0 внутри, >0 снаружи (px до бордера)
+function sdfRoundRect(
+  px: number, py: number,
+  cx: number, cy: number, halfW: number, halfH: number, r: number,
+): number {
+  const qx = Math.abs(px - cx) - halfW + r;
+  const qy = Math.abs(py - cy) - halfH + r;
+  const ax = Math.max(qx, 0), ay = Math.max(qy, 0);
+  return Math.hypot(ax, ay) + Math.min(Math.max(qx, qy), 0) - r;
+}
+
+const DotFieldInner = forwardRef<
   DotFieldHandle,
-  { anchorRef: React.RefObject<HTMLDivElement | null> }
->(function DotField({ anchorRef }, ref) {
+  { anchorRef: React.RefObject<HTMLDivElement | null>; mode?: DotMode }
+>(function DotFieldInner({ anchorRef, mode = "live" }, ref) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wavesRef = useRef<Wave[]>([]);
   const runningRef = useRef(false);
   const reducedRef = useRef(false);
+  const modeRef = useRef<DotMode>(mode);
   const kickRef = useRef<() => void>(() => {});
+  const rebuildRef = useRef<() => void>(() => {});
 
+  // Императивный API — волны не идут через пропсы (иначе ломали бы memo)
   useImperativeHandle(ref, () => ({
     wave(amp = 1) {
-      if (reducedRef.current) return;
+      if (reducedRef.current || modeRef.current !== "live") return;
       wavesRef.current.push({ start: performance.now(), amp });
       kickRef.current();
     },
-  }));
+  }), []);
+
+  // Реакция на смену режима без пересоздания слушателей
+  useEffect(() => {
+    modeRef.current = mode;
+    const cv = canvasRef.current;
+    if (cv) cv.style.opacity = mode === "reading" ? "0.35" : "1";
+    rebuildRef.current();           // перепозиционировать ореол под новый stage
+    if (mode === "live") kickRef.current();
+  }, [mode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const parent = canvas?.parentElement;
-    if (!canvas || !parent) return;
+    const wrap = canvas?.parentElement;
+    if (!canvas || !wrap) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -66,71 +127,93 @@ export const DotField = forwardRef<
 
     let dots: Dot[] = [];
     let raf = 0;
-    let parentRect = parent.getBoundingClientRect();
+    let vw = 0, vh = 0;
 
-    // курсор: target → плавный (lerp), активность затухает после ухода
-    const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999, act: 0, inside: false };
+    // Курсор: target (tx,ty) → сглаженный (x,y) пружиной; act — затухающая
+    // «активность» (0..1), lastMove — для авто-усыпления.
+    const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999, act: 0, lastMove: -9999 };
 
-    // Детерминированный per-dot шум (без Math.random — стабильно между rebuild)
-    const noise = (x: number, y: number, s: number) => {
-      const v = Math.sin(x * 12.9898 + y * 78.233 + s * 37.719) * 43758.5453;
-      return v - Math.floor(v);
-    };
-
-    const dotColor = () => {
+    const dotColor = (): string => {
       const el = canvas.closest(".ink-root") || document.documentElement;
       return getComputedStyle(el as Element).getPropertyValue("--i-dot").trim() || "20,18,14";
     };
 
-    function rebuild() {
-      const card = anchorRef.current;
-      if (!card) return;
-      parentRect = parent!.getBoundingClientRect();
-      const cr = card.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      canvas!.width = Math.max(1, Math.round(parentRect.width * dpr));
-      canvas!.height = Math.max(1, Math.round(parentRect.height * dpr));
-      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      const rl = cr.left - parentRect.left, rt = cr.top - parentRect.top;
-      const rr = rl + cr.width, rb = rt + cr.height;
-
-      dots = [];
-      for (let gy = SPACING / 2; gy < parentRect.height; gy += SPACING) {
-        for (let gx = SPACING / 2; gx < parentRect.width; gx += SPACING) {
-          // органический сдвиг от идеальной сетки
-          const x = gx + (noise(gx, gy, 1) - 0.5) * 6;
-          const y = gy + (noise(gx, gy, 2) - 0.5) * 6;
-          const dx = Math.max(rl - x, x - rr, 0);
-          const dy = Math.max(rt - y, y - rb, 0);
-          const d = Math.hypot(dx, dy);
-          if (d < HIDE_DIST || d > MAX_DIST) continue;
-          const base = Math.exp(-d / FALLOFF) * (0.6 + 0.8 * noise(gx, gy, 3));
-          dots.push({
+    function buildAt(spacing: number, cx: number, cy: number, halfW: number, halfH: number): Dot[] {
+      const out: Dot[] = [];
+      for (let gy = spacing / 2; gy < vh; gy += spacing) {
+        for (let gx = spacing / 2; gx < vw; gx += spacing) {
+          // органический сдвиг от идеальной сетки (±3px)
+          const x = gx + (hashNoise(gx, gy, 1) - 0.5) * 6;
+          const y = gy + (hashNoise(gx, gy, 2) - 0.5) * 6;
+          const d = sdfRoundRect(x, y, cx, cy, halfW, halfH, CARD_RADIUS);
+          if (d <= 0) continue;                 // под карточкой точек нет
+          // per-dot джиттер порогов ±12px — рваный аналоговый край
+          const j = (hashNoise(gx, gy, 4) - 0.5) * 24;
+          const rise = smoothstep(GAP + j, GAP + RAMP + j, d);
+          const fall = 1 - smoothstep(PEAK_END + j, R_OUT + j, d);
+          const profile = rise * fall;
+          if (profile < 0.015) continue;        // вне кольца
+          const bright = 0.6 + 0.8 * hashNoise(gx, gy, 3);
+          out.push({
             x, y, d,
-            base,
-            cut: 0.028 + 0.05 * noise(gx, gy, 4),
-            rr: 0.8 + 0.5 * noise(gx, gy, 5),
+            base: profile * bright,
+            cut: 0.03 + 0.05 * hashNoise(gx, gy, 5),
+            rr: 0.8 + 0.5 * hashNoise(gx, gy, 6),
           });
         }
+      }
+      return out;
+    }
+
+    function rebuild() {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const wr = wrap!.getBoundingClientRect();   // = вьюпорт (fixed inset:0)
+      vw = wr.width; vh = wr.height;
+      const dpr = window.devicePixelRatio || 1;
+      canvas!.width = Math.max(1, Math.round(vw * dpr));
+      canvas!.height = Math.max(1, Math.round(vh * dpr));
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // rect карточки в координатах вьюпорта, КЛАМП к видимой зоне — на
+      // длинном результате ореол не уходит за экран и не плодит точки.
+      const cr = anchor.getBoundingClientRect();
+      const rl = Math.max(cr.left, -R_OUT);
+      const rt = Math.max(cr.top, -R_OUT);
+      const rr = Math.min(cr.right, vw + R_OUT);
+      const rb = Math.min(cr.bottom, vh + R_OUT);
+      const cx = (rl + rr) / 2, cy = (rt + rb) / 2;
+      const halfW = Math.max(0, (rr - rl) / 2), halfH = Math.max(0, (rb - rt) / 2);
+
+      // Адаптивный SPACING под хард-кап (защита для огромных мониторов)
+      let spacing = BASE_SPACING;
+      for (let i = 0; i < 4; i++) {
+        dots = buildAt(spacing, cx, cy, halfW, halfH);
+        if (dots.length <= MAX_DOTS) break;
+        spacing *= 1.25;
       }
       render(performance.now());
     }
 
     function render(now: number) {
-      ctx!.clearRect(0, 0, parentRect.width, parentRect.height);
+      ctx!.clearRect(0, 0, vw, vh);
       const rgb = dotColor();
+      const live = modeRef.current === "live" && !reducedRef.current;
 
+      // системные волны Cook
       wavesRef.current = wavesRef.current.filter(
-        (w) => (now - w.start) * WAVE_SPEED < MAX_DIST + WAVE_SIGMA * 3,
+        (w) => (now - w.start) * WAVE_SPEED < R_OUT + WAVE_SIGMA * 3,
       );
 
-      // плавное следование за курсором + затухание активности
-      mouse.x += (mouse.tx - mouse.x) * 0.18;
-      mouse.y += (mouse.ty - mouse.y) * 0.18;
-      mouse.act += ((mouse.inside ? 1 : 0) - mouse.act) * 0.07;
-
+      // курсор: пружина + затухание активности
+      if (live) {
+        mouse.x += (mouse.tx - mouse.x) * 0.15;
+        mouse.y += (mouse.ty - mouse.y) * 0.15;
+      }
+      const lively = live && (now - mouse.lastMove) < MOUSE_IDLE_MS;
+      mouse.act += ((lively ? 1 : 0) - mouse.act) * 0.07;
       const act = mouse.act;
+
       for (const p of dots) {
         let lift = 0;
         for (const w of wavesRef.current) {
@@ -139,19 +222,18 @@ export const DotField = forwardRef<
           lift += w.amp * Math.exp(-(dd * dd) / (2 * WAVE_SIGMA * WAVE_SIGMA));
         }
 
-        // курсор: отталкивание + рябь
         let ox = 0, oy = 0, mLift = 0;
         if (act > 0.01) {
           const mdx = p.x - mouse.x, mdy = p.y - mouse.y;
           const md = Math.hypot(mdx, mdy);
           if (md < MOUSE_R && md > 0.5) {
             const t = 1 - md / MOUSE_R;
-            const f = t * t;
-            const push = MOUSE_PUSH * f * act;
+            const env = t * t;                 // радиальное затухание
+            const ripple = 0.55 + 0.45 * Math.sin(md * 0.09 - now * 0.0065);
+            mLift = env * ripple * 0.5 * act;
+            const push = MOUSE_PUSH * env * act;
             ox = (mdx / md) * push;
             oy = (mdy / md) * push;
-            const ripple = 0.75 + 0.25 * Math.sin(md * 0.085 - now * 0.0065);
-            mLift = f * 0.5 * act * ripple;
           }
         }
 
@@ -166,40 +248,42 @@ export const DotField = forwardRef<
     }
 
     function loop() {
-      render(performance.now());
-      if (wavesRef.current.length > 0 || mouse.act > 0.012) {
+      const now = performance.now();
+      render(now);
+      const active = wavesRef.current.length > 0 || mouse.act > 0.012;
+      if (active && modeRef.current === "live") {
         raf = requestAnimationFrame(loop);
       } else {
         runningRef.current = false;
         mouse.act = 0;
-        render(performance.now());
+        render(performance.now());            // финальный статичный кадр
       }
     }
 
     function kick() {
-      if (runningRef.current) return;
+      if (runningRef.current || modeRef.current !== "live") return;
       runningRef.current = true;
       raf = requestAnimationFrame(loop);
     }
+
     kickRef.current = kick;
+    rebuildRef.current = rebuild;
 
     const onMove = (e: PointerEvent) => {
-      if (reducedRef.current) return;
-      mouse.tx = e.clientX - parentRect.left;
-      mouse.ty = e.clientY - parentRect.top;
-      if (!mouse.inside) { mouse.x = mouse.tx; mouse.y = mouse.ty; }
-      mouse.inside = true;
+      if (reducedRef.current || modeRef.current !== "live") return;
+      mouse.tx = e.clientX; mouse.ty = e.clientY;
+      if (mouse.act < 0.01) { mouse.x = mouse.tx; mouse.y = mouse.ty; }
+      mouse.lastMove = performance.now();
       kick();
     };
-    const onLeave = () => { mouse.inside = false; kick(); };
-    parent.addEventListener("pointermove", onMove);
-    parent.addEventListener("pointerleave", onLeave);
+    // window — курсор работает в координатах вьюпорта (canvas fixed inset:0)
+    window.addEventListener("pointermove", onMove, { passive: true });
 
     rebuild();
-    const t = window.setTimeout(rebuild, 350); // шрифты доезжают позже
+    const t = window.setTimeout(rebuild, 350);  // шрифты доезжают позже
 
     const ro = new ResizeObserver(rebuild);
-    ro.observe(parent);
+    ro.observe(wrap);
     if (anchorRef.current) ro.observe(anchorRef.current);
 
     const mo = new MutationObserver(() => render(performance.now()));
@@ -208,13 +292,20 @@ export const DotField = forwardRef<
     return () => {
       cancelAnimationFrame(raf);
       window.clearTimeout(t);
+      window.removeEventListener("pointermove", onMove);
       ro.disconnect();
       mo.disconnect();
-      parent.removeEventListener("pointermove", onMove);
-      parent.removeEventListener("pointerleave", onLeave);
       runningRef.current = false;
     };
   }, [anchorRef]);
 
-  return <canvas ref={canvasRef} className="i-dots" aria-hidden="true" />;
+  return (
+    <div className="i-dotwrap" aria-hidden="true">
+      <canvas ref={canvasRef} className="i-dots" />
+    </div>
+  );
 });
+
+// React.memo: пропсы (anchorRef-объект, mode-строка) референциально стабильны,
+// поэтому ре-рендеры page.tsx от текстового/статусного стейта НЕ доходят сюда.
+export const DotField = memo(DotFieldInner);
