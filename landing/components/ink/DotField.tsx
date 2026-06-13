@@ -34,9 +34,11 @@ export type DotMode = "live" | "reading";
 const MAX_DOTS = 2800;
 const MIN_SPACING = 15;
 const CARD_RADIUS = 18;
-const CLOUD_LO = 0.5;        // нижний порог проявления облака
-const CLOUD_HI = 0.9;        // верхний (полная плотность)
-const MAX_ALPHA = 0.42;      // макс. базовая прозрачность точки облака
+// Сумма синусов тяготеет к 0.5 (CLT), поэтому пороги держим близко к центру —
+// иначе почти всё поле ниже порога и облако вырождается в редкие искры.
+const CLOUD_LO = 0.40;       // нижний порог проявления облака
+const CLOUD_HI = 0.74;       // верхний (полная плотность)
+const MAX_ALPHA = 0.5;       // макс. базовая прозрачность точки облака
 const MAX_RADIUS = 1.5;      // макс. радиус точки облака, px
 const WAVE_SPEED = 0.3;      // px/мс — скорость системной волны Cook
 const WAVE_SIGMA = 52;
@@ -150,9 +152,13 @@ const DotFieldInner = forwardRef<
       const cy = (cr.top + cr.bottom) / 2;
       const halfW = cr.width / 2, halfH = cr.height / 2;
       centerX = cx; centerY = cy;
-      // эллипс safety-маски — органичный внешний край вокруг контента
-      const rx = halfW * 1.18 + 34;
-      const ry = halfH * 1.22 + 30;
+      // эллипс safety-маски — ТЕСНЫЙ органичный край вокруг контента
+      // (аддитивный отступ, не множитель — иначе высокий stage раздувает
+      // эллипс на полэкрана и облако вырождается в тонкие поля по краям).
+      // Углы карточки добивает rectMask ниже, так что эллипс может не
+      // охватывать прямоугольник целиком.
+      const rx = halfW + 56;
+      const ry = halfH + 44;
 
       // адаптивный шаг: число точек по всему вьюпорту ≤ MAX_DOTS
       const spacing = Math.max(MIN_SPACING, Math.sqrt((vw * vh) / MAX_DOTS));
@@ -163,7 +169,7 @@ const DotFieldInner = forwardRef<
           // эллиптическая маска: 0 внутри (er<0.80), плавно до 1 (er>1.15)
           const ex = (x - cx) / rx, ey = (y - cy) / ry;
           const er = Math.hypot(ex, ey);
-          const ellipse = smoothstep(0.80, 1.15, er);
+          const ellipse = smoothstep(0.85, 1.0, er);
           // жёсткая rounded-rect очистка строго по anchor — гарантия, что
           // карточка и буквы заголовка чисты (0 внутри, 1 за 22px снаружи)
           const dRect = sdfRoundRect(x, y, cx, cy, halfW, halfH, CARD_RADIUS);
