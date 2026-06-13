@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { sb } from "@/lib/ink/supabase";
 import { DotField, type DotFieldHandle } from "@/components/ink/DotField";
@@ -24,13 +24,28 @@ import { loadSettings, saveSettings, type InkSettings } from "@/lib/ink/settings
 
 // /v2 — Ink & Halftone, fully functional app.
 // Sprint 5: InputCard MediaHub, two-column SettingsModal, workspace + visibility, onboarding demo.
-// Sprint 6: PostHog (privacy-masked), Insights modal (halftone charts), i18n EN/UA, mobile polish.
+// Sprint 6: PostHog (privacy-masked), i18n EN/UA, mobile polish.
+// Sprint 7: Insights removed, workspace-UI isolation fix, Cmd+D theme hotkey, uniform control row.
 
 // ── PostHog helper (fire-and-forget, never throws) ────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const ph = (): any => (typeof window !== "undefined" ? (window as any).posthog : null);
 function phCapture(event: string, props?: Record<string, unknown>) {
   try { ph()?.capture?.(event, props); } catch {}
+}
+
+// ── Smooth theme toggle shared by InkThemeToggle and Cmd+D ───────────────
+function applyThemeSmooth(next: "light" | "dark") {
+  const doApply = () => {
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("skriptly-theme", next); } catch {}
+    document.dispatchEvent(new CustomEvent("ink-theme-toggle"));
+  };
+  if ("startViewTransition" in document) {
+    (document as Document & { startViewTransition(cb: () => void): void }).startViewTransition(doApply);
+  } else {
+    doApply();
+  }
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -88,192 +103,7 @@ function downloadBlob(blob: Blob) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-// ── InsightsModal ────────────────────────────────────────────────────────
-function InsightsModal({
-  entries,
-  profile,
-  uiLang,
-  onClose,
-}: {
-  entries: HistoryEntry[];
-  profile: Profile | null;
-  uiLang: "en" | "ua";
-  onClose: () => void;
-}) {
-  const backdropRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", h);
-    return () => document.removeEventListener("keydown", h);
-  }, [onClose]);
-
-  const real = useMemo(() => entries.filter((e) => e.id !== "demo"), [entries]);
-
-  const totalSec = useMemo(() =>
-    real.reduce((acc, e) =>
-      acc + (e.segments.length ? Math.max(...e.segments.map((s) => s.end)) : 0), 0),
-  [real]);
-
-  const monthSec = useMemo(() => {
-    const now = new Date();
-    return real
-      .filter((e) => {
-        const d = new Date(e.date);
-        return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-      })
-      .reduce((acc, e) =>
-        acc + (e.segments.length ? Math.max(...e.segments.map((s) => s.end)) : 0), 0);
-  }, [real]);
-
-  // 14-day activity (recordings per day)
-  const activity = useMemo(() => Array.from({ length: 14 }, (_, i) => {
-    const target = new Date();
-    target.setDate(target.getDate() - (13 - i));
-    const targetDay = target.toLocaleDateString("en-CA"); // YYYY-MM-DD
-    return {
-      day: target.getDate(),
-      count: real.filter((e) => new Date(e.date).toLocaleDateString("en-CA") === targetDay).length,
-    };
-  }), [real]);
-
-  const maxActivity = Math.max(...activity.map((a) => a.count), 1);
-
-  // Top languages
-  const langData = useMemo(() => {
-    const map = real.reduce((acc, e) => {
-      const l = ((e.lang || "auto").toLowerCase().slice(0, 2)) || "auto";
-      acc[l] = (acc[l] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [real]);
-
-  const maxLang = Math.max(...langData.map(([, n]) => n), 1);
-
-  const usageRatio = profile && profile.minutes_limit > 0
-    ? Math.min(1, profile.minutes_used / profile.minutes_limit)
-    : 0;
-
-  const T = uiLang === "ua" ? {
-    title: "Аналітика", recordings: "записів", totalHours: "всього годин",
-    thisMonth: "цього місяця", activity: "Активність — 14 днів",
-    languages: "Мови", planUsage: "Використання плану",
-    noData: "Немає записів. Почніть з першої транскрипції!",
-  } : {
-    title: "Insights", recordings: "recordings", totalHours: "total hours",
-    thisMonth: "this month", activity: "Activity — last 14 days",
-    languages: "Languages", planUsage: "Plan usage",
-    noData: "No recordings yet. Start with your first transcription!",
-  };
-
-  return (
-    <div
-      ref={backdropRef}
-      className="i-modal-back"
-      onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
-    >
-      <div className="i-insights" role="dialog" aria-modal="true" aria-label={T.title}>
-        <div className="i-modal-header">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 20V10M12 20V4M6 20v-6" />
-          </svg>
-          <span className="i-modal-title">{T.title}</span>
-          <button type="button" className="i-modal-close" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-
-        <div className="i-insights-body">
-          {real.length === 0 ? (
-            <p style={{ fontSize: 13, color: "var(--i-graphite)", textAlign: "center", padding: "24px 0" }}>
-              {T.noData}
-            </p>
-          ) : (
-            <>
-              {/* Stats row */}
-              <div className="i-insights-stats">
-                <div className="i-insights-stat">
-                  <div className="i-insights-stat-val">{real.length}</div>
-                  <div className="i-insights-stat-lbl">{T.recordings}</div>
-                </div>
-                <div className="i-insights-stat">
-                  <div className="i-insights-stat-val">{(totalSec / 3600).toFixed(1)}h</div>
-                  <div className="i-insights-stat-lbl">{T.totalHours}</div>
-                </div>
-                <div className="i-insights-stat">
-                  <div className="i-insights-stat-val">{(monthSec / 3600).toFixed(1)}h</div>
-                  <div className="i-insights-stat-lbl">{T.thisMonth}</div>
-                </div>
-              </div>
-
-              {/* Activity chart — halftone dot-fill bars */}
-              <div>
-                <p className="i-insights-sect">{T.activity}</p>
-                <div className="i-activity">
-                  {activity.map(({ day, count }, i) => {
-                    const hPx = Math.max(3, Math.round((count / maxActivity) * 56));
-                    const showLabel = i === 0 || i === 3 || i === 6 || i === 9 || i === 13;
-                    return (
-                      <div key={i} className="i-activity-col" title={`${day}: ${count}`}>
-                        <div
-                          className="i-activity-bar"
-                          style={{ height: hPx, opacity: count > 0 ? 1 : 0.12 }}
-                        />
-                        <div className="i-activity-col-label">{showLabel ? day : ""}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Language bars — halftone fill */}
-              {langData.length > 0 && (
-                <div>
-                  <p className="i-insights-sect">{T.languages}</p>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                    {langData.map(([lang, count]) => (
-                      <div key={lang} className="i-lang-row">
-                        <span className="i-lang-name">{lang.toUpperCase()}</span>
-                        <div className="i-lang-bar">
-                          <div
-                            className="i-lang-fill"
-                            style={{ width: `${Math.round(count / maxLang * 100)}%` }}
-                          />
-                        </div>
-                        <span className="i-lang-pct">
-                          {Math.round(count / real.length * 100)}%
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Plan usage bar */}
-              {profile && (
-                <div>
-                  <p className="i-insights-sect">{T.planUsage}</p>
-                  <div className="i-insights-usage-card">
-                    <div className="i-insights-usage-meta">
-                      {(profile.minutes_used / 60).toFixed(1)}h / {Math.round(profile.minutes_limit / 60)}h · {profile.plan}
-                    </div>
-                    <div className="i-insights-usage-bar">
-                      <div
-                        className="i-insights-usage-fill"
-                        style={{ width: `${Math.round(usageRatio * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── HotkeysOverlay ───────────────────────────────────────────────
+// ── HotkeysOverlay ───────────────────────────────────────────
 function HotkeysOverlay({ onClose }: { onClose: () => void }) {
   const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
   const mod = isMac ? "⌘" : "Ctrl";
@@ -289,6 +119,7 @@ function HotkeysOverlay({ onClose }: { onClose: () => void }) {
   const rows = [
     { kbd: `${mod}+\\`, desc: "Toggle sidebar" },
     { kbd: `${mod}+,`, desc: "Open settings" },
+    { kbd: `${mod}+D`, desc: "Toggle light / dark theme" },
     { kbd: "R", desc: "Start / stop recording" },
     { kbd: "1 / 2 / 3 / 4", desc: "Switch tab (Transcript / Summary / Actions / Notes)" },
     { kbd: "Esc", desc: "Close panels" },
@@ -315,7 +146,7 @@ function HotkeysOverlay({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ── UndoToast ────────────────────────────────────────────────────
+// ── UndoToast ────────────────────────────────────────────────
 function UndoToast({ onUndo, onDismiss }: { onUndo: () => void; onDismiss: () => void }) {
   return (
     <div className="i-toast" role="status" aria-live="polite">
@@ -326,7 +157,7 @@ function UndoToast({ onUndo, onDismiss }: { onUndo: () => void; onDismiss: () =>
   );
 }
 
-// ── InkApp ──────────────────────────────────────────────────────
+// ── InkApp ──────────────────────────────────────────────────
 export default function InkApp() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -335,7 +166,6 @@ export default function InkApp() {
   const [sbOpen, setSbOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
-  const [insightsOpen, setInsightsOpen] = useState(false);
   const [team, setTeam] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [visibility, setVisibility] = useState<"private" | "workspace">("private");
@@ -671,7 +501,13 @@ export default function InkApp() {
 
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") { e.preventDefault(); setSbOpen((v) => !v); return; }
       if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); setSettingsOpen((v) => !v); return; }
-      if (e.key === "Escape") { setSbOpen(false); setSettingsOpen(false); setHotkeysOpen(false); setInsightsOpen(false); return; }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        const current = (document.documentElement.getAttribute("data-theme") || "light") as "light" | "dark";
+        applyThemeSmooth(current === "light" ? "dark" : "light");
+        return;
+      }
+      if (e.key === "Escape") { setSbOpen(false); setSettingsOpen(false); setHotkeysOpen(false); return; }
 
       if (isInput) return;
 
@@ -710,7 +546,8 @@ export default function InkApp() {
 
   const plan = profile?.plan || "free";
   const dotMode = settingsOpen || view === "OUTPUT" ? "reading" : "live";
-  const inWorkspace = !!workspace;
+  // workspace?.id is the reliable check: API returns non-null object with empty fields when no workspace
+  const inWorkspace = !!(workspace?.id);
 
   return (
     <div className={`ink-root${sbOpen ? " sb-open" : ""}${team ? " team" : ""}`}>
@@ -728,7 +565,6 @@ export default function InkApp() {
         onDelete={handleDelete}
         onSignOut={() => { void sb.auth.signOut(); }}
         onSettings={() => setSettingsOpen(true)}
-        onInsights={() => setInsightsOpen(true)}
       />
 
       <header className="i-topbar">
@@ -904,16 +740,6 @@ export default function InkApp() {
         />
       )}
 
-      {/* ── Insights Modal ── */}
-      {insightsOpen && (
-        <InsightsModal
-          entries={displayedEntries}
-          profile={profile}
-          uiLang={uiLang}
-          onClose={() => setInsightsOpen(false)}
-        />
-      )}
-
       {/* ── Hotkeys Overlay ── */}
       {hotkeysOpen && <HotkeysOverlay onClose={() => setHotkeysOpen(false)} />}
 
@@ -927,17 +753,22 @@ export default function InkApp() {
 
 function InkThemeToggle() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
+
   useEffect(() => {
     setTheme((document.documentElement.getAttribute("data-theme") || "light") as "light" | "dark");
+    const sync = () => {
+      setTheme((document.documentElement.getAttribute("data-theme") || "light") as "light" | "dark");
+    };
+    document.addEventListener("ink-theme-toggle", sync);
+    return () => document.removeEventListener("ink-theme-toggle", sync);
   }, []);
+
   const toggle = () => {
-    const next = theme === "light" ? "dark" : "light";
-    document.documentElement.setAttribute("data-theme", next);
-    try { localStorage.setItem("skriptly-theme", next); } catch {}
-    setTheme(next);
+    applyThemeSmooth(theme === "light" ? "dark" : "light");
   };
+
   return (
-    <button type="button" className="i-iconbtn" onClick={toggle} aria-label="Toggle theme">
+    <button type="button" className="i-iconbtn" onClick={toggle} aria-label="Toggle theme (⌘D)">
       {theme === "light" ? (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />

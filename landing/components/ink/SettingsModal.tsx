@@ -12,11 +12,6 @@ import {
 import { saveSettings, type InkSettings } from "@/lib/ink/settings";
 import { SUPPORTED_LANGUAGES, BILLING_URL } from "@/lib/ink/config";
 
-// Sprint 5/6 SettingsModal — two-column layout (168px nav + scrollable pane).
-// BUG FIX: workspace.members is guarded with ?? [] to prevent crash when API
-// returns workspace without members array.
-// Sprint 6: uiLang prop + EN/UA switcher in Settings pane.
-
 type NavSection = "account" | "subscription" | "workspace" | "settings" | "invite" | "danger";
 
 const PLAN_DATA = [
@@ -33,6 +28,20 @@ const PLAN_DATA = [
     features: ["Everything in Pro", "large-v3 model", "Privacy mode", "Priority support"],
   },
 ] as const;
+
+// Shared smooth theme helper — dispatches event so InkThemeToggle stays in sync
+function applyThemeSmooth(next: "light" | "dark") {
+  const doApply = () => {
+    document.documentElement.setAttribute("data-theme", next);
+    try { localStorage.setItem("skriptly-theme", next); } catch {}
+    document.dispatchEvent(new CustomEvent("ink-theme-toggle"));
+  };
+  if ("startViewTransition" in document) {
+    (document as Document & { startViewTransition(cb: () => void): void }).startViewTransition(doApply);
+  } else {
+    doApply();
+  }
+}
 
 function Toggle({
   checked, onChange, disabled, id,
@@ -101,6 +110,28 @@ export function SettingsModal({
   const plan = profile?.plan || "free";
   const isPremium = plan === "max" || plan === "team";
 
+  // Strict workspace validity: must have a real id
+  const hasValidWorkspace = !!(workspace?.id);
+
+  // Workspace i18n strings
+  const ws = uiLang === "ua" ? {
+    emptyTitle: "Створіть командний простір",
+    emptyBody: "Діліться транскриптами з колегами, створюйте спільні кастомні пресети та працюйте разом.",
+    namePlaceholder: "Назва воркспейсу",
+    createBtn: "Створити воркспейс",
+    creating: "Створення…",
+    planNote: "Потрібен Team план.",
+    viewPlans: "Переглянути плани →",
+  } : {
+    emptyTitle: "Create a workspace",
+    emptyBody: "Share transcripts with teammates, build shared presets, and collaborate together.",
+    namePlaceholder: "Workspace name",
+    createBtn: "Create workspace",
+    creating: "Creating…",
+    planNote: "Requires Team plan.",
+    viewPlans: "View plans →",
+  };
+
   // Best Quality
   const [qualityError, setQualityError] = useState("");
   const handleQuality = (v: boolean) => {
@@ -132,14 +163,19 @@ export function SettingsModal({
     } finally { setPrivSaving(false); }
   };
 
-  // Theme
+  // Theme — syncs with Cmd+D global hotkey via custom event
   const [theme, setTheme] = useState<"light" | "dark">("light");
   useEffect(() => {
     setTheme((document.documentElement.getAttribute("data-theme") || "light") as "light" | "dark");
+    const sync = () => {
+      setTheme((document.documentElement.getAttribute("data-theme") || "light") as "light" | "dark");
+    };
+    document.addEventListener("ink-theme-toggle", sync);
+    return () => document.removeEventListener("ink-theme-toggle", sync);
   }, []);
+
   const toggleTheme = (next: "light" | "dark") => {
-    document.documentElement.setAttribute("data-theme", next);
-    try { localStorage.setItem("skriptly-theme", next); } catch {}
+    applyThemeSmooth(next);
     setTheme(next);
   };
 
@@ -158,8 +194,8 @@ export function SettingsModal({
     if (!wsName.trim()) return;
     setWsCreating(true); setWsError("");
     try {
-      const ws = await apiCreateWorkspace(wsName.trim());
-      onWorkspaceChange?.(ws);
+      const created = await apiCreateWorkspace(wsName.trim());
+      onWorkspaceChange?.(created);
       setWsName("");
     } catch (e) {
       setWsError(e instanceof Error ? e.message : "failed");
@@ -183,7 +219,6 @@ export function SettingsModal({
     try {
       await apiRemoveMember(memberId);
       if (workspace) {
-        // Guard: members could be undefined if API didn't return it
         onWorkspaceChange?.({
           ...workspace,
           members: (workspace.members ?? []).filter((m) => m.id !== memberId),
@@ -212,7 +247,6 @@ export function SettingsModal({
       .catch(() => {});
   };
 
-  // Close on Escape
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", h);
@@ -334,64 +368,60 @@ export function SettingsModal({
             {/* ── Workspace ── */}
             {nav === "workspace" && (
               <div className="i-modal-pane">
-                {!workspace ? (
-                  /* No workspace: create or upsell */
-                  <>
-                    <p className="i-msect-title">Create a workspace</p>
-                    {plan === "team" ? (
-                      <div className="i-ws-create">
-                        <p style={{ fontSize: 13, color: "var(--i-graphite)", margin: 0 }}>
-                          Invite teammates to share transcripts and presets.
+                {!hasValidWorkspace ? (
+                  /* Beautiful empty state — create workspace */
+                  <div className="i-ws-empty">
+                    <div className="i-ws-empty-icon">
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+                      </svg>
+                    </div>
+                    <h2 className="i-ws-empty-title">{ws.emptyTitle}</h2>
+                    <p className="i-ws-empty-body">{ws.emptyBody}</p>
+                    <div className="i-ws-create">
+                      <input
+                        className="i-field"
+                        value={wsName}
+                        onChange={(e) => setWsName(e.target.value)}
+                        placeholder={ws.namePlaceholder}
+                        onKeyDown={(e) => { if (e.key === "Enter" && plan === "team") void handleCreateWs(); }}
+                      />
+                      {wsError && <p className="i-error">{wsError}</p>}
+                      <button
+                        type="button"
+                        className="i-ws-invite-btn"
+                        disabled={wsCreating || !wsName.trim() || plan !== "team"}
+                        onClick={() => void handleCreateWs()}
+                      >
+                        {wsCreating ? ws.creating : ws.createBtn}
+                      </button>
+                      {plan !== "team" && (
+                        <p className="i-ws-plan-note">
+                          {ws.planNote}{" "}
+                          <a href={BILLING_URL} target="_blank" rel="noreferrer">{ws.viewPlans}</a>
                         </p>
-                        <input
-                          className="i-field"
-                          value={wsName}
-                          onChange={(e) => setWsName(e.target.value)}
-                          placeholder="Workspace name"
-                          onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWs(); }}
-                        />
-                        {wsError && <p className="i-error">{wsError}</p>}
-                        <button
-                          type="button"
-                          className="i-ws-invite-btn"
-                          disabled={wsCreating || !wsName.trim()}
-                          onClick={() => void handleCreateWs()}
-                        >
-                          {wsCreating ? "Creating…" : "Create workspace"}
-                        </button>
-                      </div>
-                    ) : (
-                      /* Non-team plan: show upsell */
-                      <div className="i-upsell" style={{ marginTop: 0 }}>
-                        <div className="i-upsell-text">
-                          <div className="i-upsell-title">Team plan required</div>
-                          <div className="i-upsell-body">
-                            Workspace collaboration is available on the Team plan.
-                          </div>
-                        </div>
-                        <a href={BILLING_URL} target="_blank" rel="noreferrer" className="i-upsell-cta">
-                          View plans →
-                        </a>
-                      </div>
-                    )}
-                  </>
+                      )}
+                    </div>
+                  </div>
                 ) : (
-                  /* Workspace exists: manage it */
+                  /* Workspace exists — manage it */
                   <>
                     <p className="i-msect-title">Workspace</p>
                     <div className="i-msect-card">
                       <div className="i-mrow">
                         <div>
-                          <div className="i-account-email">{workspace.name}</div>
+                          <div className="i-account-email">{workspace!.name}</div>
                           <div className="i-account-plan">
-                            {workspace.role} · {workspace.plan} plan
+                            {workspace!.role} · {workspace!.plan} plan
                           </div>
                         </div>
                       </div>
                     </div>
 
                     {/* Invite form — owners only */}
-                    {workspace.role === "owner" && (
+                    {workspace!.role === "owner" && (
                       <>
                         <p className="i-msect-title" style={{ marginTop: 14 }}>Invite by email</p>
                         <div className="i-ws-invite">
@@ -415,15 +445,15 @@ export function SettingsModal({
                       </>
                     )}
 
-                    {/* Members list — guarded with ?? [] to prevent crash */}
+                    {/* Members list */}
                     <p className="i-msect-title" style={{ marginTop: 14 }}>Members</p>
                     <div className="i-ws-members">
-                      {(workspace.members ?? []).length === 0 && (
+                      {(workspace!.members ?? []).length === 0 && (
                         <p style={{ fontSize: 12.5, color: "var(--i-graphite)", padding: "10px 0" }}>
                           No members yet — invite your team above.
                         </p>
                       )}
-                      {(workspace.members ?? []).map((m) => (
+                      {(workspace!.members ?? []).map((m) => (
                         <div key={m.id} className="i-ws-member">
                           <div className="i-ws-member-email">{m.email}</div>
                           {m.status === "invited" && (
@@ -432,7 +462,7 @@ export function SettingsModal({
                           <span className={`i-ws-member-role${m.role === "owner" ? " owner" : ""}`}>
                             {m.role}
                           </span>
-                          {workspace.role === "owner" && m.role !== "owner" && (
+                          {workspace!.role === "owner" && m.role !== "owner" && (
                             <button
                               type="button"
                               className="i-ws-remove"
@@ -448,7 +478,7 @@ export function SettingsModal({
                     </div>
 
                     {/* Leave button — members only */}
-                    {workspace.role === "member" && (
+                    {workspace!.role === "member" && (
                       <button
                         type="button"
                         className="i-signout"
@@ -468,7 +498,7 @@ export function SettingsModal({
               </div>
             )}
 
-            {/* ── Settings (recording + privacy + appearance) ── */}
+            {/* ── Settings ── */}
             {nav === "settings" && (
               <div className="i-modal-pane">
                 <p className="i-msect-title">Recording defaults</p>
@@ -566,12 +596,9 @@ export function SettingsModal({
                       >Dark</button>
                     </div>
                   </div>
-                  {/* UI language — Sprint 6 i18n */}
                   {onUiLangChange && (
                     <div className="i-mrow">
-                      <label className="i-mrow-label" htmlFor="s-uilang">
-                        Interface language
-                      </label>
+                      <label className="i-mrow-label" htmlFor="s-uilang">Interface language</label>
                       <select
                         id="s-uilang"
                         className="i-mini"
@@ -645,8 +672,8 @@ export function SettingsModal({
               </div>
             )}
 
-          </div>{/* /i-modal-content */}
-        </div>{/* /i-modal-2col */}
+          </div>
+        </div>
       </div>
     </div>
   );

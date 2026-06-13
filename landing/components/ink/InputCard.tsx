@@ -2,11 +2,6 @@
 import { useEffect, useRef, useState } from "react";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 
-// InputCard v2 (Sprint 5 + 6) — Media Hub.
-// Dropzone body (idle hint / live timer) + control row + optional visibility selector.
-// Visibility row renders ONLY when inWorkspace is true (user has a workspace).
-// Mobile: control row wraps gracefully, touch targets ≥44px via CSS.
-
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 export function InputCard({
@@ -120,8 +115,6 @@ export function InputCard({
           </button>
         )}
 
-        <span className="i-ctrl-sep" aria-hidden="true" />
-
         <select
           className="i-mini"
           aria-label="Language"
@@ -175,7 +168,7 @@ export function InputCard({
         </div>
       )}
 
-      {/* ── Visibility selector — ONLY when user is in a workspace ── */}
+      {/* ── Visibility selector — ONLY when user has a real workspace ── */}
       {inWorkspace && onVisibility && visibility && (
         <div className="i-vis-row">
           <span className="i-vis-label">Save as</span>
