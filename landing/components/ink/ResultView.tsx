@@ -2,15 +2,17 @@
 import { memo, useCallback, useState } from "react";
 import type { HistoryEntry, Segment } from "@/lib/ink/db";
 import { generate, UpgradeRequiredError } from "@/lib/ink/api";
+import { UpgradeCard } from "./UpgradeCard";
 
 // Результат (состояние OUTPUT): заголовок (inline-rename) + premium segmented
 // control Transcript/Summary/Action items + AI-генерация (detail/focus) +
 // экспорт. Спикеры переименовываются кликом по имени.
 //
-// Перф (Спринт 1): строка сегмента вынесена в React.memo(SegmentRow), все
-// колбэки стабилизированы useCallback → переключение вкладок / copy / detail
-// НЕ ре-рендерит весь список. Плюс CSS content-visibility:auto на .i-seg
-// (нативная виртуализация) — длинный транскрипт не роняет FPS.
+// Спринт 2: AI-вкладки гейтятся по плану — Free видит UpgradeCard вместо
+// Generate; 402 (UpgradeRequiredError) с сервера тоже показывает UpgradeCard.
+//
+// Перф (Спринт 1): строка сегмента в React.memo(SegmentRow), колбэки
+// стабилизированы useCallback; .i-seg несёт content-visibility:auto.
 
 const SPK_COLORS = ["var(--i-accent)", "#C77D2E", "#7E6BC4", "#3E8E6E"];
 
@@ -82,20 +84,24 @@ const SegmentRow = memo(function SegmentRow({
 
 export function ResultView({
   entry,
+  plan,
   onPatch,
 }: {
   entry: HistoryEntry;
+  plan: string;
   onPatch: (fields: Partial<HistoryEntry>, db: Record<string, unknown>) => void;
 }) {
   const [tab, setTab] = useState<Tab>("transcript");
   const [genBusy, setGenBusy] = useState<Tab | null>(null);
   const [genError, setGenError] = useState("");
+  const [gated, setGated] = useState(false);   // 402 пришёл в рантайме
   const [detail, setDetail] = useState("medium");
   const [focus, setFocus] = useState("");
   const [editingSpk, setEditingSpk] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const names = entry.speakerNames;
+  const aiGated = plan === "free" || gated;
 
   const runAI = async (template: "summary" | "actions") => {
     if (genBusy) return;
@@ -106,9 +112,8 @@ export function ResultView({
       const ai = { ...entry.aiResults, [template]: text };
       onPatch({ aiResults: ai }, { ai_results: ai });
     } catch (e) {
-      setGenError(e instanceof UpgradeRequiredError
-        ? "AI analysis requires the Pro plan — upgrade in the old app settings for now."
-        : `generation failed: ${e instanceof Error ? e.message : e}`);
+      if (e instanceof UpgradeRequiredError) setGated(true);
+      else setGenError(`generation failed: ${e instanceof Error ? e.message : e}`);
     } finally {
       setGenBusy(null);
     }
@@ -119,18 +124,9 @@ export function ResultView({
   const onCancelEdit = useCallback(() => setEditingSpk(null), []);
   const onRename = useCallback((label: string, value: string) => {
     setEditingSpk(null);
-    onPatch(
-      (() => {
-        const next = { ...entry.speakerNames };
-        if (value.trim()) next[label] = value.trim(); else delete next[label];
-        return { speakerNames: next };
-      })() as Partial<HistoryEntry>,
-      (() => {
-        const next = { ...entry.speakerNames };
-        if (value.trim()) next[label] = value.trim(); else delete next[label];
-        return { speaker_names: next };
-      })(),
-    );
+    const next = { ...entry.speakerNames };
+    if (value.trim()) next[label] = value.trim(); else delete next[label];
+    onPatch({ speakerNames: next }, { speaker_names: next });
   }, [entry.speakerNames, onPatch]);
 
   const exportText = tab === "transcript" ? transcriptText(entry.segments, names) : entry.aiResults[tab] || "";
@@ -204,27 +200,36 @@ export function ResultView({
 
       {tab !== "transcript" && (
         <div className="i-ai-panel">
-          <div className="i-ai-controls">
-            <div className="i-seg-detail">
-              {["short", "medium", "detailed"].map((d) => (
-                <button key={d} type="button" className={`i-pill${detail === d ? " on" : ""}`} onClick={() => setDetail(d)}>
-                  {d}
+          {aiGated ? (
+            <UpgradeCard
+              title="AI analysis is a Pro feature"
+              body="Summaries and action items need the Pro plan. Transcription stays free."
+            />
+          ) : (
+            <>
+              <div className="i-ai-controls">
+                <div className="i-seg-detail">
+                  {["short", "medium", "detailed"].map((d) => (
+                    <button key={d} type="button" className={`i-pill${detail === d ? " on" : ""}`} onClick={() => setDetail(d)}>
+                      {d}
+                    </button>
+                  ))}
+                </div>
+                <input className="i-field" placeholder="Focus on… (optional)" value={focus}
+                  onChange={(e) => setFocus(e.target.value)} style={{ flex: 1 }} />
+                <button type="button" className="i-cook" disabled={genBusy !== null}
+                  onClick={() => void runAI(tab as "summary" | "actions")}>
+                  {genBusy === tab ? "Cooking…" : entry.aiResults[tab] ? "Regenerate" : "Generate"}
                 </button>
-              ))}
-            </div>
-            <input className="i-field" placeholder="Focus on… (optional)" value={focus}
-              onChange={(e) => setFocus(e.target.value)} style={{ flex: 1 }} />
-            <button type="button" className="i-cook" disabled={genBusy !== null}
-              onClick={() => void runAI(tab as "summary" | "actions")}>
-              {genBusy === tab ? "Cooking…" : entry.aiResults[tab] ? "Regenerate" : "Generate"}
-            </button>
-          </div>
-          {genError && <p className="i-error">{genError}</p>}
-          {entry.aiResults[tab]
-            ? <div className="i-md">{entry.aiResults[tab]}</div>
-            : !genBusy && <p className="i-sub" style={{ margin: "14px 2px" }}>
-                {tab === "summary" ? "A structured report of the conversation." : "Tasks and recommendations extracted from the call."}
-              </p>}
+              </div>
+              {genError && <p className="i-error">{genError}</p>}
+              {entry.aiResults[tab]
+                ? <div className="i-md">{entry.aiResults[tab]}</div>
+                : !genBusy && <p className="i-sub" style={{ margin: "14px 2px" }}>
+                    {tab === "summary" ? "A structured report of the conversation." : "Tasks and recommendations extracted from the call."}
+                  </p>}
+            </>
+          )}
         </div>
       )}
     </div>
