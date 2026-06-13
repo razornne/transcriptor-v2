@@ -59,6 +59,7 @@
   color: var(--i-ink);
   font-family: var(--i-ui);
   overflow: hidden;
+  transition: background-color 0.35s ease, color 0.35s ease;
 }
 .ink-root *, .ink-root *::before, .ink-root *::after { box-sizing: border-box; }
 /* Ресет через :where() — нулевая специфичность внутри, иначе
@@ -134,7 +135,7 @@
   border: 1px solid var(--i-hairline);
   border-radius: var(--i-r-lg);
   padding: 16px 16px 12px;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  transition: border-color .15s ease, box-shadow .15s ease, background-color 0.35s ease;
 }
 .i-card:focus-within { border-color: var(--i-accent); box-shadow: 0 0 0 3px var(--i-ring); }
 
@@ -201,9 +202,10 @@
 
 /* + Context: ghost-кнопка футера + раскрывающаяся строка */
 .i-ctx-btn {
-  flex: none; font-family: var(--i-ui); font-size: 12px; font-weight: 500;
-  color: var(--i-graphite); padding: 5px 10px; border-radius: 999px;
+  flex: none; font-family: var(--i-ui); font-size: 12.5px; font-weight: 500;
+  color: var(--i-graphite); height: 30px; padding: 0 12px; border-radius: 999px;
   border: 1px solid transparent; transition: all .13s ease;
+  display: inline-flex; align-items: center;
 }
 .i-ctx-btn:hover { color: var(--i-ink); border-color: var(--i-hairline); }
 .i-ctx-btn.on {
@@ -255,7 +257,7 @@
   width: 268px;
   background: var(--i-surface); border-right: 1px solid var(--i-hairline);
   transform: translateX(-102%);
-  transition: transform .26s cubic-bezier(.2, .7, .2, 1);
+  transition: transform .26s cubic-bezier(.2, .7, .2, 1), background-color 0.35s ease;
   display: flex; flex-direction: column;
   padding: 14px 12px 12px;
 }
@@ -341,8 +343,8 @@
 .i-field:focus { border-color: var(--i-accent); }
 .i-mini {
   background: var(--i-surface); border: 1px solid var(--i-hairline);
-  border-radius: 999px; padding: 5px 8px;
-  font-family: var(--i-ui); font-size: 11.5px; color: var(--i-graphite);
+  border-radius: 999px; height: 30px; padding: 0 10px;
+  font-family: var(--i-ui); font-size: 12.5px; font-weight: 500; color: var(--i-graphite);
   outline: none; cursor: pointer;
 }
 .i-status.err { color: var(--i-danger); }
@@ -508,6 +510,7 @@
   max-height: min(88dvh, 640px); display: flex; flex-direction: column;
   box-shadow: 0 8px 40px rgba(20, 18, 14, .14);
   animation: i-modal-in .2s cubic-bezier(.2, .8, .2, 1);
+  transition: background-color 0.35s ease;
 }
 [data-theme="dark"] .ink-root .i-modal { box-shadow: 0 8px 40px rgba(0, 0, 0, .45); }
 @keyframes i-modal-in {
@@ -543,6 +546,7 @@
 .i-msect-card {
   background: var(--i-paper); border: 1px solid var(--i-hairline);
   border-radius: var(--i-r-md); overflow: hidden;
+  transition: background-color 0.35s ease;
 }
 .i-mrow {
   display: flex; align-items: center; gap: 10px;
@@ -952,11 +956,11 @@
 }
 .i-rec-hero:disabled { opacity: .38; cursor: default; box-shadow: none; }
 
-/* Upload button */
+/* Upload button — same height as mini selects (30px) */
 .i-upload-btn {
   display: inline-flex; align-items: center; gap: 6px; flex: none;
   font-family: var(--i-ui); font-size: 12.5px; font-weight: 500;
-  padding: 7px 14px; border-radius: 999px;
+  height: 30px; padding: 0 14px; border-radius: 999px;
   border: 1px solid var(--i-hairline); color: var(--i-graphite);
   background: var(--i-surface);
   transition: color .13s ease, border-color .13s ease;
@@ -964,11 +968,8 @@
 .i-upload-btn:hover { color: var(--i-ink); border-color: var(--i-graphite); }
 .i-upload-btn:disabled { opacity: .38; cursor: default; }
 
-/* Separator between action buttons and mini selects */
-.i-ctrl-sep {
-  width: 1px; height: 18px; flex: none;
-  background: var(--i-hairline);
-}
+/* Separator removed from HTML — keep rule dormant */
+/* .i-ctrl-sep { width: 1px; height: 18px; flex: none; background: var(--i-hairline); } */
 
 /* ── Visibility selector ──────────────────────────────────────── */
 .i-vis-row {
@@ -1066,7 +1067,7 @@
   display: flex; flex-direction: column; gap: 8px;
   background: var(--i-paper); border: 1.5px solid var(--i-hairline);
   border-radius: var(--i-r-md); padding: 14px;
-  transition: border-color .15s ease;
+  transition: border-color .15s ease, background-color 0.35s ease;
 }
 .i-plan-card.current {
   border-color: var(--i-accent);
@@ -1439,4 +1440,52 @@
 @media (prefers-reduced-motion: reduce) {
   .i-insights { animation: none; }
   .i-insights-usage-fill { transition: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SPRINT 7 — Workspace empty state, Cmd+D theme transitions
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Workspace empty state (no workspace yet) ─────────────────── */
+.i-ws-empty {
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center; gap: 10px; padding: 28px 16px 20px;
+}
+.i-ws-empty-icon {
+  color: color-mix(in srgb, var(--i-accent) 45%, var(--i-hairline));
+  margin-bottom: 2px;
+}
+.i-ws-empty-title {
+  font-family: var(--i-ui); font-size: 15px; font-weight: 700;
+  color: var(--i-ink); margin: 0;
+}
+.i-ws-empty-body {
+  font-size: 12.5px; color: var(--i-graphite); margin: 0;
+  max-width: 280px; line-height: 1.55;
+}
+.i-ws-create-form {
+  display: flex; flex-direction: column; gap: 8px;
+  width: 100%; max-width: 280px;
+}
+.i-ws-create-btn {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  font-family: var(--i-ui); font-size: 13px; font-weight: 600;
+  padding: 9px 18px; border-radius: var(--i-r-md);
+  background: var(--i-accent); color: var(--i-on-accent);
+  border: none; transition: opacity .13s ease; cursor: pointer;
+}
+.i-ws-create-btn:hover { opacity: .9; }
+.i-ws-create-btn:disabled { opacity: .42; cursor: default; }
+.i-ws-plan-note {
+  font-size: 11.5px; color: var(--i-graphite); margin-top: 2px;
+}
+.i-ws-plan-note a {
+  color: var(--i-accent); text-decoration: underline;
+}
+
+/* ── Reduced motion: no background transitions ────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .ink-root, .i-card, .i-sb, .i-modal, .i-msect-card, .i-plan-card {
+    transition-property: border-color, box-shadow, transform, opacity;
+  }
 }

@@ -3,15 +3,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { HistoryEntry } from "@/lib/ink/db";
 import type { Profile } from "@/lib/ink/api";
 
-// Sprint 6: i18n (EN/UA), Insights button, hasWorkspace gating, PostHog-safe.
-
-// ── i18n ──────────────────────────────────────────────────────────────────
 const DICT = {
   en: {
     personal: "Personal", team: "Team", search: "Search…",
     noShared: "No shared recordings yet — team items appear here.",
     noFound: "Nothing found.", noRecs: "Your recordings will appear here.",
-    settings: "Settings", signOut: "Sign out", insights: "Insights",
+    settings: "Settings", signOut: "Sign out",
     today: "Today", yesterday: "Yesterday", thisWeek: "This week", earlier: "Earlier",
     untitled: "Untitled",
   },
@@ -19,7 +16,7 @@ const DICT = {
     personal: "Особисте", team: "Команда", search: "Пошук…",
     noShared: "Немає спільних записів — командні матеріали тут.",
     noFound: "Нічого не знайдено.", noRecs: "Тут з'являться ваші записи.",
-    settings: "Налаштування", signOut: "Вийти", insights: "Аналітика",
+    settings: "Налаштування", signOut: "Вийти",
     today: "Сьогодні", yesterday: "Вчора", thisWeek: "Цього тижня", earlier: "Раніше",
     untitled: "Без назви",
   },
@@ -48,7 +45,7 @@ function groupOf(iso: string): string {
 
 export function InkSidebar({
   open, team, entries, activeId, profile, hasWorkspace,
-  onClose, onTeamChange, onSelect, onDelete, onSignOut, onSettings, onInsights,
+  onClose, onTeamChange, onSelect, onDelete, onSignOut, onSettings,
   uiLang = "en",
 }: {
   open: boolean;
@@ -63,7 +60,6 @@ export function InkSidebar({
   onDelete: (id: string) => void;
   onSignOut: () => void;
   onSettings?: () => void;
-  onInsights?: () => void;
   uiLang?: Lang;
 }) {
   const [q, setQ] = useState("");
@@ -136,7 +132,7 @@ export function InkSidebar({
       <div className="i-scrim" onClick={onClose} aria-hidden="true" />
       <aside className="i-sb" aria-hidden={!open} aria-label="Workspace and history">
 
-        {/* Personal / Team toggle — only when user has a workspace */}
+        {/* Personal / Team toggle — only when user has a real workspace */}
         {hasWorkspace && (
           <div className="i-seg-toggle" role="tablist">
             <button type="button" className={team ? "" : "on"} onClick={() => onTeamChange(false)}>
@@ -148,7 +144,7 @@ export function InkSidebar({
           </div>
         )}
 
-        {/* Search — no top margin when toggle is absent */}
+        {/* Search */}
         <div className={`i-search${hasWorkspace ? "" : " i-search-top"}`}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
@@ -196,19 +192,6 @@ export function InkSidebar({
 
         <div className="i-sb-bottom">
           <div className="i-sb-actions">
-            {onInsights && (
-              <button
-                type="button"
-                className="i-item i-sb-settings"
-                onClick={() => { onInsights(); onClose(); }}
-                aria-label="Open insights"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 20V10M12 20V4M6 20v-6"/>
-                </svg>
-                {s.insights}
-              </button>
-            )}
             {onSettings && (
               <button
                 type="button"
