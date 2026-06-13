@@ -3,13 +3,8 @@ import { API_BASE } from "./config";
 import { sb } from "./supabase";
 import type { Segment } from "./db";
 
-// Тонкий клиент к Flask-бэку на Modal. Контракты 1-в-1 со старым /app:
-//   POST /api/transcribe (FormData)   -> {job_id}
-//   GET  /api/jobs/<id>               -> {status, ...progress | segments | result}
-//   POST /api/jobs/<id>/cancel        -> отмена Modal FunctionCall
-//   POST /api/generate                -> {job_id}
-//   POST /api/title                   -> {title}
-//   GET  /api/profile                 -> план/лимиты/usage
+// Тонкий клиент к Flask-бэку на Modal.
+// Спринт 3: Preset / Profile.privacy_mode / setPrivacyMode / savePresets / generateCustom.
 
 export class UpgradeRequiredError extends Error {
   constructor(msg: string) { super(msg); this.name = "UpgradeRequiredError"; }
@@ -19,9 +14,30 @@ export class CancelledError extends Error {
   constructor() { super("cancelled by user"); this.name = "CancelledError"; }
 }
 
-// Токен отмены: page держит ref, выставляет cancelled=true по кнопке Cancel.
-// pollJob кладёт сюда jobId, чтобы можно было дёрнуть серверный cancel.
 export type CancelToken = { cancelled: boolean; jobId: string | null };
+
+export type Preset = {
+  id: string;
+  name: string;
+  prompt: string;
+  scope: "personal" | "team";
+  created_by?: string;
+  updated_at?: string;
+};
+
+export type Profile = {
+  plan: string;
+  minutes_used: number;
+  minutes_limit: number;
+  minutes_limit_base?: number;
+  bonus_minutes?: number;
+  referral_code?: string;
+  privacy_mode?: boolean;
+  privacy_mode_available?: boolean;
+  is_admin?: boolean;
+  presets?: Preset[];
+  team_presets?: Preset[];
+};
 
 async function authFetch(url: string, opts: RequestInit = {}): Promise<Response> {
   const { data } = await sb.auth.getSession();
@@ -39,8 +55,7 @@ async function submitJob(url: string, body: FormData | object): Promise<string> 
     headers: isForm ? {} : { "Content-Type": "application/json" },
     body: isForm ? body : JSON.stringify(body),
   });
-  // 402 проверяем ДО парсинга тела (паттерн из старого app: нестандартное
-  // тело от прокси роняло json() и upgrade-промпт терялся)
+  // 402 ДО json() — нестандартное тело от прокси роняет json() и upgrade-промпт теряется
   if (res.status === 402) throw new UpgradeRequiredError("upgrade required");
   const data = await res.json().catch(() => null);
   if (!res.ok || !data?.job_id) {
@@ -49,11 +64,10 @@ async function submitJob(url: string, body: FormData | object): Promise<string> 
   return data.job_id as string;
 }
 
-// Best-effort серверная отмена: терминирует Modal-контейнер (экономит GPU)
 export async function cancelJob(jobId: string): Promise<void> {
   try {
     await authFetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
-  } catch { /* отмена best-effort: клиент всё равно перестал ждать */ }
+  } catch { /* best-effort */ }
 }
 
 export type JobProgress = {
@@ -126,6 +140,22 @@ export async function generate(
   return ((result.result as string) || "").trim();
 }
 
+export async function generateCustom(
+  segments: Segment[],
+  speakerNames: Record<string, string>,
+  presetId: string,
+  language: string,
+): Promise<string> {
+  const jobId = await submitJob(`${API_BASE}/api/generate`, {
+    segments, speakerNames,
+    template: "custom",
+    preset_id: presetId,
+    language: language || null,
+  });
+  const result = await pollJob(jobId);
+  return ((result.result as string) || "").trim();
+}
+
 export async function generateTitle(text: string, language: string): Promise<string | null> {
   try {
     const res = await authFetch(`${API_BASE}/api/title`, {
@@ -141,13 +171,6 @@ export async function generateTitle(text: string, language: string): Promise<str
   }
 }
 
-export type Profile = {
-  plan: string;
-  minutes_used: number;
-  minutes_limit: number;
-  is_admin?: boolean;
-};
-
 export async function fetchProfile(): Promise<Profile | null> {
   try {
     const res = await authFetch(`${API_BASE}/api/profile`);
@@ -156,4 +179,42 @@ export async function fetchProfile(): Promise<Profile | null> {
   } catch {
     return null;
   }
+}
+
+// Optimistic toggle — бэк гейтит по плану (402 для Free/Pro)
+export async function setPrivacyMode(enabled: boolean): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/profile/privacy-mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) {
+    if (res.status === 402) throw new UpgradeRequiredError("upgrade required");
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+}
+
+// Замена всего массива личных пресетов (mirror /api/vocabulary pattern)
+export async function savePresets(presets: Preset[]): Promise<Preset[]> {
+  const res = await authFetch(`${API_BASE}/api/presets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ presets }),
+  });
+  const data = await res.json().catch(() => null) as { presets?: Preset[]; error?: string } | null;
+  if (!res.ok || !data) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data.presets || [];
+}
+
+// Замена всего массива командных пресетов (только для owner)
+export async function saveTeamPresets(presets: Preset[]): Promise<Preset[]> {
+  const res = await authFetch(`${API_BASE}/api/workspace/presets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ presets }),
+  });
+  const data = await res.json().catch(() => null) as { presets?: Preset[]; error?: string } | null;
+  if (!res.ok || !data) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data.presets || [];
 }

@@ -26,7 +26,7 @@ function groupOf(iso: string): string {
 }
 
 export function InkSidebar({
-  open, team, entries, activeId, profile, onClose, onTeamChange, onSelect, onDelete, onSignOut,
+  open, team, entries, activeId, profile, onClose, onTeamChange, onSelect, onDelete, onSignOut, onSettings,
 }: {
   open: boolean;
   team: boolean;
@@ -38,6 +38,7 @@ export function InkSidebar({
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onSignOut: () => void;
+  onSettings?: () => void;
 }) {
   const [q, setQ] = useState("");
 
@@ -107,12 +108,23 @@ export function InkSidebar({
         </div>
 
         <div className="i-sb-bottom">
-          <button type="button" className="i-item" onClick={onSignOut}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-            </svg>
-            Sign out
-          </button>
+          <div className="i-sb-actions">
+            {onSettings && (
+              <button type="button" className="i-item i-sb-settings" onClick={() => { onSettings(); onClose(); }} aria-label="Open settings">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+                </svg>
+                Settings
+              </button>
+            )}
+            <button type="button" className="i-item" onClick={onSignOut}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+              </svg>
+              Sign out
+            </button>
+          </div>
           <div className="i-usage" title={profile ? `${Math.round(profile.minutes_used)} / ${profile.minutes_limit} min · ${profile.plan}` : ""}>
             {Array.from({ length: 10 }, (_, k) => (
               <span key={k} className={`i-usage-dot${k < Math.round(usedRatio * 10) ? " fill" : ""}`} />
