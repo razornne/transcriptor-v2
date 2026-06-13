@@ -6,7 +6,7 @@ import { DotField, type DotFieldHandle } from "@/components/ink/DotField";
 import { InputCard } from "@/components/ink/InputCard";
 import { InkSidebar } from "@/components/ink/InkSidebar";
 import { LoginScreen } from "@/components/ink/LoginScreen";
-import { ResultView, transcriptText } from "@/components/ink/ResultView";
+import { ResultView, transcriptText, type Tab } from "@/components/ink/ResultView";
 import { UpgradeCard } from "@/components/ink/UpgradeCard";
 import { SettingsModal } from "@/components/ink/SettingsModal";
 import { startRecording, probeDuration, type Recorder } from "@/lib/ink/audio";
@@ -23,8 +23,9 @@ import {
 import { loadSettings, saveSettings, type InkSettings } from "@/lib/ink/settings";
 
 // /v2 — Ink & Halftone, полностью функциональная аппка.
-// Спринт 3: SettingsModal (⌘,), Best Quality из настроек, Privacy Mode, Custom presets.
-// Стейт-машина: view = activeId ? OUTPUT : INPUT.
+// Спринт 3: SettingsModal, Best Quality, Privacy Mode, Custom presets.
+// Спринт 4: tab state lifted, hotkeys overlay (?), undo-delete toast (7с),
+//           R = toggle recording (INPUT), 1/2/3/4 = tab switch (OUTPUT).
 
 const STAGE_LABELS: Record<string, string> = {
   convert: "decoding audio…",
@@ -59,6 +60,59 @@ function downloadBlob(blob: Blob) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ── HotkeysOverlay ───────────────────────────────────────────────
+function HotkeysOverlay({ onClose }: { onClose: () => void }) {
+  const isMac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+  const mod = isMac ? "⌘" : "Ctrl";
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.key === "?") { e.preventDefault(); onClose(); }
+    };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  const rows = [
+    { kbd: `${mod}+\\`, desc: "Toggle sidebar" },
+    { kbd: `${mod}+,`, desc: "Open settings" },
+    { kbd: "R", desc: "Start / stop recording" },
+    { kbd: "1 / 2 / 3 / 4", desc: "Switch tab (Transcript / Summary / Actions / Notes)" },
+    { kbd: "Esc", desc: "Close panels" },
+    { kbd: "?", desc: "This overlay" },
+  ];
+
+  return (
+    <div className="i-hotkeys-back" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="i-hotkeys" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <div className="i-hotkeys-header">
+          Keyboard shortcuts
+          <button type="button" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="i-hotkeys-list">
+          {rows.map((r) => (
+            <div key={r.kbd} className="i-hotkeys-row">
+              <kbd className="i-kbd">{r.kbd}</kbd>
+              <span className="i-hotkeys-desc">{r.desc}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── UndoToast ────────────────────────────────────────────────────
+function UndoToast({ onUndo, onDismiss }: { onUndo: () => void; onDismiss: () => void }) {
+  return (
+    <div className="i-toast" role="status" aria-live="polite">
+      Recording deleted
+      <button type="button" className="i-toast-undo" onClick={onUndo}>Undo</button>
+      <button type="button" className="i-toast-close" onClick={onDismiss} aria-label="Dismiss">✕</button>
+    </div>
+  );
+}
+
 export default function InkApp() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -66,14 +120,21 @@ export default function InkApp() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sbOpen, setSbOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [team, setTeam] = useState(false);
 
-  // Настройки из localStorage (Спринт 3)
+  // Lifted tab state (for 1/2/3/4 hotkeys)
+  const [activeTab, setActiveTab] = useState<Tab>("transcript");
+
+  // Reset tab when switching entries
+  useEffect(() => { setActiveTab("transcript"); }, [activeId]);
+
+  // Настройки из localStorage
   const [settings, setSettings] = useState<InkSettings>({
     quality: "fast", language: "", speakers: "", aiDetail: "medium",
   });
 
-  // Пресеты (Спринт 3)
+  // Пресеты
   const [presets, setPresets] = useState<Preset[]>([]);
   const [teamPresets, setTeamPresets] = useState<Preset[]>([]);
 
@@ -88,6 +149,10 @@ export default function InkApp() {
   const [limitHit, setLimitHit] = useState(false);
   const [recover, setRecover] = useState<RecoverState | null>(null);
 
+  // Undo-delete state
+  const [undoEntry, setUndoEntry] = useState<HistoryEntry | null>(null);
+  const undoTimerRef = useRef<number>(0);
+
   const dotsRef = useRef<DotFieldHandle>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<Recorder | null>(null);
@@ -95,7 +160,10 @@ export default function InkApp() {
   const keepAliveStopRef = useRef<(() => void) | null>(null);
   const cancelRef = useRef<CancelToken | null>(null);
 
-  // ── Инициализация настроек из localStorage ──────────────────────
+  // Refs for keyboard handler (avoid stale closures)
+  const viewRef = useRef<"INPUT" | "OUTPUT">("INPUT");
+  const onRecToggleRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     const s = loadSettings();
     setSettings(s);
@@ -103,7 +171,6 @@ export default function InkApp() {
     setSpeakers(s.speakers);
   }, []);
 
-  // ── auth ─────────────────────────────────────────────────────────
   useEffect(() => {
     void sb.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
@@ -136,6 +203,9 @@ export default function InkApp() {
 
   const activeEntry = entries.find((e) => e.id === activeId) || null;
   const view: "INPUT" | "OUTPUT" = activeEntry ? "OUTPUT" : "INPUT";
+
+  // Keep refs current
+  useEffect(() => { viewRef.current = view; }, [view]);
 
   const patchLocal = useCallback((id: string, fields: Partial<HistoryEntry>, db: Record<string, unknown>) => {
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...fields } : e)));
@@ -187,17 +257,12 @@ export default function InkApp() {
       }
     };
 
-    // Считываем качество из текущих настроек на момент отправки
     const currentQuality = loadSettings().quality;
 
     try {
       const segments = await transcribe(
         blob,
-        {
-          language, numSpeakers: speakers, durationSec,
-          prompt: context,
-          quality: currentQuality === "best" ? "best" : undefined,
-        },
+        { language, numSpeakers: speakers, durationSec, prompt: context, quality: currentQuality === "best" ? "best" : undefined },
         onProgress, token,
       );
       if (!segments.length) {
@@ -276,28 +341,92 @@ export default function InkApp() {
     }
   }, [recording, passLimitGate, cookBlob]);
 
+  // Keep onRecToggle ref current for keyboard handler
+  useEffect(() => { onRecToggleRef.current = onRecToggle; }, [onRecToggle]);
+
   useEffect(() => () => { window.clearInterval(recTimerRef.current); keepAliveStopRef.current?.(); }, []);
 
-  // ── Шорткаты ─────────────────────────────────────────────────────
+  // ── Undo-delete ─────────────────────────────────────────────────
+  const dismissUndo = useCallback((flush = true) => {
+    window.clearTimeout(undoTimerRef.current);
+    setUndoEntry(null);
+    if (flush && undoEntry) {
+      void deleteEntry(undoEntry.id).catch((err) => console.error("[history] delete failed:", err));
+    }
+  }, [undoEntry]);
+
+  const handleDelete = useCallback((id: string) => {
+    const entry = entries.find((e) => e.id === id);
+    if (!entry) return;
+
+    // Flush any previous pending delete immediately
+    if (undoEntry) {
+      window.clearTimeout(undoTimerRef.current);
+      void deleteEntry(undoEntry.id).catch(() => {});
+    }
+
+    setEntries((prev) => prev.filter((e) => e.id !== id));
+    if (activeId === id) setActiveId(null);
+
+    setUndoEntry(entry);
+    undoTimerRef.current = window.setTimeout(() => {
+      void deleteEntry(id).catch((err) => console.error("[history] delete failed:", err));
+      setUndoEntry(null);
+    }, 7000);
+  }, [entries, activeId, undoEntry]);
+
+  const handleUndo = useCallback(() => {
+    if (!undoEntry) return;
+    window.clearTimeout(undoTimerRef.current);
+    setEntries((prev) => {
+      // Re-insert at correct chronological position
+      const withEntry = [undoEntry, ...prev];
+      return withEntry.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    });
+    setUndoEntry(null);
+  }, [undoEntry]);
+
+  useEffect(() => () => window.clearTimeout(undoTimerRef.current), []);
+
+  // ── Keyboard shortcuts ───────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+
+      // Modifier shortcuts: always active
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") { e.preventDefault(); setSbOpen((v) => !v); return; }
-      if ((e.metaKey || e.ctrlKey) && e.key === ",")  { e.preventDefault(); setSettingsOpen((v) => !v); return; }
-      if (e.key === "Escape") { setSbOpen(false); setSettingsOpen(false); }
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); setSettingsOpen((v) => !v); return; }
+      if (e.key === "Escape") { setSbOpen(false); setSettingsOpen(false); setHotkeysOpen(false); return; }
+
+      if (isInput) return;
+
+      // Non-input shortcuts
+      if (e.key === "?") { setHotkeysOpen((v) => !v); return; }
+      if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey) {
+        if (viewRef.current === "INPUT") { void onRecToggleRef.current?.(); }
+        return;
+      }
+      if (viewRef.current === "OUTPUT") {
+        if (e.key === "1") { setActiveTab("transcript"); return; }
+        if (e.key === "2") { setActiveTab("summary"); return; }
+        if (e.key === "3") { setActiveTab("actions"); return; }
+        if (e.key === "4") { setActiveTab("notes"); return; }
+      }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, []);
+  }, []); // stable — reads mutable refs for view and onRecToggle
 
-  // ── Пресеты: сохранение на сервер + обновление стейта ────────────
+  // ── Пресеты ──────────────────────────────────────────────────────
   const handlePresetsChange = useCallback(async (updated: Preset[]) => {
-    setPresets(updated); // optimistic
+    setPresets(updated);
     try { const canonical = await savePresets(updated); setPresets(canonical); }
     catch (e) { console.error("[presets] save failed:", e); }
   }, []);
 
   const handleTeamPresetsChange = useCallback(async (updated: Preset[]) => {
-    setTeamPresets(updated); // optimistic
+    setTeamPresets(updated);
     try { const canonical = await saveTeamPresets(updated); setTeamPresets(canonical); }
     catch (e) { console.error("[team-presets] save failed:", e); }
   }, []);
@@ -308,8 +437,6 @@ export default function InkApp() {
 
   const initials = (session.user.email || "?").slice(0, 2).toUpperCase();
   const plan = profile?.plan || "free";
-
-  // DotField гаснет до 0.35 при открытом Settings или в режиме OUTPUT
   const dotMode = settingsOpen || view === "OUTPUT" ? "reading" : "live";
 
   return (
@@ -318,11 +445,7 @@ export default function InkApp() {
         open={sbOpen} team={team} entries={entries} activeId={activeId} profile={profile}
         onClose={() => setSbOpen(false)} onTeamChange={setTeam}
         onSelect={(id) => setActiveId(id)}
-        onDelete={(id) => {
-          setEntries((prev) => prev.filter((e) => e.id !== id));
-          if (activeId === id) setActiveId(null);
-          void deleteEntry(id).catch((err) => console.error("[history] delete failed:", err));
-        }}
+        onDelete={handleDelete}
         onSignOut={() => { void sb.auth.signOut(); }}
         onSettings={() => setSettingsOpen(true)}
       />
@@ -334,7 +457,12 @@ export default function InkApp() {
           </svg>
         </button>
         <div className="i-topbar-side">
-          {/* Settings gear */}
+          <button type="button" className="i-iconbtn" aria-label="Keyboard shortcuts (?)" onClick={() => setHotkeysOpen((v) => !v)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2" />
+              <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h.01M12 13h.01M16 13h.01M6 17h12" />
+            </svg>
+          </button>
           <button type="button" className="i-iconbtn" aria-label="Settings (⌘,)" onClick={() => setSettingsOpen(true)}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
@@ -361,6 +489,9 @@ export default function InkApp() {
                   plan={plan}
                   presets={presets}
                   teamPresets={teamPresets}
+                  notionConnected={profile?.notion_connected}
+                  activeTab={activeTab}
+                  onTabChange={setActiveTab}
                   onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
                   onPresetsChange={handlePresetsChange}
                   onTeamPresetsChange={handleTeamPresetsChange}
@@ -422,7 +553,7 @@ export default function InkApp() {
         </div>
       </main>
 
-      {/* ── Settings Modal (Спринт 3) ── */}
+      {/* ── Settings Modal ── */}
       {settingsOpen && (
         <SettingsModal
           session={session}
@@ -431,6 +562,17 @@ export default function InkApp() {
           onSettingsChange={(patch) => setSettings((prev) => ({ ...prev, ...patch }))}
           onClose={() => setSettingsOpen(false)}
           onSignOut={() => { void sb.auth.signOut(); }}
+        />
+      )}
+
+      {/* ── Hotkeys Overlay ── */}
+      {hotkeysOpen && <HotkeysOverlay onClose={() => setHotkeysOpen(false)} />}
+
+      {/* ── Undo Delete Toast ── */}
+      {undoEntry && (
+        <UndoToast
+          onUndo={handleUndo}
+          onDismiss={() => dismissUndo(true)}
         />
       )}
     </div>
