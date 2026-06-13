@@ -13,8 +13,8 @@ import { startRecording, probeDuration, type Recorder } from "@/lib/ink/audio";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
-  transcribe, generateTitle, fetchProfile, cancelJob, savePresets, saveTeamPresets,
-  CancelledError, type CancelToken, type Profile, type JobProgress, type Preset,
+  transcribe, generateTitle, fetchProfile, fetchWorkspace, cancelJob, savePresets, saveTeamPresets,
+  CancelledError, type CancelToken, type Profile, type JobProgress, type Preset, type WorkspaceInfo,
 } from "@/lib/ink/api";
 import {
   fetchHistory, insertEntry, patchEntry, deleteEntry,
@@ -22,10 +22,9 @@ import {
 } from "@/lib/ink/db";
 import { loadSettings, saveSettings, type InkSettings } from "@/lib/ink/settings";
 
-// /v2 — Ink & Halftone, полностью функциональная аппка.
-// Спринт 3: SettingsModal, Best Quality, Privacy Mode, Custom presets.
-// Спринт 4: tab state lifted, hotkeys overlay (?), undo-delete toast (7с),
-//           R = toggle recording (INPUT), 1/2/3/4 = tab switch (OUTPUT).
+// /v2 — Ink & Halftone, fully functional app.
+// Sprint 5: InputCard MediaHub (no textarea/Cook), two-column SettingsModal,
+//           workspace + visibility, avatar removed, onboarding demo entry.
 
 const STAGE_LABELS: Record<string, string> = {
   convert: "decoding audio…",
@@ -35,6 +34,28 @@ const STAGE_LABELS: Record<string, string> = {
   diarize: "separating speakers…",
   merge: "merging…",
   correct: "correcting terms…",
+};
+
+// Onboarding demo shown when history is empty
+const DEMO_ENTRY: HistoryEntry = {
+  id: "demo",
+  userId: "",
+  date: new Date(Date.now() - 5 * 60000).toISOString(),
+  lang: "en",
+  title: "How Skriptly works",
+  titleIsAuto: false,
+  notes: "",
+  aiResults: {},
+  workspaceId: null,
+  visibility: "private",
+  speakerNames: { SPEAKER_00: "Alex", SPEAKER_01: "Morgan" },
+  segments: [
+    { speaker: "SPEAKER_00", start: 0, end: 9.8, text: "Hey! So I wanted to show you Skriptly. You just record a call or drop an audio file and it handles the rest." },
+    { speaker: "SPEAKER_01", start: 10.1, end: 19.5, text: "Does it separate speakers automatically? No training needed?" },
+    { speaker: "SPEAKER_00", start: 19.8, end: 31.2, text: "Exactly — Whisper plus pyannote diarization. About a minute for a 30-minute call. Try the tabs above." },
+    { speaker: "SPEAKER_01", start: 31.5, end: 42.0, text: "And AI summary and action items just work out of the box?" },
+    { speaker: "SPEAKER_00", start: 42.3, end: 55.8, text: "All built in. Gemini processes the full transcript — no cutoffs. Max plan unlocks large-v3 and privacy mode." },
+  ],
 };
 
 function autoTitle(segments: Segment[]): string {
@@ -122,6 +143,10 @@ export default function InkApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [team, setTeam] = useState(false);
+  const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
+
+  // Recording visibility (only matters when in workspace)
+  const [visibility, setVisibility] = useState<"private" | "workspace">("private");
 
   // Lifted tab state (for 1/2/3/4 hotkeys)
   const [activeTab, setActiveTab] = useState<Tab>("transcript");
@@ -129,12 +154,9 @@ export default function InkApp() {
   // Reset tab when switching entries
   useEffect(() => { setActiveTab("transcript"); }, [activeId]);
 
-  // Настройки из localStorage
   const [settings, setSettings] = useState<InkSettings>({
     quality: "fast", language: "", speakers: "", aiDetail: "medium",
   });
-
-  // Пресеты
   const [presets, setPresets] = useState<Preset[]>([]);
   const [teamPresets, setTeamPresets] = useState<Preset[]>([]);
 
@@ -178,13 +200,18 @@ export default function InkApp() {
   }, []);
 
   useEffect(() => {
-    if (!session) { setEntries([]); setProfile(null); setPresets([]); setTeamPresets([]); return; }
+    if (!session) {
+      setEntries([]); setProfile(null); setPresets([]); setTeamPresets([]);
+      setWorkspace(null);
+      return;
+    }
     void fetchHistory().then(setEntries).catch(() => setEntries([]));
     void fetchProfile().then((p) => {
       setProfile(p);
       if (p?.presets) setPresets(p.presets);
       if (p?.team_presets) setTeamPresets(p.team_presets);
     });
+    void fetchWorkspace().then(setWorkspace).catch(() => {});
     void idbGetOrphans().then((orphans) => {
       if (!orphans.length) return;
       const o = orphans[0];
@@ -201,20 +228,35 @@ export default function InkApp() {
     return () => window.removeEventListener("beforeunload", h);
   }, [recording, cooking]);
 
-  const activeEntry = entries.find((e) => e.id === activeId) || null;
+  // Displayed entries: show DEMO_ENTRY when no real entries yet
+  const displayedEntries = entries.length === 0 && !cooking ? [DEMO_ENTRY] : entries;
+
+  const activeEntry = displayedEntries.find((e) => e.id === activeId) || null;
   const view: "INPUT" | "OUTPUT" = activeEntry ? "OUTPUT" : "INPUT";
+
+  // If real entries arrive while demo is selected, go back to INPUT
+  useEffect(() => {
+    if (activeId === "demo" && entries.length > 0) setActiveId(null);
+  }, [entries.length, activeId]);
 
   // Keep refs current
   useEffect(() => { viewRef.current = view; }, [view]);
 
   const patchLocal = useCallback((id: string, fields: Partial<HistoryEntry>, db: Record<string, unknown>) => {
+    if (id === "demo") {
+      setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...fields } : e)));
+      return; // no DB writes for demo
+    }
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...fields } : e)));
     void patchEntry(id, db).catch((err) => console.error("[history] patch failed:", err));
   }, []);
 
   const passLimitGate = useCallback((): boolean => {
     const left = minutesLeft(profile);
-    if (left <= 0) { setLimitHit(true); setStatusKind("error"); setStatus("monthly minutes used up"); setSbOpen(false); return false; }
+    if (left <= 0) {
+      setLimitHit(true); setStatusKind("error"); setStatus("monthly minutes used up"); setSbOpen(false);
+      return false;
+    }
     if (left <= 30 && !window.confirm(`Only ~${Math.round(left)} min left on your plan. Start anyway?`)) return false;
     return true;
   }, [profile]);
@@ -226,6 +268,8 @@ export default function InkApp() {
     const entry = await insertEntry({
       user_id: session.user.id, title, title_is_auto: true,
       language: lang || null, segments, speaker_names: {}, notes: "", ai_results: {},
+      visibility: workspace && visibility === "workspace" ? "workspace" : "private",
+      workspace_id: workspace && visibility === "workspace" ? workspace.id : null,
     });
     if (!entry) { setStatusKind("error"); setStatus("saved locally only — history insert failed"); return; }
     setEntries((prev) => [entry, ...prev]);
@@ -236,7 +280,7 @@ export default function InkApp() {
       setEntries((prev) => prev.map((e) => e.id === entry.id && e.titleIsAuto ? { ...e, title: t } : e));
       void patchEntry(entry.id, { title: t }).catch(() => {});
     });
-  }, [session]);
+  }, [session, workspace, visibility]);
 
   const cookBlob = useCallback(async (blob: Blob, durationSec: number, sessionId: string | null = null) => {
     if (cooking) return;
@@ -297,17 +341,6 @@ export default function InkApp() {
     setStatus("cancelling…");
   }, []);
 
-  const cookText = useCallback(async (text: string) => {
-    if (cooking || !text) return;
-    setCooking(true); setStatusKind("info"); setStatus("saving…"); dotsRef.current?.wave(1);
-    try {
-      const segments: Segment[] = [{ speaker: "SPEAKER_00", start: 0, end: 0, text }];
-      await finishWithSegments(segments, language);
-    } catch (e) {
-      setStatusKind("error"); setStatus(`failed: ${e instanceof Error ? e.message : e}`);
-    } finally { setCooking(false); }
-  }, [cooking, language, finishWithSegments]);
-
   const onFile = useCallback(async (f: File) => {
     if (!passLimitGate()) return;
     setStatus("reading file…");
@@ -356,6 +389,7 @@ export default function InkApp() {
   }, [undoEntry]);
 
   const handleDelete = useCallback((id: string) => {
+    if (id === "demo") return; // demo entry is not deletable
     const entry = entries.find((e) => e.id === id);
     if (!entry) return;
 
@@ -379,7 +413,6 @@ export default function InkApp() {
     if (!undoEntry) return;
     window.clearTimeout(undoTimerRef.current);
     setEntries((prev) => {
-      // Re-insert at correct chronological position
       const withEntry = [undoEntry, ...prev];
       return withEntry.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     });
@@ -394,14 +427,12 @@ export default function InkApp() {
       const target = e.target as HTMLElement;
       const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
 
-      // Modifier shortcuts: always active
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") { e.preventDefault(); setSbOpen((v) => !v); return; }
       if ((e.metaKey || e.ctrlKey) && e.key === ",") { e.preventDefault(); setSettingsOpen((v) => !v); return; }
       if (e.key === "Escape") { setSbOpen(false); setSettingsOpen(false); setHotkeysOpen(false); return; }
 
       if (isInput) return;
 
-      // Non-input shortcuts
       if (e.key === "?") { setHotkeysOpen((v) => !v); return; }
       if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey) {
         if (viewRef.current === "INPUT") { void onRecToggleRef.current?.(); }
@@ -416,9 +447,9 @@ export default function InkApp() {
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, []); // stable — reads mutable refs for view and onRecToggle
+  }, []); // stable — reads mutable refs
 
-  // ── Пресеты ──────────────────────────────────────────────────────
+  // ── Presets ──────────────────────────────────────────────────────
   const handlePresetsChange = useCallback(async (updated: Preset[]) => {
     setPresets(updated);
     try { const canonical = await savePresets(updated); setPresets(canonical); }
@@ -431,18 +462,19 @@ export default function InkApp() {
     catch (e) { console.error("[team-presets] save failed:", e); }
   }, []);
 
-  // ── Рендер ───────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────
   if (session === undefined) return <div className="ink-root" />;
   if (!session) return <LoginScreen />;
 
-  const initials = (session.user.email || "?").slice(0, 2).toUpperCase();
   const plan = profile?.plan || "free";
   const dotMode = settingsOpen || view === "OUTPUT" ? "reading" : "live";
+  const inWorkspace = !!workspace;
 
   return (
     <div className={`ink-root${sbOpen ? " sb-open" : ""}${team ? " team" : ""}`}>
       <InkSidebar
-        open={sbOpen} team={team} entries={entries} activeId={activeId} profile={profile}
+        open={sbOpen} team={team} entries={displayedEntries} activeId={activeId}
+        profile={profile} hasWorkspace={inWorkspace}
         onClose={() => setSbOpen(false)} onTeamChange={setTeam}
         onSelect={(id) => setActiveId(id)}
         onDelete={handleDelete}
@@ -470,7 +502,6 @@ export default function InkApp() {
             </svg>
           </button>
           <InkThemeToggle />
-          <div className="i-avatar" title={session.user.email || ""}>{initials}</div>
         </div>
       </header>
 
@@ -481,7 +512,7 @@ export default function InkApp() {
             {view === "OUTPUT" && activeEntry ? (
               <>
                 <button type="button" className="i-back" onClick={() => setActiveId(null)}>
-                  ← New recording
+                  {activeEntry.id === "demo" ? "← Try it yourself" : "← New recording"}
                 </button>
                 <ResultView
                   key={activeEntry.id}
@@ -507,9 +538,11 @@ export default function InkApp() {
                   language={language} onLanguage={(v) => { setLanguage(v); saveSettings({ language: v }); }}
                   speakers={speakers} onSpeakers={(v) => { setSpeakers(v); saveSettings({ speakers: v }); }}
                   context={context} onContext={setContext}
-                  onCookText={(t) => void cookText(t)}
                   onFile={(f) => void onFile(f)}
                   onRecToggle={() => void onRecToggle()}
+                  inWorkspace={inWorkspace}
+                  visibility={visibility}
+                  onVisibility={setVisibility}
                 />
 
                 <div className="i-status-row">
@@ -547,6 +580,24 @@ export default function InkApp() {
                     </button>
                   </div>
                 )}
+
+                {/* Onboarding: shown only when no entries yet */}
+                {!entries.length && !cooking && !recording && (
+                  <div className="i-onboard">
+                    <svg className="i-onboard-icon" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 18V5l12-2v13"/>
+                      <circle cx="6" cy="18" r="3"/>
+                      <circle cx="18" cy="16" r="3"/>
+                    </svg>
+                    <p className="i-onboard-h">Welcome to Skriptly</p>
+                    <p className="i-onboard-p">Record a call, upload an audio file, or explore the demo transcript in the sidebar.</p>
+                    <ul className="i-onboard-steps">
+                      <li>Click <strong>Record</strong> and talk — stop to transcribe</li>
+                      <li>Or drag and drop any audio / video file</li>
+                      <li>Open the sidebar to see the demo transcript</li>
+                    </ul>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -562,6 +613,8 @@ export default function InkApp() {
           onSettingsChange={(patch) => setSettings((prev) => ({ ...prev, ...patch }))}
           onClose={() => setSettingsOpen(false)}
           onSignOut={() => { void sb.auth.signOut(); }}
+          workspace={workspace}
+          onWorkspaceChange={setWorkspace}
         />
       )}
 

@@ -27,13 +27,15 @@ function groupOf(iso: string): string {
 }
 
 export function InkSidebar({
-  open, team, entries, activeId, profile, onClose, onTeamChange, onSelect, onDelete, onSignOut, onSettings,
+  open, team, entries, activeId, profile, hasWorkspace,
+  onClose, onTeamChange, onSelect, onDelete, onSignOut, onSettings,
 }: {
   open: boolean;
   team: boolean;
   entries: HistoryEntry[];
   activeId: string | null;
   profile: Profile | null;
+  hasWorkspace: boolean;
   onClose: () => void;
   onTeamChange: (team: boolean) => void;
   onSelect: (id: string) => void;
@@ -95,12 +97,14 @@ export function InkSidebar({
     <>
       <div className="i-scrim" onClick={onClose} aria-hidden="true" />
       <aside className="i-sb" aria-hidden={!open} aria-label="Workspace and history">
-        <div className="i-seg-toggle" role="tablist">
-          <button type="button" className={team ? "" : "on"} onClick={() => onTeamChange(false)}>Personal</button>
-          <button type="button" className={team ? "on" : ""} onClick={() => onTeamChange(true)}>Team</button>
-        </div>
+        {hasWorkspace && (
+          <div className="i-seg-toggle" role="tablist">
+            <button type="button" className={team ? "" : "on"} onClick={() => onTeamChange(false)}>Personal</button>
+            <button type="button" className={team ? "on" : ""} onClick={() => onTeamChange(true)}>Team</button>
+          </div>
+        )}
 
-        <div className="i-search">
+        <div className={`i-search${hasWorkspace ? "" : " i-search-top"}`}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
           </svg>

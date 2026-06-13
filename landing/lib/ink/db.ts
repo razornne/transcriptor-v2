@@ -78,6 +78,8 @@ export async function insertEntry(payload: {
   speaker_names: Record<string, string>;
   notes: string;
   ai_results: Record<string, string>;
+  visibility?: string;
+  workspace_id?: string | null;
 }): Promise<HistoryEntry | null> {
   const data = await sbFetch("/transcripts", { method: "POST", body: JSON.stringify(payload) });
   const row = Array.isArray(data) ? data[0] : data;

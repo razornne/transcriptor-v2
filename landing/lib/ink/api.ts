@@ -234,3 +234,64 @@ export async function saveTeamPresets(presets: Preset[]): Promise<Preset[]> {
   if (!res.ok || !data) throw new Error(data?.error || `HTTP ${res.status}`);
   return data.presets || [];
 }
+
+// ── Workspace API ─────────────────────────────────────────────
+
+export type WorkspaceMember = {
+  id: string;
+  email: string;
+  role: "owner" | "member";
+  status: "active" | "invited";
+};
+
+export type WorkspaceInfo = {
+  id: string;
+  name: string;
+  plan: string;
+  seats: number;
+  role: "owner" | "member";
+  members: WorkspaceMember[];
+};
+
+export async function fetchWorkspace(): Promise<WorkspaceInfo | null> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/workspace`);
+    if (res.status === 404 || !res.ok) return null;
+    return (await res.json()) as WorkspaceInfo;
+  } catch {
+    return null;
+  }
+}
+
+export async function createWorkspace(name: string): Promise<WorkspaceInfo> {
+  const res = await authFetch(`${API_BASE}/api/workspace`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const data = await res.json().catch(() => null) as { error?: string } | null;
+  if (!res.ok) throw new Error((data as { error?: string } | null)?.error || `HTTP ${res.status}`);
+  return data as unknown as WorkspaceInfo;
+}
+
+export async function inviteMember(email: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/workspace/invite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+}
+
+export async function removeMember(memberId: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/workspace/members/${encodeURIComponent(memberId)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+}
+
+export async function leaveWorkspace(): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/workspace/leave`, { method: "POST" });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+}
