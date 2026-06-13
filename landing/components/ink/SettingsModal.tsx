@@ -12,11 +12,10 @@ import {
 import { saveSettings, type InkSettings } from "@/lib/ink/settings";
 import { SUPPORTED_LANGUAGES, BILLING_URL } from "@/lib/ink/config";
 
-// SettingsModal v2 (Sprint 5) — двухколоночный макет.
-// Левый nav (168px): Account | Subscription | Workspace | Settings | Invite | Danger.
-// Правый content: динамическая панель для активного раздела.
-// Custom webkit scrollbar 4px. Plan comparison cards.
-// Workspace: create/invite/remove/leave. Referral link copy.
+// Sprint 5/6 SettingsModal — two-column layout (168px nav + scrollable pane).
+// BUG FIX: workspace.members is guarded with ?? [] to prevent crash when API
+// returns workspace without members array.
+// Sprint 6: uiLang prop + EN/UA switcher in Settings pane.
 
 type NavSection = "account" | "subscription" | "workspace" | "settings" | "invite" | "danger";
 
@@ -35,7 +34,11 @@ const PLAN_DATA = [
   },
 ] as const;
 
-function Toggle({ checked, onChange, disabled, id }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; id: string }) {
+function Toggle({
+  checked, onChange, disabled, id,
+}: {
+  checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; id: string;
+}) {
   return (
     <label className="i-toggle" htmlFor={id}>
       <input id={id} type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
@@ -48,14 +51,24 @@ function Toggle({ checked, onChange, disabled, id }: { checked: boolean; onChang
 function MaxBadge() { return <span className="i-badge">MAX</span>; }
 
 function NavIcon({ id }: { id: NavSection }) {
-  const p = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const p = {
+    width: 14, height: 14, viewBox: "0 0 24 24",
+    fill: "none", stroke: "currentColor", strokeWidth: 1.7,
+    strokeLinecap: "round" as const, strokeLinejoin: "round" as const,
+  };
   switch (id) {
-    case "account": return <svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
-    case "subscription": return <svg {...p}><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>;
-    case "workspace": return <svg {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
-    case "settings": return <svg {...p}><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>;
-    case "invite": return <svg {...p}><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>;
-    case "danger": return <svg {...p}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+    case "account":
+      return <svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+    case "subscription":
+      return <svg {...p}><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>;
+    case "workspace":
+      return <svg {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+    case "settings":
+      return <svg {...p}><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>;
+    case "invite":
+      return <svg {...p}><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>;
+    case "danger":
+      return <svg {...p}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
   }
 }
 
@@ -71,6 +84,7 @@ const NAV_ITEMS: { id: NavSection; label: string }[] = [
 export function SettingsModal({
   session, profile, settings, onSettingsChange, onClose, onSignOut,
   workspace, onWorkspaceChange,
+  uiLang = "en", onUiLangChange,
 }: {
   session: Session;
   profile: Profile | null;
@@ -80,6 +94,8 @@ export function SettingsModal({
   onSignOut: () => void;
   workspace?: WorkspaceInfo | null;
   onWorkspaceChange?: (ws: WorkspaceInfo | null) => void;
+  uiLang?: "en" | "ua";
+  onUiLangChange?: (lang: "en" | "ua") => void;
 }) {
   const [nav, setNav] = useState<NavSection>("account");
   const plan = profile?.plan || "free";
@@ -108,13 +124,19 @@ export function SettingsModal({
       await setPrivacyMode(next);
     } catch (e) {
       setPrivMode(!next);
-      setPrivError(e instanceof UpgradeRequiredError ? "Requires Max or Team plan." : (e instanceof Error ? e.message : "save failed"));
+      setPrivError(
+        e instanceof UpgradeRequiredError
+          ? "Requires Max or Team plan."
+          : (e instanceof Error ? e.message : "save failed"),
+      );
     } finally { setPrivSaving(false); }
   };
 
   // Theme
   const [theme, setTheme] = useState<"light" | "dark">("light");
-  useEffect(() => { setTheme((document.documentElement.getAttribute("data-theme") || "light") as "light" | "dark"); }, []);
+  useEffect(() => {
+    setTheme((document.documentElement.getAttribute("data-theme") || "light") as "light" | "dark");
+  }, []);
   const toggleTheme = (next: "light" | "dark") => {
     document.documentElement.setAttribute("data-theme", next);
     try { localStorage.setItem("skriptly-theme", next); } catch {}
@@ -161,7 +183,11 @@ export function SettingsModal({
     try {
       await apiRemoveMember(memberId);
       if (workspace) {
-        onWorkspaceChange?.({ ...workspace, members: workspace.members.filter((m) => m.id !== memberId) });
+        // Guard: members could be undefined if API didn't return it
+        onWorkspaceChange?.({
+          ...workspace,
+          members: (workspace.members ?? []).filter((m) => m.id !== memberId),
+        });
       }
     } catch { /* best-effort */ } finally { setRemoving(null); }
   };
@@ -181,7 +207,9 @@ export function SettingsModal({
   const refUrl = profile?.referral_code ? `https://skriptly.io?ref=${profile.referral_code}` : null;
   const copyRef = () => {
     if (!refUrl) return;
-    navigator.clipboard.writeText(refUrl).then(() => { setRefCopied(true); setTimeout(() => setRefCopied(false), 2500); }).catch(() => {});
+    navigator.clipboard.writeText(refUrl)
+      .then(() => { setRefCopied(true); setTimeout(() => setRefCopied(false), 2500); })
+      .catch(() => {});
   };
 
   // Close on Escape
@@ -205,6 +233,7 @@ export function SettingsModal({
       onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
     >
       <div className="i-modal i-modal-wide" role="dialog" aria-modal="true" aria-label="Settings">
+
         {/* ── Header ── */}
         <div className="i-modal-header">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
@@ -217,6 +246,7 @@ export function SettingsModal({
 
         {/* ── Two-column body ── */}
         <div className="i-modal-2col">
+
           {/* Left nav */}
           <nav className="i-modal-nav" aria-label="Settings navigation">
             {NAV_ITEMS.map(({ id, label }) => (
@@ -243,7 +273,9 @@ export function SettingsModal({
                   <div className="i-mrow">
                     <div>
                       <div className="i-account-email">{email}</div>
-                      <div className="i-account-plan">{plan.charAt(0).toUpperCase() + plan.slice(1)} plan</div>
+                      <div className="i-account-plan">
+                        {plan.charAt(0).toUpperCase() + plan.slice(1)} plan
+                      </div>
                     </div>
                   </div>
                   <div className="i-mrow" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
@@ -288,7 +320,9 @@ export function SettingsModal({
                       {p.id === plan
                         ? <span className="i-plan-current-badge">CURRENT PLAN</span>
                         : <a href={BILLING_URL} target="_blank" rel="noreferrer" className="i-plan-cta">
-                            {plan === "free" || PLAN_DATA.findIndex((x) => x.id === p.id) > PLAN_DATA.findIndex((x) => x.id === plan) ? "Upgrade →" : "Downgrade"}
+                            {PLAN_DATA.findIndex((x) => x.id === p.id) > PLAN_DATA.findIndex((x) => x.id === plan)
+                              ? "Upgrade →"
+                              : "Downgrade"}
                           </a>
                       }
                     </div>
@@ -301,6 +335,7 @@ export function SettingsModal({
             {nav === "workspace" && (
               <div className="i-modal-pane">
                 {!workspace ? (
+                  /* No workspace: create or upsell */
                   <>
                     <p className="i-msect-title">Create a workspace</p>
                     {plan === "team" ? (
@@ -326,27 +361,36 @@ export function SettingsModal({
                         </button>
                       </div>
                     ) : (
+                      /* Non-team plan: show upsell */
                       <div className="i-upsell" style={{ marginTop: 0 }}>
                         <div className="i-upsell-text">
                           <div className="i-upsell-title">Team plan required</div>
-                          <div className="i-upsell-body">Workspace collaboration is available on the Team plan.</div>
+                          <div className="i-upsell-body">
+                            Workspace collaboration is available on the Team plan.
+                          </div>
                         </div>
-                        <a href={BILLING_URL} target="_blank" rel="noreferrer" className="i-upsell-cta">View plans →</a>
+                        <a href={BILLING_URL} target="_blank" rel="noreferrer" className="i-upsell-cta">
+                          View plans →
+                        </a>
                       </div>
                     )}
                   </>
                 ) : (
+                  /* Workspace exists: manage it */
                   <>
                     <p className="i-msect-title">Workspace</p>
                     <div className="i-msect-card">
                       <div className="i-mrow">
                         <div>
                           <div className="i-account-email">{workspace.name}</div>
-                          <div className="i-account-plan">{workspace.role} · {workspace.plan} plan</div>
+                          <div className="i-account-plan">
+                            {workspace.role} · {workspace.plan} plan
+                          </div>
                         </div>
                       </div>
                     </div>
 
+                    {/* Invite form — owners only */}
                     {workspace.role === "owner" && (
                       <>
                         <p className="i-msect-title" style={{ marginTop: 14 }}>Invite by email</p>
@@ -371,13 +415,23 @@ export function SettingsModal({
                       </>
                     )}
 
+                    {/* Members list — guarded with ?? [] to prevent crash */}
                     <p className="i-msect-title" style={{ marginTop: 14 }}>Members</p>
                     <div className="i-ws-members">
-                      {workspace.members.map((m) => (
+                      {(workspace.members ?? []).length === 0 && (
+                        <p style={{ fontSize: 12.5, color: "var(--i-graphite)", padding: "10px 0" }}>
+                          No members yet — invite your team above.
+                        </p>
+                      )}
+                      {(workspace.members ?? []).map((m) => (
                         <div key={m.id} className="i-ws-member">
                           <div className="i-ws-member-email">{m.email}</div>
-                          {m.status === "invited" && <span className="i-ws-member-status">invited</span>}
-                          <span className={`i-ws-member-role${m.role === "owner" ? " owner" : ""}`}>{m.role}</span>
+                          {m.status === "invited" && (
+                            <span className="i-ws-member-status">invited</span>
+                          )}
+                          <span className={`i-ws-member-role${m.role === "owner" ? " owner" : ""}`}>
+                            {m.role}
+                          </span>
                           {workspace.role === "owner" && m.role !== "owner" && (
                             <button
                               type="button"
@@ -393,11 +447,16 @@ export function SettingsModal({
                       ))}
                     </div>
 
+                    {/* Leave button — members only */}
                     {workspace.role === "member" && (
                       <button
                         type="button"
                         className="i-signout"
-                        style={{ marginTop: 16, color: "var(--i-danger)", borderColor: "color-mix(in srgb, var(--i-danger) 35%, var(--i-hairline))" }}
+                        style={{
+                          marginTop: 16,
+                          color: "var(--i-danger)",
+                          borderColor: "color-mix(in srgb, var(--i-danger) 35%, var(--i-hairline))",
+                        }}
                         disabled={leaving}
                         onClick={() => void handleLeave()}
                       >
@@ -409,7 +468,7 @@ export function SettingsModal({
               </div>
             )}
 
-            {/* ── Settings (recording + appearance) ── */}
+            {/* ── Settings (recording + privacy + appearance) ── */}
             {nav === "settings" && (
               <div className="i-modal-pane">
                 <p className="i-msect-title">Recording defaults</p>
@@ -417,20 +476,34 @@ export function SettingsModal({
                   <div className="i-mrow">
                     <label className="i-mrow-label" htmlFor="s-lang">Language</label>
                     <select
-                      id="s-lang" className="i-mini" value={settings.language}
-                      onChange={(e) => { const next = saveSettings({ language: e.target.value }); onSettingsChange(next); }}
+                      id="s-lang"
+                      className="i-mini"
+                      value={settings.language}
+                      onChange={(e) => {
+                        const next = saveSettings({ language: e.target.value });
+                        onSettingsChange(next);
+                      }}
                     >
-                      {SUPPORTED_LANGUAGES.map((l) => <option key={l.value} value={l.value}>{l.label}</option>)}
+                      {SUPPORTED_LANGUAGES.map((l) => (
+                        <option key={l.value} value={l.value}>{l.label}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="i-mrow">
                     <label className="i-mrow-label" htmlFor="s-spk">Speakers</label>
                     <select
-                      id="s-spk" className="i-mini" value={settings.speakers}
-                      onChange={(e) => { const next = saveSettings({ speakers: e.target.value }); onSettingsChange(next); }}
+                      id="s-spk"
+                      className="i-mini"
+                      value={settings.speakers}
+                      onChange={(e) => {
+                        const next = saveSettings({ speakers: e.target.value });
+                        onSettingsChange(next);
+                      }}
                     >
                       <option value="">Auto</option>
-                      {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={String(n)}>{n}</option>)}
+                      {[1, 2, 3, 4, 5, 6].map((n) => (
+                        <option key={n} value={String(n)}>{n}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="i-mrow">
@@ -442,7 +515,8 @@ export function SettingsModal({
                       <div className="i-mrow-sub">large-v3 — slower but more accurate</div>
                       {qualityError && (
                         <div className="i-toggle-nudge">
-                          {qualityError} <a href={BILLING_URL} target="_blank" rel="noreferrer">Upgrade →</a>
+                          {qualityError}{" "}
+                          <a href={BILLING_URL} target="_blank" rel="noreferrer">Upgrade →</a>
                         </div>
                       )}
                     </div>
@@ -461,11 +535,17 @@ export function SettingsModal({
                       <div className="i-mrow-sub">No Gemini — self-hosted models only</div>
                       {privError && (
                         <div className="i-toggle-nudge">
-                          {privError} <a href={BILLING_URL} target="_blank" rel="noreferrer">Upgrade →</a>
+                          {privError}{" "}
+                          <a href={BILLING_URL} target="_blank" rel="noreferrer">Upgrade →</a>
                         </div>
                       )}
                     </div>
-                    <Toggle id="s-privacy" checked={privMode} onChange={(v) => void handlePrivMode(v)} disabled={privSaving} />
+                    <Toggle
+                      id="s-privacy"
+                      checked={privMode}
+                      onChange={(v) => void handlePrivMode(v)}
+                      disabled={privSaving}
+                    />
                   </div>
                 </div>
 
@@ -474,10 +554,39 @@ export function SettingsModal({
                   <div className="i-mrow" style={{ gap: 6 }}>
                     <span className="i-mrow-label">Theme</span>
                     <div className="i-theme-seg">
-                      <button type="button" className={`i-theme-btn${theme === "light" ? " on" : ""}`} onClick={() => toggleTheme("light")}>Light</button>
-                      <button type="button" className={`i-theme-btn${theme === "dark" ? " on" : ""}`} onClick={() => toggleTheme("dark")}>Dark</button>
+                      <button
+                        type="button"
+                        className={`i-theme-btn${theme === "light" ? " on" : ""}`}
+                        onClick={() => toggleTheme("light")}
+                      >Light</button>
+                      <button
+                        type="button"
+                        className={`i-theme-btn${theme === "dark" ? " on" : ""}`}
+                        onClick={() => toggleTheme("dark")}
+                      >Dark</button>
                     </div>
                   </div>
+                  {/* UI language — Sprint 6 i18n */}
+                  {onUiLangChange && (
+                    <div className="i-mrow">
+                      <label className="i-mrow-label" htmlFor="s-uilang">
+                        Interface language
+                      </label>
+                      <select
+                        id="s-uilang"
+                        className="i-mini"
+                        value={uiLang}
+                        onChange={(e) => {
+                          const lang = e.target.value as "en" | "ua";
+                          try { localStorage.setItem("ink_uiLang", lang); } catch {}
+                          onUiLangChange(lang);
+                        }}
+                      >
+                        <option value="en">English</option>
+                        <option value="ua">Українська</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -510,12 +619,17 @@ export function SettingsModal({
                   <div className="i-mrow">
                     <div>
                       <div className="i-mrow-label">Sign out</div>
-                      <div className="i-mrow-sub">You will need to sign in again to access your recordings.</div>
+                      <div className="i-mrow-sub">
+                        You will need to sign in again to access your recordings.
+                      </div>
                     </div>
                     <button
                       type="button"
                       className="i-pill"
-                      style={{ color: "var(--i-danger)", borderColor: "color-mix(in srgb, var(--i-danger) 35%, var(--i-hairline))" }}
+                      style={{
+                        color: "var(--i-danger)",
+                        borderColor: "color-mix(in srgb, var(--i-danger) 35%, var(--i-hairline))",
+                      }}
                       onClick={() => { onSignOut(); onClose(); }}
                     >
                       Sign out
@@ -524,13 +638,15 @@ export function SettingsModal({
                 </div>
                 <p style={{ fontSize: 12, color: "var(--i-graphite)", marginTop: 16 }}>
                   To delete your account and all data, contact{" "}
-                  <a href="mailto:support@skriptly.io" style={{ color: "var(--i-accent)" }}>support@skriptly.io</a>.
+                  <a href="mailto:support@skriptly.io" style={{ color: "var(--i-accent)" }}>
+                    support@skriptly.io
+                  </a>.
                 </p>
               </div>
             )}
 
-          </div>
-        </div>
+          </div>{/* /i-modal-content */}
+        </div>{/* /i-modal-2col */}
       </div>
     </div>
   );
