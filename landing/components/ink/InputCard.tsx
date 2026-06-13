@@ -2,10 +2,10 @@
 import { useEffect, useRef, useState } from "react";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 
-// InputCard v2 — Media Hub. Textarea + Cook кнопка удалены полностью.
-// Дроп-зона: idle-hint или большой таймер при записи.
-// Контрол-ряд: [● Record] [↑ Upload] | Lang▾ Spk▾ | + Context.
-// Опциональный visibility selector (только в workspace).
+// InputCard v2 (Sprint 5 + 6) — Media Hub.
+// Dropzone body (idle hint / live timer) + control row + optional visibility selector.
+// Visibility row renders ONLY when inWorkspace is true (user has a workspace).
+// Mobile: control row wraps gracefully, touch targets ≥44px via CSS.
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
@@ -83,11 +83,14 @@ export function InputCard({
       {/* ── Control row ── */}
       <div className="i-ctrl-row">
         <input
-          ref={fileRef} type="file" accept="audio/*,video/*" hidden
+          ref={fileRef}
+          type="file"
+          accept="audio/*,video/*"
+          hidden
           onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }}
         />
 
-        {/* Hero Rec button */}
+        {/* Hero Record button */}
         <button
           type="button"
           className={`i-rec-hero${recording ? " live" : ""}`}
@@ -117,11 +120,13 @@ export function InputCard({
           </button>
         )}
 
-        <span className="i-ctrl-sep" />
+        <span className="i-ctrl-sep" aria-hidden="true" />
 
         <select
-          className="i-mini" aria-label="Language"
-          value={language} onChange={(e) => onLanguage(e.target.value)}
+          className="i-mini"
+          aria-label="Language"
+          value={language}
+          onChange={(e) => onLanguage(e.target.value)}
           disabled={recording || cooking}
         >
           {SUPPORTED_LANGUAGES.map((l) => (
@@ -130,8 +135,10 @@ export function InputCard({
         </select>
 
         <select
-          className="i-mini" aria-label="Speakers"
-          value={speakers} onChange={(e) => onSpeakers(e.target.value)}
+          className="i-mini"
+          aria-label="Speakers"
+          value={speakers}
+          onChange={(e) => onSpeakers(e.target.value)}
           disabled={recording || cooking}
         >
           <option value="">Spk: auto</option>
@@ -168,7 +175,7 @@ export function InputCard({
         </div>
       )}
 
-      {/* ── Visibility selector (workspace only) ── */}
+      {/* ── Visibility selector — ONLY when user is in a workspace ── */}
       {inWorkspace && onVisibility && visibility && (
         <div className="i-vis-row">
           <span className="i-vis-label">Save as</span>
