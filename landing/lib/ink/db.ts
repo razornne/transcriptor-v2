@@ -5,7 +5,7 @@ import { sb } from "./supabase";
 // История транскриптов — Supabase Postgres через RAW REST (НЕ PostgrestClient,
 // он зависает — см. CLAUDE.md). Контракт колонок 1-в-1 со старым /app.
 
-export type Segment = { speaker: string; start: number; end: number; text: string };
+export type Segment = { speaker: string; start: number; end: number; text: string; edited?: boolean };
 
 export type HistoryEntry = {
   id: string;

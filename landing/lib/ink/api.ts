@@ -35,6 +35,7 @@ export type Profile = {
   privacy_mode?: boolean;
   privacy_mode_available?: boolean;
   is_admin?: boolean;
+  notion_connected?: boolean;
   presets?: Preset[];
   team_presets?: Preset[];
 };
@@ -205,6 +206,21 @@ export async function savePresets(presets: Preset[]): Promise<Preset[]> {
   const data = await res.json().catch(() => null) as { presets?: Preset[]; error?: string } | null;
   if (!res.ok || !data) throw new Error(data?.error || `HTTP ${res.status}`);
   return data.presets || [];
+}
+
+export async function sendToNotion(
+  title: string,
+  transcriptText: string,
+  summary?: string,
+  actions?: string,
+): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/notion/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, transcript_text: transcriptText, summary, actions }),
+  });
+  const data = await res.json().catch(() => null) as { error?: string } | null;
+  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
 }
 
 // Замена всего массива командных пресетов (только для owner)

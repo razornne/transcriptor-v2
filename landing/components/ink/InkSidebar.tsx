@@ -1,11 +1,12 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { HistoryEntry } from "@/lib/ink/db";
 import type { Profile } from "@/lib/ink/api";
 
-// Сайдбар: реальная история из Supabase. Personal = свои записи,
-// Team = visibility==='workspace' (для юзеров без воркспейса — пусто
-// с подсказкой). Поиск по title/тексту. Delete с confirm.
+// Сайдбар: реальна історія з Supabase. Personal = свої записи,
+// Team = visibility==='workspace'. Пошук по title/тексту.
+// Видалення — двокліковий паттерн: перший клік → "Delete?" (3с), другий → onDelete.
+// Settings шестерёнка → onSettings().
 
 function fmtDur(e: HistoryEntry): string {
   if (!e.segments.length) return "—";
@@ -41,6 +42,30 @@ export function InkSidebar({
   onSettings?: () => void;
 }) {
   const [q, setQ] = useState("");
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const confirmTimerRef = useRef<number>(0);
+
+  // Сбрасываем confirm при закрытии сайдбара
+  useEffect(() => {
+    if (!open) {
+      window.clearTimeout(confirmTimerRef.current);
+      setConfirmingId(null);
+    }
+  }, [open]);
+
+  useEffect(() => () => window.clearTimeout(confirmTimerRef.current), []);
+
+  const handleDeleteClick = (id: string) => {
+    if (confirmingId === id) {
+      window.clearTimeout(confirmTimerRef.current);
+      setConfirmingId(null);
+      onDelete(id);
+    } else {
+      window.clearTimeout(confirmTimerRef.current);
+      setConfirmingId(id);
+      confirmTimerRef.current = window.setTimeout(() => setConfirmingId(null), 3000);
+    }
+  };
 
   const filtered = useMemo(() => {
     let list = entries.filter((e) => (team ? e.visibility === "workspace" : true));
@@ -97,9 +122,13 @@ export function InkSidebar({
                     <span className="i-item-title">{e.title || "Untitled"}</span>
                     <span className="dur">{fmtDur(e)}</span>
                   </button>
-                  <button type="button" className="i-del" aria-label="Delete recording"
-                    onClick={() => { if (window.confirm("Delete this recording?")) onDelete(e.id); }}>
-                    ✕
+                  <button
+                    type="button"
+                    className={`i-del${confirmingId === e.id ? " confirming" : ""}`}
+                    aria-label={confirmingId === e.id ? "Confirm delete" : "Delete recording"}
+                    onClick={() => handleDeleteClick(e.id)}
+                  >
+                    {confirmingId === e.id ? "Delete?" : "✕"}
                   </button>
                 </div>
               ))}

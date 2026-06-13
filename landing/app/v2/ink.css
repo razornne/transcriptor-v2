@@ -733,6 +733,150 @@
   margin-bottom: 8px;
 }
 
+/* ══ SPRINT 4 ════════════════════════════════════════════════ */
+
+/* ── Segment inline text editing ───────────────────────────── */
+.i-seg-text-wrap { position: relative; }
+.i-seg-pencil {
+  opacity: 0; position: absolute; right: 0; top: 2px;
+  font-size: 13px; color: var(--i-graphite);
+  padding: 1px 5px; border-radius: var(--i-r-sm);
+  background: var(--i-surface); border: 1px solid var(--i-hairline);
+  transition: opacity .15s ease;
+  line-height: 1.4;
+}
+.i-seg:hover .i-seg-pencil,
+.i-seg:focus-within .i-seg-pencil { opacity: 1; }
+.i-seg-edit-area {
+  width: 100%; min-height: 72px; resize: vertical;
+  background: var(--i-paper); border: 1.5px solid var(--i-accent);
+  border-radius: var(--i-r-sm); padding: 8px 11px;
+  font-family: var(--i-ui); font-size: 14px; line-height: 1.6;
+  color: var(--i-ink); outline: none;
+  box-shadow: 0 0 0 3px var(--i-ring);
+}
+.i-seg-edited {
+  font-family: var(--i-mono); font-size: 9px;
+  color: var(--i-graphite); letter-spacing: .04em;
+  background: var(--i-paper); border: 1px solid var(--i-hairline);
+  border-radius: 3px; padding: 1px 5px; vertical-align: middle; margin-left: 6px;
+}
+
+/* ── Notes tab textarea ─────────────────────────────────────── */
+.i-notes-area {
+  display: block; width: 100%; min-height: 220px; resize: vertical;
+  background: transparent; border: none; outline: none;
+  font-family: var(--i-ui); font-size: 14px; line-height: 1.75;
+  color: var(--i-ink); padding: 4px 2px;
+  caret-color: var(--i-accent);
+}
+.i-notes-area::placeholder { color: var(--i-graphite); }
+
+/* ── Two-click delete confirm state ────────────────────────── */
+.i-del.confirming {
+  color: var(--i-signal); font-size: 10.5px; font-weight: 500;
+  padding: 2px 7px; white-space: nowrap;
+  background: color-mix(in srgb, var(--i-signal) 10%, transparent);
+  border-radius: var(--i-r-sm);
+}
+
+/* ── Settings inline upgrade nudge ─────────────────────────── */
+.i-toggle-nudge {
+  font-size: 11px; color: var(--i-accent); font-weight: 500; margin-top: 4px;
+}
+.i-toggle-nudge a { color: inherit; text-decoration: underline; }
+
+/* ── Undo-delete toast ──────────────────────────────────────── */
+.i-toast {
+  position: fixed; bottom: 28px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000; display: flex; align-items: center; gap: 10px;
+  background: var(--i-ink); color: var(--i-on-accent);
+  padding: 10px 14px; border-radius: var(--i-r-md);
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+  box-shadow: 0 4px 28px rgba(20, 18, 14, .28);
+  animation: i-toast-in .2s cubic-bezier(.2, .8, .2, 1);
+}
+[data-theme="dark"] .ink-root .i-toast {
+  background: var(--i-surface); color: var(--i-ink);
+  border: 1px solid var(--i-hairline);
+  box-shadow: 0 4px 28px rgba(0, 0, 0, .45);
+}
+@keyframes i-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.i-toast-undo {
+  font-size: 12.5px; font-weight: 600; color: var(--i-accent);
+  padding: 4px 9px; border-radius: var(--i-r-sm);
+  border: 1px solid color-mix(in srgb, var(--i-accent) 40%, transparent);
+  background: transparent; transition: background .12s ease;
+}
+[data-theme="dark"] .ink-root .i-toast-undo { color: var(--i-accent); }
+.i-toast-undo:hover { background: color-mix(in srgb, var(--i-accent) 10%, transparent); }
+.i-toast-close {
+  font-size: 11px; color: var(--i-on-accent); opacity: .5; padding: 2px 5px;
+  transition: opacity .12s ease;
+}
+[data-theme="dark"] .ink-root .i-toast-close { color: var(--i-graphite); }
+.i-toast-close:hover { opacity: 1; }
+
+/* ── Hotkeys overlay ────────────────────────────────────────── */
+.i-hotkeys-back {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(20, 18, 14, .38);
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
+  animation: i-fade-in .15s ease;
+}
+[data-theme="dark"] .i-hotkeys-back { background: rgba(0, 0, 0, .52); }
+@keyframes i-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.i-hotkeys {
+  background: var(--i-surface); border: 1px solid var(--i-hairline);
+  border-radius: var(--i-r-lg); width: min(400px, 94vw); overflow: hidden;
+  box-shadow: 0 8px 40px rgba(20, 18, 14, .14);
+  animation: i-modal-in .2s cubic-bezier(.2, .8, .2, 1);
+}
+[data-theme="dark"] .ink-root .i-hotkeys { box-shadow: 0 8px 40px rgba(0, 0, 0, .45); }
+.i-hotkeys-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 16px; border-bottom: 1px solid var(--i-hairline);
+  font-size: 13.5px; font-weight: 600; color: var(--i-ink);
+}
+.i-hotkeys-header button {
+  font-size: 14px; color: var(--i-graphite); padding: 2px 6px;
+  border-radius: var(--i-r-sm); transition: color .12s ease, background .12s ease;
+}
+.i-hotkeys-header button:hover { color: var(--i-ink); background: var(--i-paper); }
+.i-hotkeys-list {
+  padding: 8px; display: flex; flex-direction: column; gap: 1px;
+}
+.i-hotkeys-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 7px 8px; border-radius: var(--i-r-sm);
+}
+.i-hotkeys-row:hover { background: var(--i-paper); }
+.i-hotkeys-desc { font-size: 13px; color: var(--i-graphite); flex: 1; }
+.i-kbd {
+  font-family: var(--i-mono); font-size: 11px; color: var(--i-ink);
+  background: var(--i-paper); border: 1px solid var(--i-hairline);
+  border-radius: 5px; padding: 3px 9px;
+  box-shadow: 0 1.5px 0 var(--i-hairline);
+  white-space: nowrap; text-align: center; min-width: 32px;
+}
+
+/* ── Notion export button ───────────────────────────────────── */
+.i-notion-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12.5px; font-weight: 500; color: var(--i-graphite);
+  padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--i-hairline);
+  transition: color .13s ease, border-color .13s ease;
+}
+.i-notion-btn:hover { color: var(--i-ink); border-color: var(--i-graphite); }
+.i-notion-btn.sending { opacity: .55; cursor: default; }
+.i-notion-btn.sent { color: var(--i-accent); border-color: color-mix(in srgb, var(--i-accent) 40%, var(--i-hairline)); }
+
 /* ── responsive + reduced motion ────────────────────────────── */
 @media (max-width: 640px) {
   .i-center { padding-top: 34px; }
@@ -741,5 +885,5 @@
 @media (prefers-reduced-motion: reduce) {
   .i-sb, .i-scrim, .i-pill, .i-cook { transition: none; }
   .i-rec.live .i-rec-dot { animation: none; }
-  .i-modal, .i-pmodal, .i-pdrop { animation: none; }
+  .i-modal, .i-pmodal, .i-pdrop, .i-toast, .i-hotkeys-back, .i-hotkeys { animation: none; }
 }

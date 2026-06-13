@@ -4,12 +4,11 @@ import type { Session } from "@supabase/supabase-js";
 import type { Profile } from "@/lib/ink/api";
 import { setPrivacyMode, UpgradeRequiredError } from "@/lib/ink/api";
 import { saveSettings, type InkSettings } from "@/lib/ink/settings";
-import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
+import { SUPPORTED_LANGUAGES, BILLING_URL } from "@/lib/ink/config";
 
-// Оверлей налаштувань /v2 — поверх поточного стейту (не навігація).
-// Розділи: Account · Recording defaults · Privacy · Appearance.
-// Best Quality і Privacy Mode — тільки для max/team.
-// Оптимістичний UI для Privacy Mode: flip → POST → rollback при помилці.
+// Оверлей налаштувань /v2 — усі секції видимі для всіх планів.
+// Best Quality + Privacy Mode показуються всім з MAX badge.
+// Free/Pro: спроба увімкнути → inline nudge "Requires Max or Team plan."
 // DotField гасне до 0.35 автоматично (page.tsx передає mode="reading" при settingsOpen).
 
 function GearIcon() {
@@ -57,7 +56,19 @@ export function SettingsModal({
   const plan = profile?.plan || "free";
   const isPremium = plan === "max" || plan === "team";
 
-  // Privacy Mode — optimistic toggle
+  // Best Quality — local optimistic, gate on !isPremium
+  const [qualityError, setQualityError] = useState("");
+  const handleQuality = (v: boolean) => {
+    if (v && !isPremium) {
+      setQualityError("Requires Max or Team plan.");
+      return;
+    }
+    setQualityError("");
+    const next = saveSettings({ quality: v ? "best" : "fast" });
+    onSettingsChange(next);
+  };
+
+  // Privacy Mode — optimistic toggle, backend 402 → rollback
   const [privMode, setPrivMode] = useState<boolean>(!!profile?.privacy_mode);
   const [privSaving, setPrivSaving] = useState(false);
   const [privError, setPrivError] = useState("");
@@ -66,6 +77,10 @@ export function SettingsModal({
 
   const handlePrivMode = async (next: boolean) => {
     if (privSaving) return;
+    if (next && !isPremium) {
+      setPrivError("Requires Max or Team plan.");
+      return;
+    }
     setPrivMode(next);
     setPrivError("");
     setPrivSaving(true);
@@ -94,7 +109,6 @@ export function SettingsModal({
     setTheme(next);
   };
 
-  // Закрити по Escape або по кліку на backdrop
   const backdropRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -107,11 +121,6 @@ export function SettingsModal({
   const limit = profile?.minutes_limit || 60;
   const ratio = limit > 0 ? Math.min(1, used / limit) : 0;
   const filledDots = Math.round(ratio * 16);
-
-  const patch = (p: Partial<InkSettings>) => {
-    const next = saveSettings(p);
-    onSettingsChange(next);
-  };
 
   return (
     <div
@@ -172,7 +181,10 @@ export function SettingsModal({
                   id="s-lang"
                   className="i-mini"
                   value={settings.language}
-                  onChange={(e) => patch({ language: e.target.value })}
+                  onChange={(e) => {
+                    const next = saveSettings({ language: e.target.value });
+                    onSettingsChange(next);
+                  }}
                 >
                   {SUPPORTED_LANGUAGES.map((l) => (
                     <option key={l.value} value={l.value}>{l.label}</option>
@@ -185,57 +197,65 @@ export function SettingsModal({
                   id="s-spk"
                   className="i-mini"
                   value={settings.speakers}
-                  onChange={(e) => patch({ speakers: e.target.value })}
+                  onChange={(e) => {
+                    const next = saveSettings({ speakers: e.target.value });
+                    onSettingsChange(next);
+                  }}
                 >
                   <option value="">Auto</option>
                   {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={String(n)}>{n}</option>)}
                 </select>
               </div>
 
-              {/* Best Quality — тільки max/team */}
-              {isPremium && (
-                <div className="i-mrow">
-                  <div>
-                    <div className="i-toggle-wrap">
-                      <span className="i-mrow-label">Best Quality</span>
-                      <MaxBadge />
-                    </div>
-                    <div className="i-mrow-sub">large-v3 — slower but more accurate</div>
+              {/* Best Quality — visible to all, gated for non-premium */}
+              <div className="i-mrow">
+                <div>
+                  <div className="i-toggle-wrap">
+                    <span className="i-mrow-label">Best Quality</span>
+                    <MaxBadge />
                   </div>
-                  <Toggle
-                    id="s-quality"
-                    checked={settings.quality === "best"}
-                    onChange={(v) => patch({ quality: v ? "best" : "fast" })}
-                  />
+                  <div className="i-mrow-sub">large-v3 — slower but more accurate</div>
+                  {qualityError && (
+                    <div className="i-toggle-nudge">
+                      {qualityError} <a href={BILLING_URL} target="_blank" rel="noreferrer">Upgrade →</a>
+                    </div>
+                  )}
                 </div>
-              )}
+                <Toggle
+                  id="s-quality"
+                  checked={settings.quality === "best"}
+                  onChange={handleQuality}
+                />
+              </div>
             </div>
           </section>
 
-          {/* ── Privacy Mode — тільки max/team ── */}
-          {isPremium && (
-            <section>
-              <p className="i-msect-title">Privacy</p>
-              <div className="i-msect-card">
-                <div className="i-mrow">
-                  <div>
-                    <div className="i-toggle-wrap">
-                      <span className="i-mrow-label">Privacy Mode</span>
-                      <MaxBadge />
-                    </div>
-                    <div className="i-mrow-sub">No Gemini — self-hosted models only</div>
-                    {privError && <div className="i-error" style={{ marginTop: 4 }}>{privError}</div>}
+          {/* ── Privacy Mode — visible to all, gated for non-premium ── */}
+          <section>
+            <p className="i-msect-title">Privacy</p>
+            <div className="i-msect-card">
+              <div className="i-mrow">
+                <div>
+                  <div className="i-toggle-wrap">
+                    <span className="i-mrow-label">Privacy Mode</span>
+                    <MaxBadge />
                   </div>
-                  <Toggle
-                    id="s-privacy"
-                    checked={privMode}
-                    onChange={handlePrivMode}
-                    disabled={privSaving}
-                  />
+                  <div className="i-mrow-sub">No Gemini — self-hosted models only</div>
+                  {privError && (
+                    <div className="i-toggle-nudge">
+                      {privError} <a href={BILLING_URL} target="_blank" rel="noreferrer">Upgrade →</a>
+                    </div>
+                  )}
                 </div>
+                <Toggle
+                  id="s-privacy"
+                  checked={privMode}
+                  onChange={handlePrivMode}
+                  disabled={privSaving}
+                />
               </div>
-            </section>
-          )}
+            </div>
+          </section>
 
           {/* ── Appearance ── */}
           <section>
