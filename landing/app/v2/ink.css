@@ -363,6 +363,36 @@
 }
 .i-back:hover { color: var(--i-ink); border-color: var(--i-graphite); }
 
+/* ── статус-строка + Cancel (Спринт 2) ──────────────────────── */
+.i-status-row { display: flex; align-items: center; gap: 12px; min-height: 18px; }
+.i-status-row .i-status { margin-top: 0; }
+.i-cancel {
+  font-family: var(--i-mono); font-size: 11.5px; color: var(--i-graphite);
+  padding: 3px 8px; border-radius: 6px; border: 1px solid var(--i-hairline);
+  transition: color .13s ease, border-color .13s ease;
+}
+.i-cancel:hover { color: var(--i-danger); border-color: var(--i-danger); }
+
+/* ── upsell / upgrade-карточка (Спринт 2) ───────────────────── */
+.i-upsell {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: color-mix(in srgb, var(--i-accent) 6%, var(--i-surface));
+  border: 1px solid color-mix(in srgb, var(--i-accent) 28%, var(--i-hairline));
+  border-radius: var(--i-r-lg);
+  padding: 14px 16px; margin-top: 14px;
+}
+.i-upsell-text { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 3px; }
+.i-upsell-title { font-size: 14px; font-weight: 600; color: var(--i-ink); }
+.i-upsell-body { font-size: 12.5px; color: var(--i-graphite); }
+.i-upsell-cta {
+  flex: none; text-decoration: none;
+  background: var(--i-accent); color: var(--i-on-accent);
+  font-family: var(--i-ui); font-size: 13px; font-weight: 600;
+  padding: 9px 18px; border-radius: var(--i-r-md);
+  transition: opacity .15s ease;
+}
+.i-upsell-cta:hover { opacity: .92; }
+
 /* ── recovery / retry box (safety net) ──────────────────────── */
 .i-recover {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;

@@ -4,15 +4,24 @@ import { sb } from "./supabase";
 import type { Segment } from "./db";
 
 // Тонкий клиент к Flask-бэку на Modal. Контракты 1-в-1 со старым /app:
-//   POST /api/transcribe (FormData) -> {job_id}
-//   GET  /api/jobs/<id>             -> {status, ...progress | segments | result}
-//   POST /api/generate              -> {job_id}
-//   POST /api/title                 -> {title}
-//   GET  /api/profile               -> план/лимиты/usage
+//   POST /api/transcribe (FormData)   -> {job_id}
+//   GET  /api/jobs/<id>               -> {status, ...progress | segments | result}
+//   POST /api/jobs/<id>/cancel        -> отмена Modal FunctionCall
+//   POST /api/generate                -> {job_id}
+//   POST /api/title                   -> {title}
+//   GET  /api/profile                 -> план/лимиты/usage
 
 export class UpgradeRequiredError extends Error {
   constructor(msg: string) { super(msg); this.name = "UpgradeRequiredError"; }
 }
+
+export class CancelledError extends Error {
+  constructor() { super("cancelled by user"); this.name = "CancelledError"; }
+}
+
+// Токен отмены: page держит ref, выставляет cancelled=true по кнопке Cancel.
+// pollJob кладёт сюда jobId, чтобы можно было дёрнуть серверный cancel.
+export type CancelToken = { cancelled: boolean; jobId: string | null };
 
 async function authFetch(url: string, opts: RequestInit = {}): Promise<Response> {
   const { data } = await sb.auth.getSession();
@@ -40,6 +49,13 @@ async function submitJob(url: string, body: FormData | object): Promise<string> 
   return data.job_id as string;
 }
 
+// Best-effort серверная отмена: терминирует Modal-контейнер (экономит GPU)
+export async function cancelJob(jobId: string): Promise<void> {
+  try {
+    await authFetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+  } catch { /* отмена best-effort: клиент всё равно перестал ждать */ }
+}
+
 export type JobProgress = {
   stage?: string;
   chunks_total?: number;
@@ -51,17 +67,25 @@ export async function pollJob(
   jobId: string,
   onProgress?: (p: JobProgress) => void,
   maxWaitMs = 22 * 60 * 1000,
+  cancel?: CancelToken,
 ): Promise<Record<string, unknown>> {
+  if (cancel) cancel.jobId = jobId;
   const deadline = Date.now() + maxWaitMs;
   for (;;) {
+    if (cancel?.cancelled) throw new CancelledError();
     const res = await authFetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`);
     const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!res.ok || !data) throw new Error((data as { error?: string })?.error || `HTTP ${res.status}`);
     if (data.status === "done") return data;
+    if (data.status === "cancelled") throw new CancelledError();
     if (data.status === "error") throw new Error((data.error as string) || "processing failed");
     onProgress?.(data as JobProgress);
     if (Date.now() > deadline) throw new Error("timeout while processing");
-    await new Promise((r) => setTimeout(r, 2000));
+    // прерываемое ожидание 2с — Cancel реагирует мгновенно
+    for (let i = 0; i < 20; i++) {
+      if (cancel?.cancelled) throw new CancelledError();
+      await new Promise((r) => setTimeout(r, 100));
+    }
   }
 }
 
@@ -69,6 +93,7 @@ export async function transcribe(
   blob: Blob,
   o: { language: string; numSpeakers: string; durationSec: number; prompt?: string; quality?: "best" },
   onProgress?: (p: JobProgress) => void,
+  cancel?: CancelToken,
 ): Promise<Segment[]> {
   const fd = new FormData();
   fd.append("audio", blob, "recording.webm");
@@ -79,7 +104,7 @@ export async function transcribe(
   if (o.quality === "best") fd.append("quality", "best");
   const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd);
   const maxWait = o.durationSec > 1800 ? 120 * 60 * 1000 : 22 * 60 * 1000;
-  const result = await pollJob(jobId, onProgress, maxWait);
+  const result = await pollJob(jobId, onProgress, maxWait, cancel);
   return (result.segments as Segment[]) || [];
 }
 

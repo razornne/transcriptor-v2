@@ -7,17 +7,21 @@ import { InputCard } from "@/components/ink/InputCard";
 import { InkSidebar } from "@/components/ink/InkSidebar";
 import { LoginScreen } from "@/components/ink/LoginScreen";
 import { ResultView, transcriptText } from "@/components/ink/ResultView";
+import { UpgradeCard } from "@/components/ink/UpgradeCard";
 import { startRecording, probeDuration, type Recorder } from "@/lib/ink/audio";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
-import { transcribe, generateTitle, fetchProfile, type Profile, type JobProgress } from "@/lib/ink/api";
+import {
+  transcribe, generateTitle, fetchProfile, cancelJob,
+  CancelledError, type CancelToken, type Profile, type JobProgress,
+} from "@/lib/ink/api";
 import {
   fetchHistory, insertEntry, patchEntry, deleteEntry,
   type HistoryEntry, type Segment,
 } from "@/lib/ink/db";
 
 // /v2 — Ink & Halftone, функциональная аппка.
-// Стейт-машина воркфлоу (Спринт 1): view = activeId ? OUTPUT : INPUT.
+// Стейт-машина воркфлоу: view = activeId ? OUTPUT : INPUT.
 //   INPUT  — чистая карточка ввода, БЕЗ табов; запись/аплоад/текст → cook.
 //   OUTPUT — готовый результат, segmented control Transcript/Summary/Actions.
 // Транскрипт делается ВСЕГДА и первым; AI-генерация — из готового результата.
@@ -35,6 +39,12 @@ const STAGE_LABELS: Record<string, string> = {
 function autoTitle(segments: Segment[]): string {
   const words = (segments[0]?.text || "").split(/\s+/).slice(0, 6).join(" ");
   return words.length > 2 ? words : "Untitled recording";
+}
+
+// Лимит минут (Спринт 2): exhausted блокирует, low → confirm.
+function minutesLeft(profile: Profile | null): number {
+  if (!profile || profile.minutes_limit <= 0) return Infinity;
+  return profile.minutes_limit - profile.minutes_used;
 }
 
 // Safety net: незавершённая запись (crash) или упавший аплоад (failed) —
@@ -71,6 +81,7 @@ export default function InkApp() {
   const [language, setLanguage] = useState("");
   const [speakers, setSpeakers] = useState("");
   const [context, setContext] = useState("");
+  const [limitHit, setLimitHit] = useState(false);
 
   const [recover, setRecover] = useState<RecoverState | null>(null);
   const dotsRef = useRef<DotFieldHandle>(null);
@@ -78,6 +89,7 @@ export default function InkApp() {
   const recorderRef = useRef<Recorder | null>(null);
   const recTimerRef = useRef<number>(0);
   const keepAliveStopRef = useRef<(() => void) | null>(null);
+  const cancelRef = useRef<CancelToken | null>(null);
 
   // ── auth ────────────────────────────────────────────────────
   useEffect(() => {
@@ -121,6 +133,22 @@ export default function InkApp() {
     void patchEntry(id, db).catch((err) => console.error("[history] patch failed:", err));
   }, []);
 
+  // Pre-recording limit check (Спринт 2). true = можно продолжать.
+  const passLimitGate = useCallback((): boolean => {
+    const left = minutesLeft(profile);
+    if (left <= 0) {
+      setLimitHit(true);
+      setStatusKind("error");
+      setStatus("monthly minutes used up");
+      setSbOpen(false);
+      return false;
+    }
+    if (left <= 30 && !window.confirm(`Only ~${Math.round(left)} min left on your plan. Start anyway?`)) {
+      return false;
+    }
+    return true;
+  }, [profile]);
+
   // ── завершение: сохранить транскрипт, перейти в OUTPUT ──────
   const finishWithSegments = useCallback(async (segments: Segment[], lang: string) => {
     if (!session?.user) return;
@@ -141,7 +169,6 @@ export default function InkApp() {
     setActiveId(entry.id);                 // → OUTPUT
     setStatus("");
 
-    // Фоновый LLM-заголовок (перетирает только авто-тайтл)
     void generateTitle(transcriptText(segments, {}), lang).then((t) => {
       if (!t) return;
       setEntries((prev) => prev.map((e) =>
@@ -157,6 +184,9 @@ export default function InkApp() {
     setStatusKind("info");
     setStatus("uploading…");
     dotsRef.current?.wave(0.8);
+
+    const token: CancelToken = { cancelled: false, jobId: null };
+    cancelRef.current = token;
 
     let lastStage = "";
     let lastChunks = 0;
@@ -179,6 +209,7 @@ export default function InkApp() {
         blob,
         { language, numSpeakers: speakers, durationSec, prompt: context },
         onProgress,
+        token,
       );
       if (!segments.length) {
         setStatusKind("error");
@@ -192,15 +223,30 @@ export default function InkApp() {
         notify("Skriptly — transcript ready", "Your recording is processed and saved.");
       }
     } catch (e) {
-      setStatusKind("error");
-      setStatus(`failed: ${e instanceof Error ? e.message : e}`);
-      // Blob не теряем: retry / download / discard
-      setRecover({ blob, durationSec, sizeMb: blob.size / 1048576, sessionId, source: "failed" });
-      notify("Skriptly — transcription failed", "The recording is kept — you can retry.");
+      if (e instanceof CancelledError) {
+        // тихий возврат в INPUT.idle — без error/recover
+        setStatus("");
+        if (sessionId) void idbDeleteSession(sessionId);
+        setRecover(null);
+      } else {
+        setStatusKind("error");
+        setStatus(`failed: ${e instanceof Error ? e.message : e}`);
+        setRecover({ blob, durationSec, sizeMb: blob.size / 1048576, sessionId, source: "failed" });
+        notify("Skriptly — transcription failed", "The recording is kept — you can retry.");
+      }
     } finally {
+      cancelRef.current = null;
       setCooking(false);
     }
   }, [cooking, language, speakers, context, finishWithSegments]);
+
+  const onCancel = useCallback(() => {
+    const tok = cancelRef.current;
+    if (!tok) return;
+    tok.cancelled = true;
+    if (tok.jobId) void cancelJob(tok.jobId);  // best-effort серверная отмена (освободить GPU)
+    setStatus("cancelling…");
+  }, []);
 
   const cookText = useCallback(async (text: string) => {
     if (cooking || !text) return;
@@ -220,10 +266,11 @@ export default function InkApp() {
   }, [cooking, language, finishWithSegments]);
 
   const onFile = useCallback(async (f: File) => {
+    if (!passLimitGate()) return;
     setStatus("reading file…");
     const dur = await probeDuration(f);
     void cookBlob(f, dur);
-  }, [cookBlob]);
+  }, [passLimitGate, cookBlob]);
 
   // ── запись ──────────────────────────────────────────────────
   const onRecToggle = useCallback(async () => {
@@ -240,10 +287,12 @@ export default function InkApp() {
       }
       return;
     }
+    if (!passLimitGate()) return;
     try {
       const warn = await batteryWarning();
       if (warn && !window.confirm(warn)) return;
       ensureNotifyPermission();
+      setLimitHit(false);
       setStatusKind("info");
       setStatus("requesting microphone…");
       recorderRef.current = await startRecording();
@@ -257,7 +306,7 @@ export default function InkApp() {
       setStatusKind("error");
       setStatus(`microphone access failed: ${e instanceof Error ? e.message : e}`);
     }
-  }, [recording, cookBlob]);
+  }, [recording, passLimitGate, cookBlob]);
 
   useEffect(() => () => {
     window.clearInterval(recTimerRef.current);
@@ -279,6 +328,7 @@ export default function InkApp() {
   if (!session) return <LoginScreen />;
 
   const initials = (session.user.email || "?").slice(0, 2).toUpperCase();
+  const plan = profile?.plan || "free";
 
   return (
     <div className={`ink-root${sbOpen ? " sb-open" : ""}${team ? " team" : ""}`}>
@@ -318,6 +368,7 @@ export default function InkApp() {
                 <ResultView
                   key={activeEntry.id}
                   entry={activeEntry}
+                  plan={plan}
                   onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
                 />
                 {status && <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">{status}</p>}
@@ -335,7 +386,21 @@ export default function InkApp() {
                   onFile={(f) => void onFile(f)}
                   onRecToggle={() => void onRecToggle()}
                 />
-                <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">{status}</p>
+
+                <div className="i-status-row">
+                  <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">{status}</p>
+                  {cooking && (
+                    <button type="button" className="i-cancel" onClick={onCancel}>[Cancel]</button>
+                  )}
+                </div>
+
+                {limitHit && !cooking && (
+                  <UpgradeCard
+                    title="You've used all your minutes"
+                    body="Upgrade your plan to keep transcribing this month."
+                  />
+                )}
+
                 {recover && !cooking && (
                   <div className="i-recover">
                     <span className="i-recover-text">

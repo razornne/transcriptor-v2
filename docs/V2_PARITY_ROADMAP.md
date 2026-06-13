@@ -258,8 +258,30 @@ Context → локальный state карточки → FormData `prompt`.
 | Auth, запись (mic+tab), upload, транскрипция+волны, история CRUD, AI-табы, rename, title, экспорт md, профиль | ✅ shipped |
 | Safety net: IDB autosave, recovery, retry, wake lock/silent audio/notify/battery | ✅ shipped |
 | Сегментед-контрол, типографика, физика мыши v1 | ✅ shipped |
-| **Спринт 1** — стейт-машина (transcript-first), SDF-дымка (зазор 44px), viewport-fixed canvas + React.memo + useRef hot-path + reading mode, `+Context`→prompt, content-visibility на сегментах | ✅ shipped (`acb0015`) |
-| Спринты 2–7 | ⬜ очередь |
+| **Спринт 1** | ✅ 100% Shipped (SDF-Canvas, Viewport-clamp, Performance decoupling, Cloud-noise hotfix) |
+| **Спринт 2** | ✅ Shipped (Limit gates, 402 handlers, Cooking cancel) |
+| Спринты 3–7 | ⬜ очередь |
+
+### Что в коде сейчас (для следующей сессии)
+- **DotField v4** (`components/ink/DotField.tsx`): амбиентное **облако** точек —
+  интерференция синусоид (`cloud(x,y,t)`, 2 октавы) дрейфует во времени; точки
+  на идеальной сетке, меняются только радиус/opacity; **safety-маска** =
+  `min(эллипс вокруг anchor, rounded-rect очистка по anchor)` гасит точки в 0
+  под заголовком и карточкой; курсор-рябь + волны Cook аддитивно. live=rAF
+  крутится (дрейф), reading=паркуется+0.35, reduced=статика. Декаплинг:
+  React.memo + useRef + 0 setState в rAF, шаг сетки адаптивен (≤2800 точек).
+- **Спринт 2** (`page.tsx` + `api.ts` + `UpgradeCard.tsx`):
+  `passLimitGate()` блокирует запись/аплоад при `minutes_used>=limit`
+  (UpgradeCard `limitHit`), confirm при ≤30 мин; `cancelText` — текст не
+  гейтится (без транскрипции). `CancelToken`/`CancelledError` в api.ts:
+  `pollJob` прерывается мгновенно (флаг-ref, 100мс-тики) + дёргает серверный
+  `POST /api/jobs/<id>/cancel` (FunctionCall.cancel, освобождает GPU).
+  ResultView гейтит Summary/Actions по `plan==='free'` → UpgradeCard; 402 в
+  рантайме → `gated`. CTA UpgradeCard → `BILLING_URL` (боевой /app, до Спринта 3).
+- **Парность с /app остаётся (Спринты 3-7):** Settings (Best Quality/Privacy/
+  Stripe/Notion/referrals), Custom Presets (миграция 009 + /api/presets),
+  inline-edit сегментов, Notes, undo-удаление, pin, Send to Notion, .txt,
+  workspace UI, demo/welcome, shortcuts overlay, Insights, PostHog, i18n, mobile.
 
 ### Заметка для исполнителя по верификации в preview
 `mcp__Claude_Preview` рендерит страницу в **hidden**-состоянии (`document.hidden=true`)

@@ -5,6 +5,10 @@
 // CORS на Flask открыт. На localhost тоже бьём в прод-Modal (бэк один).
 export const API_BASE = "https://razornne--transcriptor-v2-flask-app.modal.run";
 
+// Биллинг/настройки плана пока живут в боевом /app (Settings → Subscription).
+// Спринт 3 перенесёт это в Ink Settings; до тех пор upgrade-CTA ведёт туда.
+export const BILLING_URL = "https://skriptly.io/app";
+
 // Публичные client-side ключи Supabase (безопасно в коде)
 export const SUPABASE_URL = "https://bmonakhktbaliwgobrxv.supabase.co";
 export const SUPABASE_ANON_KEY =
