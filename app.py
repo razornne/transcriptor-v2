@@ -1481,24 +1481,75 @@ def referral_redeem():
 
 @app.route("/api/stripe/checkout", methods=["POST"])
 def stripe_checkout():
-    """Создаёт Stripe Checkout Session и возвращает URL для редиректа."""
+    """Создаёт Stripe Checkout Session и возвращает URL для редиректа.
+
+    Поддерживает три плана:
+      • pro / max  — личная подписка (quantity=1).
+      • team       — командный апселл из пустого экрана Workspace. Юзер ещё НЕ
+                     имеет воркспейса: вводит имя, мы кладём его в metadata как
+                     `pending_workspace_name`. Вебхук на checkout.session.completed
+                     (type=personal_team_create) создаёт воркспейс с этим именем
+                     сразу после оплаты. quantity = TEAM_MIN_SEATS.
+    """
     import stripe as _stripe
     _stripe.api_key = STRIPE_SECRET_KEY
     if not STRIPE_SECRET_KEY:
         return jsonify({"error": "Stripe not configured"}), 503
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
 
-    data = request.get_json() or {}
-    plan    = data.get("plan", "pro").lower()
-    billing = data.get("billing", "monthly").lower()
-    if plan not in ("pro", "max"):
+    data    = request.get_json(silent=True) or {}
+    plan    = (data.get("plan") or "pro").lower()
+    billing = (data.get("billing") or "monthly").lower()
+    if plan not in ("pro", "max", "team"):
         plan = "pro"
+    if billing not in ("monthly", "annual"):
+        billing = "monthly"
 
-    price_id = data.get("price_id") or (STRIPE_PRICE_MAP.get((plan, billing), lambda: "")() )
+    price_id = data.get("price_id") or (STRIPE_PRICE_MAP.get((plan, billing), lambda: "")())
     if not price_id:
         return jsonify({"error": f"price_id for {plan}/{billing} not configured in secrets"}), 400
 
     origin = request.headers.get("Origin", "https://skriptly.io")
     base = origin + "/app"
+
+    # ── Team upsell: pay first, auto-create the workspace via webhook ──────────
+    if plan == "team":
+        # Guard: user must not already belong to a workspace.
+        existing_ws = _get_user_workspace(g.user_id, g.user_email)
+        if existing_ws:
+            return jsonify({"error": "You already belong to a workspace."}), 409
+
+        pending_name = (data.get("pending_workspace_name") or "").strip()[:64]
+        if not pending_name:
+            return jsonify({"error": "Workspace name is required."}), 400
+
+        meta = {
+            "type": "personal_team_create",
+            "user_id": g.user_id or "",
+            "pending_workspace_name": pending_name,
+            "billing": billing,
+        }
+        try:
+            session = _stripe.checkout.Session.create(
+                mode="subscription",
+                payment_method_types=["card"],
+                line_items=[{"price": price_id, "quantity": TEAM_MIN_SEATS}],
+                success_url=base + "?checkout=success&team=1",
+                cancel_url=base + "?checkout=cancelled",
+                client_reference_id=g.user_id,
+                customer_email=g.user_email or "",
+                metadata=meta,
+                # Mirror onto the subscription so we can re-tag it post-creation.
+                subscription_data={"metadata": meta},
+                allow_promotion_codes=True,
+            )
+            return jsonify({"url": session.url})
+        except Exception as e:
+            print(f"[stripe] team checkout create failed: {e}", flush=True)
+            return jsonify({"error": str(e)}), 500
+
+    # ── Personal Pro / Max subscription ────────────────────────────────────────
     try:
         session = _stripe.checkout.Session.create(
             mode="subscription",
@@ -1508,11 +1559,12 @@ def stripe_checkout():
             cancel_url=base + "?checkout=cancelled",
             client_reference_id=g.user_id,
             customer_email=g.user_email or "",
-            metadata={"plan": plan, "user_id": g.user_id or ""},
+            metadata={"plan": plan, "user_id": g.user_id or "", "billing": billing},
             allow_promotion_codes=True,   # enables "Add promotion code" on Stripe Checkout
         )
         return jsonify({"url": session.url})
     except Exception as e:
+        print(f"[stripe] checkout create failed: {e}", flush=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -1521,7 +1573,10 @@ def stripe_portal():
     """Stripe Customer Portal — управление подпиской (отмена, смена плана, карточка).
 
     Требует stripe_customer_id в user_profiles — сохраняется вебхуком на checkout.session.completed.
-    Если customer_id не найден — возвращает ошибку (юзер ещё не оплачивал через Stripe).
+
+    Никогда не должен падать с голым 500 на ожидаемых состояниях:
+      • нет customer_id (юзер ещё не платил)  → 400 {"error": "Stripe customer ID missing"}.
+      • Stripe API / lookup упал              → лог + чистый JSON с понятным сообщением.
 
     Returns: {"url": "https://billing.stripe.com/..."} — редиректим туда фронт.
     """
@@ -1533,20 +1588,26 @@ def stripe_portal():
     if not g.user_id:
         return jsonify({"error": "auth required"}), 401
 
-    # Находим stripe_customer_id из профиля пользователя
+    # ── 1. Вычитываем stripe_customer_id из user_profiles ──────────────────────
     try:
         rows = _sb_admin("user_profiles",
                          params={"id": f"eq.{g.user_id}", "select": "stripe_customer_id"})
     except Exception as e:
-        return jsonify({"error": f"profile lookup failed: {e}"}), 500
+        print(f"[stripe-portal] profile lookup failed for user={g.user_id}: {e}", flush=True)
+        return jsonify({"error": "Could not load your billing profile. Please try again."}), 502
 
     customer_id = (rows[0].get("stripe_customer_id") or "") if rows else ""
-    if not customer_id:
-        return jsonify({
-            "error": "No active subscription found. Please subscribe first.",
-            "no_subscription": True,
-        }), 404
 
+    # Missing / None customer id is an EXPECTED state (never subscribed) — clean 400,
+    # not a 500. Frontend surfaces this as a toast instead of hanging in a loader.
+    if not customer_id:
+        print(f"[stripe-portal] no stripe_customer_id for user={g.user_id}", flush=True)
+        return jsonify({
+            "error": "Stripe customer ID missing",
+            "no_subscription": True,
+        }), 400
+
+    # ── 2. Создаём сессию Customer Portal ──────────────────────────────────────
     origin = request.headers.get("Origin", "https://skriptly.io")
     return_url = origin + "/app?portal=return"
     try:
@@ -1556,7 +1617,11 @@ def stripe_portal():
         )
         return jsonify({"url": session.url})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Чаще всего это "default configuration has not been created" (портал не
+        # настроен в Stripe Dashboard) — логируем полностью, отдаём читаемый текст.
+        print(f"[stripe-portal] billing_portal.Session.create failed "
+              f"(customer={customer_id}): {e}", flush=True)
+        return jsonify({"error": f"Could not open billing portal: {e}"}), 502
 
 
 # ── Notion integration ────────────────────────────────────────
@@ -2550,6 +2615,86 @@ def stripe_webhook():
                     f"🏢 workspace: <code>{workspace_id}</code>\n"
                     f"{discount}"
                 )
+            return jsonify({"ok": True})
+
+        # ── Team upsell: auto-create the workspace from the typed name ──
+        # The user had no workspace; they paid for Team via /api/stripe/checkout
+        # (plan=team) with `pending_workspace_name` in metadata. Create the
+        # workspace now, link the subscription, and re-tag the subscription so
+        # future updated/deleted events route through the workspace_team branch.
+        if meta_type == "personal_team_create":
+            owner_id     = _g(obj, "client_reference_id") or _meta_get(obj, "user_id")
+            pending_name = (_meta_get(obj, "pending_workspace_name") or "Workspace").strip() or "Workspace"
+            billing      = (_meta_get(obj, "billing") or "monthly")
+            customer     = _g(obj, "customer")
+            sub_id       = _g(obj, "subscription")
+
+            import stripe as _stripe
+            _stripe.api_key = STRIPE_SECRET_KEY
+
+            # Seat quantity from the subscription (falls back to the minimum).
+            qty = TEAM_MIN_SEATS
+            try:
+                sub = _stripe.Subscription.retrieve(sub_id)
+                qty = sub["items"]["data"][0].get("quantity", TEAM_MIN_SEATS)
+            except Exception as e:
+                print(f"[webhook] personal_team_create sub retrieve failed: {e}", flush=True)
+
+            ws_id = None
+            if owner_id:
+                # Idempotency: if a workspace already exists for this owner (retry,
+                # double webhook), patch it instead of creating a duplicate.
+                try:
+                    existing = _sb_admin("workspaces",
+                                         params={"owner_id": f"eq.{owner_id}", "select": "id"})
+                except Exception as e:
+                    print(f"[webhook] personal_team_create owner lookup failed: {e}", flush=True)
+                    existing = []
+
+                ws_payload = {
+                    "name": pending_name,
+                    "plan": "team",
+                    "billing": billing,
+                    "stripe_customer_id": customer,
+                    "stripe_subscription_id": sub_id,
+                    "seats": int(qty),
+                }
+                if existing:
+                    ws_id = existing[0]["id"]
+                    _sb_admin("workspaces", method="PATCH",
+                              params={"id": f"eq.{ws_id}"}, data=ws_payload)
+                else:
+                    rows = _sb_admin("workspaces", method="POST",
+                                     data={**ws_payload, "owner_id": owner_id})
+                    ws_id = rows[0]["id"] if rows else None
+
+                print(f"[webhook] personal_team_create → workspace {ws_id} "
+                      f"name={pending_name!r} seats={qty}", flush=True)
+
+                # Re-tag the subscription so later updated/deleted events hit the
+                # existing workspace_team branch (which keys on metadata.type).
+                if ws_id and sub_id:
+                    try:
+                        _stripe.Subscription.modify(sub_id, metadata={
+                            "type": "workspace_team",
+                            "workspace_id": ws_id,
+                            "billing": billing,
+                        })
+                    except Exception as e:
+                        print(f"[webhook] personal_team_create sub re-tag failed: {e}", flush=True)
+
+                amount = (_g(obj, "amount_total") or 0) / 100
+                currency = (_g(obj, "currency") or "usd").upper()
+                discount = _stripe_session_discount_summary(obj)
+                _notify_admin(
+                    f"💰 <b>New Team subscription (auto-workspace)</b>\n\n"
+                    f"💵 {amount:.2f} {currency} ({billing}, {qty} seats)\n"
+                    f"🏢 workspace: <code>{ws_id}</code> · {pending_name}\n"
+                    f"🆔 <code>{owner_id}</code>\n"
+                    f"{discount}"
+                )
+            else:
+                print("[webhook] personal_team_create missing owner_id — skipped", flush=True)
             return jsonify({"ok": True})
 
         # ── Personal subscription (Pro/Max) ──────────────────────────
