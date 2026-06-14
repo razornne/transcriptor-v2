@@ -141,11 +141,12 @@ Supabase Postgres
 - Миграции выполняются **вручную через Supabase SQL Editor** — нет миграционного фреймворка. После добавления новой — обновить эту секцию + сам файл должен начинаться с комментария "Run in Supabase SQL Editor".
 
 ### Frontend — приложение
-- **`templates/index.html`** — single-file (CSS+JS inline). ~5200 строк. Это сам transcriptor: запись, **tabs (Transcript / Summary / Actions)**, AI tools, **Best Quality toggle** (Max only), **personal vocabulary** прозрачно влияет на Whisper, **PostHog** ивенты через reverse proxy.
+- **`landing/app/app/`** — **production** после Cutover 2026-06-14. Ink & Halftone Studio: Next.js App Router, полный функционал транскрипции (запись, upload, AI tools, история, биллинг, настройки). Подробнее — `## Ink & Halftone Studio (/app)` секция.
+- **`legacy/templates/index.html`** — архив старого single-file приложения (~5200 строк, CSS+JS inline). **НЕ редактировать** — только как reference.
 
 ### Frontend — landing + Studio v2 (Next.js)
 - **`landing/`** — Next.js 15 проект, деплоится на Vercel как `skriptly.io`.
-  Сейчас держит ДВЕ независимые поверхности:
+  Сейчас держит ТРИ независимые поверхности:
 
   **Landing (`/`):**
   - `app/layout.tsx` — root layout, шрифты (Bricolage Grotesque + Onest для UA + Manrope + JetBrains Mono), theme bootstrap, viewport
@@ -155,7 +156,13 @@ Supabase Postgres
   - `lib/content.ts` — EN/UA копирайтинг + 4 тарифа (Free $0 / Pro $15 / Max $29 / Team $14)
   - `lib/hooks.ts` — useTypewriter, useReveal, useParallax, useTween
 
-  **Studio v2 redesign (`/v2`)** — см. отдельную секцию ниже:
+  **Ink & Halftone Studio (`/app`) — production:**
+  - `app/app/{layout,page}.tsx` — root layout + главный экран (монтирует все ink-компоненты)
+  - `app/app/ink.css` — все стили Studio под `.i-*` namespace
+  - `components/ink/` — DotField (canvas background), InkSidebar, InputCard (rec + upload), LoginScreen, ResultView (transcript + tabs), SettingsModal, UpgradeCard
+  - `lib/ink/` — api.ts (Modal backend), audio.ts, config.ts, db.ts (Supabase CRUD), idb.ts (IndexedDB), keepalive.ts, settings.ts, supabase.ts
+
+  **Studio v2 redesign (`/v2`) — в разработке:**
   - `app/v2/{layout,page,v2.css}.tsx`
   - `components/studio/` — Studio компоненты
   - `lib/studio/mock-data.ts` — mock-данные
@@ -644,6 +651,113 @@ Privacy masking настроен в `posthog.init` в `templates/index.html`:
 - ⚠️ **Subscription cancelled** — user/workspace id
 
 Реализовано в `_notify_admin(text)` в `app.py`. Best-effort: если Telegram упал, операция не прерывается. Креды в `admin-secrets` Modal Secret.
+
+---
+
+## Ink & Halftone Studio (`/app`) — production app
+
+**Production с 2026-06-14** (после Sprint 7 Cutover). Все файлы в `landing/`.
+
+### Файловая структура
+
+```
+landing/
+├── app/app/
+│   ├── layout.tsx     ← root layout: HTML lang, theme bootstrap
+│   ├── page.tsx       ← главный экран: монтирует все ink-компоненты,
+│   │                    управляет глобальным состоянием (auth, job, history)
+│   ├── ink.css        ← все стили под .i-* namespace (НЕ пересекается с landing)
+│   └── v2.css         ← legacy-compat файл (не используется, можно удалить)
+├── components/ink/
+│   ├── DotField.tsx   ← canvas-фон: анимированное поле из халфтон-точек
+│   │                    + mouse-spring физика + cloud sinusoid дыхание
+│   ├── InkSidebar.tsx ← левый сайдбар: история записей (Supabase), search
+│   ├── InputCard.tsx  ← карточка управления: запись / upload / processing
+│   ├── LoginScreen.tsx← экран логина (Supabase Auth overlay)
+│   ├── ResultView.tsx ← транскрипт + табы (Transcript / Summary / Actions / Notes)
+│   ├── SettingsModal.tsx ← модалка настроек (7 табов — см. ниже)
+│   └── UpgradeCard.tsx← апгрейд-промпт при достижении лимита / AI-гейте
+└── lib/ink/
+    ├── api.ts         ← клиент к Flask-бэку на Modal (authFetch + все эндпоинты)
+    ├── audio.ts       ← MediaRecorder helpers, AudioContext mix
+    ├── config.ts      ← API_BASE (Modal URL или '' для localhost)
+    ├── db.ts          ← Supabase CRUD (raw REST через _sbFetch, не PostgrestClient)
+    ├── idb.ts         ← IndexedDB autosave чанков (audio safety net)
+    ├── keepalive.ts   ← tab keep-alive: silent audio + Wake Lock + OS Notifications
+    ├── settings.ts    ← localStorage-шорткаты (lang, numSpeakers, aiDetail)
+    └── supabase.ts    ← createClient() + export sb
+```
+
+### SettingsModal — табы и поведение
+
+| Таб | Содержимое |
+|-----|------------|
+| Account | email, план, использование минут (прогресс-бар) |
+| Subscription | карточки планов Free/Pro/Max + Privacy Mode toggle. Upgrade → `createStripeCheckout()`. Downgrade/manage → `createStripePortal()` (Customer Portal). |
+| Workspace | создать / посмотреть команду, инвайты, покинуть. Create кнопка активна при любом непустом имени; без Team-плана → upsell-баннер + подсветка Team-карточки. |
+| Integrations | Notion OAuth (connect / disconnect / change default page) |
+| Invite friends | реф-ссылка, бонусные минуты (+60 обоим) |
+| Preferences | язык интерфейса, число спикеров по умолчанию, тема |
+| Danger zone | удаление данных истории + удаление аккаунта (GDPR) |
+
+**Размер модалки:** `.i-modal.i-modal-wide` → `width: 880px; max-width: 95vw; height: 580px`. Левый нав `width: 180px`. Контент `padding: 32px`. Мобайл ≤640px — колапсируется в одну колонку.
+
+### Billing flow (важно — два разных пути)
+
+- **Upgrade** (Free→Pro, Free/Pro→Max): `createStripeCheckout(plan, billing)` → Stripe Checkout Session → `window.location.href`
+- **Downgrade / manage** (Max→Pro, любой→Free, отмена): `createStripePortal()` → Stripe Customer Portal → `window.location.href`
+- Состояния: `checkoutPlan: string | null` (блокирует кнопки апгрейда пока redirect), `loadingPortal: boolean` (блокирует Portal-кнопки)
+- **НЕ смешивать** — Checkout создаёт новую подписку, Portal управляет существующей. Downgrade через Checkout не работает.
+
+### DotField — физика (Sprint 8)
+
+| Константа | Значение | Описание |
+|-----------|----------|----------|
+| `MOUSE_R` | 185 | Радиус влияния курсора (было 150, +23%) |
+| `MOUSE_DISP` | 6 | Максимальное смещение точки (было 4) |
+| `MOUSE_SPRING` | 0.12 | Жёсткость пружины для позиции курсора |
+| `MOUSE_DAMP` | 0.78 | Затухание пружины (даёт упругий overshoot) |
+
+Физика курсора: velocity-based spring вместо простого lerp:
+```ts
+mouse.vx = (mouse.vx + (mouse.tx - mouse.x) * MOUSE_SPRING) * MOUSE_DAMP;
+mouse.vy = (mouse.vy + (mouse.ty - mouse.y) * MOUSE_SPRING) * MOUSE_DAMP;
+mouse.x += mouse.vx; mouse.y += mouse.vy;
+```
+На первом входе курсора (act < 0.01) — телепорт без пружины (vx/vy = 0), чтобы не было snap с края экрана.
+
+Cloud sinusoid t-multipliers увеличены ~35% — точки «дышат» заметно даже без движения мыши.
+
+### CSS ключевые классы (ink.css Sprint 8)
+
+| Класс | Описание |
+|-------|----------|
+| `.i-modal.i-modal-wide` | Основная модалка настроек 880×580px |
+| `.i-plan-cta` | CTA-кнопка планов (primary, accent fill) |
+| `.i-plan-cta.i-plan-cta-down` | Ghost-вариант для Downgrade (рамка, нет fill) |
+| `.i-plan-card.team-upsell-glow` | Пульсирующий glow на карточке при team-upsell |
+| `.i-team-upsell-banner` | Баннер «Workspace requires Team plan» со slide-in |
+| `.i-danger-del-btn` | Кнопка «Видалити акаунт» в Danger zone |
+| `.i-danger-del-btn.confirming` | Состояние подтверждения (красный, scale-pulse) |
+
+Все новые анимации имеют `@media (prefers-reduced-motion)` overrides.
+
+### Delete Account (GDPR)
+
+`Danger zone → Видалити акаунт`:
+1. Первый клик → `deleteConfirm = true` + 3с auto-reset таймер, кнопка становится красной «Підтвердити видалення?»
+2. Второй клик → `apiDeleteAccount()` (DELETE /api/profile) → `sb.auth.signOut()` → `window.location.href = "/"`
+3. Если любой шаг упал — кнопка возвращается в нейтральное состояние
+
+`deleteAccount()` в `lib/ink/api.ts`: `authFetch(${API_BASE}/api/profile, { method: "DELETE" })`.
+
+### Sprint 8 changelog (2026-06-14)
+
+- **Fix 1 — Downgrade buttons**: Разделены Checkout (upgrade) и Portal (downgrade). `openPortal()` отдельная функция с `loadingPortal` state.
+- **Fix 2 — Workspace Create**: Кнопка активна при непустом имени. Без Team → upsell-баннер + Team-карточка с glow.
+- **Fix 3 — Modal sizing**: 880×580px desktop, responsive mobile collapse.
+- **Fix 4 — Delete account**: Самостоятельное удаление аккаунта (GDPR) с двойным подтверждением.
+- **Fix 5 — DotField physics**: Spring/velocity для курсора, MOUSE_R 150→185, MOUSE_DISP 4→6, cloud +35% скорость.
 
 ---
 
