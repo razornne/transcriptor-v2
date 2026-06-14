@@ -608,7 +608,7 @@ export default function InkApp() {
       </header>
 
       <main className="i-hero">
-        <DotField ref={dotsRef} anchorRef={stageRef} mode={dotMode} />
+        <DotField ref={dotsRef} anchorRef={stageRef} mode={dotMode} processing={cooking} />
         <div className="i-center">
           <div ref={stageRef}>
             {view === "OUTPUT" && activeEntry ? (

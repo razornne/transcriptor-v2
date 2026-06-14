@@ -434,20 +434,25 @@
 /* Единый segmented control (Linear-style): тонкая подложка, равные
    паддинги, активный таб — мягкая заливка с матовой тенью. Никаких
    контрастных «пятен». */
-.i-tabs { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; }
+/* ── Unified result toolbar (Sprint 9) ──────────────────────────────────────
+   Один журнальный стандарт: segmented control, ✦ Custom и кнопки экспорта
+   (Notion / .txt / .md / Copy) выровнены по одной базовой линии на высоте 32px,
+   радиус 7–8px, Manrope 13px / 500. Сегмент-трек = 26px таб + 2px паддинг +
+   1px бордер = ровно 32px внешней высоты, как у .i-tbtn. */
+.i-tabs { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; flex-wrap: wrap; }
 .i-segctl {
-  display: inline-flex; gap: 2px; padding: 3px;
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
   background: color-mix(in srgb, var(--i-surface) 55%, transparent);
   border: 1px solid var(--i-hairline);
-  border-radius: 11px;
+  border-radius: 9px;
 }
 .i-tab {
-  font-family: var(--i-ui); font-size: 13px; font-weight: 500;
+  font-family: var(--i-ui); font-size: 13px; font-weight: 500; line-height: 1;
   color: var(--i-graphite);
-  padding: 6px 14px; border-radius: 8px;
+  height: 26px; padding: 0 12px; border-radius: 7px;
   border: 1px solid transparent;
   display: inline-flex; align-items: center; gap: 6px;
-  transition: color .12s ease;
+  transition: color .12s ease, background .12s ease, border-color .12s ease;
 }
 .i-tab:hover { color: var(--i-ink); }
 .i-tab.on {
@@ -458,6 +463,19 @@
 }
 [data-theme="dark"] .ink-root .i-tab.on { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
 .i-tab-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--i-accent); }
+
+/* Unified toolbar action button — Notion / .txt / .md / Copy. Та же высота и
+   типографика что у табов, чтобы вся панель читалась как один ряд. */
+.i-tbtn {
+  font-family: var(--i-ui); font-size: 13px; font-weight: 500; line-height: 1;
+  color: var(--i-graphite);
+  height: 32px; padding: 0 13px; border-radius: 8px;
+  border: 1px solid var(--i-hairline); background: transparent;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: color .13s ease, border-color .13s ease, background .13s ease;
+}
+.i-tbtn:hover { color: var(--i-ink); border-color: var(--i-graphite); }
+.i-tbtn:disabled { opacity: .55; cursor: default; }
 
 .i-seglist { display: flex; flex-direction: column; gap: 2px; padding-top: 10px; }
 /* content-visibility:auto — нативная виртуализация: офф-скрин сегменты не
@@ -878,15 +896,7 @@
   white-space: nowrap; text-align: center; min-width: 32px;
 }
 
-/* ── Notion export button ───────────────────────────────────── */
-.i-notion-btn {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 12.5px; font-weight: 500; color: var(--i-graphite);
-  padding: 5px 10px; border-radius: 999px;
-  border: 1px solid var(--i-hairline);
-  transition: color .13s ease, border-color .13s ease;
-}
-.i-notion-btn:hover { color: var(--i-ink); border-color: var(--i-graphite); }
+/* ── Notion export button — geometry inherited from .i-tbtn ──── */
 .i-notion-btn.sending { opacity: .55; cursor: default; }
 .i-notion-btn.sent { color: var(--i-accent); border-color: color-mix(in srgb, var(--i-accent) 40%, var(--i-hairline)); }
 
@@ -1442,6 +1452,12 @@
     white-space: nowrap;
     padding: 0 16px;
   }
+  /* Toolbar action buttons match the taller mobile touch zone */
+  .i-tbtn {
+    height: 40px;
+    flex: none;
+    white-space: nowrap;
+  }
   /* Insights modal full-width on mobile */
   .i-insights { padding: 8px; }
   .i-insights-stats { grid-template-columns: 1fr 1fr; }
@@ -1626,4 +1642,41 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .i-billing-error { animation: none; }
+}
+
+/* ── Integrations tab — Notion connect/disconnect plaque ──────── */
+.i-integration-row {
+  display: flex; align-items: center; gap: 14px;
+}
+.i-integration-main { flex: 1; min-width: 0; }
+.i-integration-head { display: flex; align-items: center; gap: 8px; }
+.i-integration-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--i-graphite); opacity: .5;
+}
+.i-integration-dot.on {
+  background: #2FA968; opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #2FA968 22%, transparent);
+}
+.i-integration-name {
+  font-family: var(--i-ui); font-size: 13.5px; font-weight: 600; color: var(--i-ink);
+}
+.i-integration-btn {
+  flex: none; white-space: nowrap;
+  font-family: var(--i-ui); font-size: 12.5px; font-weight: 500; line-height: 1;
+  height: 32px; padding: 0 14px; border-radius: 8px;
+  border: 1px solid var(--i-hairline); color: var(--i-graphite);
+  background: transparent;
+  transition: color .13s ease, border-color .13s ease, background .13s ease;
+}
+.i-integration-btn:hover:not(:disabled) { color: var(--i-ink); border-color: var(--i-graphite); }
+.i-integration-btn:disabled { opacity: .55; cursor: default; }
+.i-integration-btn.danger {
+  color: var(--i-danger);
+  border-color: color-mix(in srgb, var(--i-danger) 35%, var(--i-hairline));
+}
+.i-integration-btn.danger:hover:not(:disabled) {
+  color: var(--i-danger);
+  border-color: var(--i-danger);
+  background: color-mix(in srgb, var(--i-danger) 8%, transparent);
 }

@@ -36,9 +36,17 @@ export type Profile = {
   privacy_mode_available?: boolean;
   is_admin?: boolean;
   notion_connected?: boolean;
+  notion_workspace_name?: string | null;
   presets?: Preset[];
   team_presets?: Preset[];
 };
+
+// Thrown when the Stripe Customer Portal can't open because the stored customer
+// id is invalid for the active Stripe mode (e.g. a test cus_ under a live key).
+// The backend has already wiped the bad id; the caller should restart Checkout.
+export class StripeCustomerInvalidError extends Error {
+  constructor(msg: string) { super(msg); this.name = "StripeCustomerInvalidError"; }
+}
 
 async function authFetch(url: string, opts: RequestInit = {}): Promise<Response> {
   const { data } = await sb.auth.getSession();
@@ -332,7 +340,12 @@ export async function createStripePortal(): Promise<string> {
   } catch {
     throw new Error("Network error — could not reach billing. Please try again.");
   }
-  const data = await res.json().catch(() => null) as { url?: string; error?: string } | null;
+  const data = await res.json().catch(() => null) as { url?: string; error?: string; message?: string } | null;
+  // Stale/mismatched customer — backend wiped the bad id; signal the caller to
+  // restart Checkout instead of dead-ending on the portal.
+  if (res.status === 400 && data?.error === "invalid_customer") {
+    throw new StripeCustomerInvalidError(data.message || "Stripe ID mismatched. Please clear checkout again.");
+  }
   if (!res.ok || !data?.url) {
     throw new Error(data?.error || `Could not open billing portal (HTTP ${res.status})`);
   }
@@ -341,6 +354,22 @@ export async function createStripePortal(): Promise<string> {
 
 export async function deleteAccount(): Promise<void> {
   const res = await authFetch(`${API_BASE}/api/profile`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+}
+
+// ── Notion integration ────────────────────────────────────────
+// Returns the Notion OAuth authorize URL; caller redirects the browser to it.
+export async function notionOAuthStart(): Promise<string> {
+  const res = await authFetch(`${API_BASE}/api/notion/oauth/start`);
+  const data = await res.json().catch(() => null) as { url?: string; error?: string } | null;
+  if (!res.ok || !data?.url) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data.url;
+}
+
+// Clears the stored Notion tokens for the current user.
+export async function notionDisconnect(): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/notion/disconnect`, { method: "POST" });
   const data = await res.json().catch(() => ({})) as { error?: string };
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 }

@@ -2,10 +2,9 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════
-// DotField v4 — амбиентное облако точек (генеративный жидкий туман).
+// DotField v5 — амбиентное облако точек (генеративный жидкий туман).
 //
-// КОНЦЕПЦИЯ (хотфикс дизайна): точки больше НЕ образуют прямоугольный ореол
-// вокруг карточки. Они покрывают весь фон как мягкое асимметричное облако,
+// КОНЦЕПЦИЯ: точки покрывают весь фон как мягкое асимметричное облако,
 // лениво дрейфующее во времени (интерференция нескольких синусоид). Точки
 // стоят строго на идеальной сетке — в покое НЕ дрожат; меняются только их
 // РАДИУС (0..~1.5px) и OPACITY по фазе облака, поэтому они «проявляются» и
@@ -14,18 +13,23 @@ import { forwardRef, memo, useEffect, useImperativeHandle, useRef } from "react"
 // SAFETY MASK: вокруг контентной зоны (заголовок + карточка = anchor) точки
 // принудительно гасятся в АБСОЛЮТНЫЙ 0 — комбинация мягкой радиально-
 // эллиптической маски (органичный внешний край) и жёсткой rounded-rect
-// очистки по самому anchor (гарантия чистоты карточки и текста). Заголовок
-// "Say it messy." и поле ввода всегда идеально читаемы.
+// очистки по самому anchor (гарантия чистоты карточки и текста).
 //
 // ПЕРФ (декаплинг сохранён со Спринта 1): canvas в position:fixed обёртке
 // размером строго с ВЬЮПОРТ; React.memo + вся горячая память в useRef +
 // НОЛЬ setState в rAF → ввод текста / смена статуса в page.tsx не доходят
 // до canvas. Шаг сетки адаптивен: число точек ≤ MAX_DOTS при любом экране.
-// В reading mode (OUTPUT) rAF паркуется, canvas гаснет до 0.35 — дрейф не
-// крутится вхолостую над длинным текстом. prefers-reduced-motion → статика.
 //
-// ИНТЕРАКТИВ: курсор (lerp-пружина) пускает сквозь облако мягкую затухающую
-// рябь подсветки и лёгкого искажения; складывается с волнами Cook (ref.wave).
+// v5 (Sprint 9 — «разморозка фона»): rAF больше НЕ паркуется в reading mode.
+// Облако дрейфует, пружинная физика курсора и рябь работают в ЛЮБОМ режиме
+// (live/reading) — фон всегда живой. reading лишь приглушает opacity. Только
+// prefers-reduced-motion даёт полную статику. Во время обработки
+// (processing=true) из центра экрана каждые RADAR_INTERVAL мс расходится
+// упругая радиальная волна — фон превращается в интерактивный статус-бар.
+//
+// ИНТЕРАКТИВ: курсор (spring-пружина с лёгким overshoot) пускает сквозь
+// облако мягкую затухающую рябь подсветки и искажения; складывается с
+// системными волнами Cook (ref.wave) и волнами радара обработки.
 // ═══════════════════════════════════════════════════════════════════════
 
 export type DotFieldHandle = { wave: (amp?: number) => void };
@@ -40,7 +44,7 @@ const CLOUD_LO = 0.40;       // нижний порог проявления о�
 const CLOUD_HI = 0.74;       // верхний (полная плотность)
 const MAX_ALPHA = 0.5;       // макс. базовая прозрачность точки облака
 const MAX_RADIUS = 1.5;      // макс. радиус точки облака, px
-const WAVE_SPEED = 0.3;      // px/мс — скорость системной волны Cook
+const WAVE_SPEED = 0.3;      // px/мс — скорость системной волны Cook / радара
 const WAVE_SIGMA = 52;
 // Sprint 8: cursor radius +23%, stronger displacement, spring physics
 const MOUSE_R = 185;
@@ -48,6 +52,11 @@ const MOUSE_DISP = 6;        // макс. искажение позиции у �
 // Spring cursor physics — stiffness + damping (< 1 = subtle overshoot/oscillation)
 const MOUSE_SPRING = 0.12;
 const MOUSE_DAMP = 0.78;
+// Sprint 9: reading mode больше не паркует rAF — лишь приглушает фон.
+const READING_OPACITY = 0.5;
+// Sprint 9: радар обработки — упругая волна из центра каждые RADAR_INTERVAL мс.
+const RADAR_INTERVAL = 1500;
+const RADAR_AMP = 1.15;
 
 type Dot = {
   x: number; y: number;   // строго на сетке (координаты вьюпорта = canvas)
@@ -91,32 +100,41 @@ function cloud(x: number, y: number, t: number): number {
 
 const DotFieldInner = forwardRef<
   DotFieldHandle,
-  { anchorRef: React.RefObject<HTMLDivElement | null>; mode?: DotMode }
->(function DotFieldInner({ anchorRef, mode = "live" }, ref) {
+  { anchorRef: React.RefObject<HTMLDivElement | null>; mode?: DotMode; processing?: boolean }
+>(function DotFieldInner({ anchorRef, mode = "live", processing = false }, ref) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wavesRef = useRef<Wave[]>([]);
   const runningRef = useRef(false);
   const reducedRef = useRef(false);
   const modeRef = useRef<DotMode>(mode);
+  const processingRef = useRef(processing);
   const kickRef = useRef<() => void>(() => {});
   const rebuildRef = useRef<() => void>(() => {});
 
   useImperativeHandle(ref, () => ({
     wave(amp = 1) {
-      if (reducedRef.current || modeRef.current !== "live") return;
+      if (reducedRef.current) return;            // работает в любом режиме (v5)
       wavesRef.current.push({ start: performance.now(), amp });
       kickRef.current();
     },
   }), []);
 
-  // Смена режима без пересоздания слушателей
+  // Смена режима без пересоздания слушателей — фон НЕ паркуется (v5),
+  // reading лишь приглушает opacity; rAF продолжает крутиться.
   useEffect(() => {
     modeRef.current = mode;
     const cv = canvasRef.current;
-    if (cv) cv.style.opacity = mode === "reading" ? "0.35" : "1";
+    if (cv) cv.style.opacity = mode === "reading" ? String(READING_OPACITY) : "1";
     rebuildRef.current();
-    if (mode === "live") kickRef.current();
+    kickRef.current();
   }, [mode]);
+
+  // Процессинг-радар: при включении гарантируем, что цикл крутится,
+  // чтобы волны импульса начали расходиться сразу.
+  useEffect(() => {
+    processingRef.current = processing;
+    if (processing) kickRef.current();
+  }, [processing]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -133,6 +151,7 @@ const DotFieldInner = forwardRef<
     let raf = 0;
     let vw = 0, vh = 0;
     let centerX = 0, centerY = 0;
+    let lastRadar = 0;   // время последней радар-волны (closure, переживает кадры)
 
     // vx/vy: cursor spring velocity (Sprint 8 — elastic trailing feel)
     const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999, act: 0, vx: 0, vy: 0 };
@@ -192,15 +211,22 @@ const DotFieldInner = forwardRef<
       ctx!.clearRect(0, 0, vw, vh);
       const rgb = dotColor();
       const t = reducedRef.current ? 0 : now;
-      const live = modeRef.current === "live" && !reducedRef.current;
+      const animate = !reducedRef.current;
+
+      // Процессинг-радар: упругая волна из центра экрана каждые RADAR_INTERVAL мс.
+      if (processingRef.current && animate && now - lastRadar >= RADAR_INTERVAL) {
+        lastRadar = now;
+        wavesRef.current.push({ start: now, amp: RADAR_AMP });
+      }
 
       wavesRef.current = wavesRef.current.filter(
         (w) => (now - w.start) * WAVE_SPEED < Math.max(vw, vh) + WAVE_SIGMA * 3,
       );
 
-      if (live) {
+      if (animate) {
         // Sprint 8: spring physics — stiffness * distance, then damp velocity.
         // Produces subtle elastic overshoot that settles in ~2-3 oscillations.
+        // v5: работает в ЛЮБОМ режиме (live + reading), не только live.
         mouse.vx = (mouse.vx + (mouse.tx - mouse.x) * MOUSE_SPRING) * MOUSE_DAMP;
         mouse.vy = (mouse.vy + (mouse.ty - mouse.y) * MOUSE_SPRING) * MOUSE_DAMP;
         mouse.x += mouse.vx;
@@ -215,14 +241,14 @@ const DotFieldInner = forwardRef<
       for (const p of dots) {
         // базовое облако
         const n = cloud(p.x, p.y, t);
-        let density = smoothstep(CLOUD_LO, CLOUD_HI, n);
+        const density = smoothstep(CLOUD_LO, CLOUD_HI, n);
         if (density < 0.01 && !hasWaves && act < 0.01) continue;
 
         let alpha = density * MAX_ALPHA;
         let radius = density * MAX_RADIUS;
         let ox = 0, oy = 0;
 
-        // системные волны Cook — ряби наружу от карточки сквозь облако
+        // системные волны (Cook + радар обработки) — ряби наружу от центра
         if (hasWaves) {
           let lift = 0;
           for (const w of wavesRef.current) {
@@ -232,6 +258,12 @@ const DotFieldInner = forwardRef<
           }
           alpha += lift * 0.5;
           radius += lift * 1.3;
+          // лёгкое упругое отклонение точки наружу на гребне волны
+          if (lift > 0.02 && p.dc > 0.5) {
+            const push = lift * 1.4;
+            ox += (p.x - centerX) / p.dc * push;
+            oy += (p.y - centerY) / p.dc * push;
+          }
         }
 
         // курсор: подсветка + лёгкое искажение позиции (рябь сквозь туман)
@@ -244,8 +276,8 @@ const DotFieldInner = forwardRef<
             alpha += env * act * (0.4 + 0.3 * wob);
             radius += env * act * 0.8;
             const disp = env * act * MOUSE_DISP * wob;
-            ox = (mdx / md) * disp;
-            oy = (mdy / md) * disp;
+            ox += (mdx / md) * disp;
+            oy += (mdy / md) * disp;
           }
         }
 
@@ -262,8 +294,8 @@ const DotFieldInner = forwardRef<
 
     function loop() {
       render(performance.now());
-      // в live облако дрейфует ВСЕГДА; останавливаемся только в reading/reduced
-      if (modeRef.current === "live" && !reducedRef.current) {
+      // v5: облако дрейфует ВСЕГДА (live + reading). Паркуемся только в reduced.
+      if (!reducedRef.current) {
         raf = requestAnimationFrame(loop);
       } else {
         runningRef.current = false;
@@ -272,7 +304,7 @@ const DotFieldInner = forwardRef<
     }
 
     function kick() {
-      if (runningRef.current || modeRef.current !== "live" || reducedRef.current) return;
+      if (runningRef.current || reducedRef.current) return;
       runningRef.current = true;
       raf = requestAnimationFrame(loop);
     }
@@ -281,7 +313,7 @@ const DotFieldInner = forwardRef<
     rebuildRef.current = rebuild;
 
     const onMove = (e: PointerEvent) => {
-      if (reducedRef.current || modeRef.current !== "live") return;
+      if (reducedRef.current) return;            // курсор активен в любом режиме (v5)
       mouse.tx = e.clientX; mouse.ty = e.clientY;
       // Snap position + reset spring velocity on first entry so there's no "launch"
       if (mouse.act < 0.01) { mouse.x = mouse.tx; mouse.y = mouse.ty; mouse.vx = 0; mouse.vy = 0; }
@@ -290,7 +322,7 @@ const DotFieldInner = forwardRef<
     window.addEventListener("pointermove", onMove, { passive: true });
 
     rebuild();
-    if (modeRef.current === "live") kick();       // запустить дрейф облака
+    kick();                                       // запустить дрейф облака
     const t = window.setTimeout(rebuild, 350);   // шрифты доезжают позже
 
     const ro = new ResizeObserver(rebuild);
@@ -317,6 +349,9 @@ const DotFieldInner = forwardRef<
   );
 });
 
-// React.memo: пропсы (anchorRef-объект, mode-строка) референциально стабильны,
-// поэтому ре-рендеры page.tsx от текстового/статусного стейта НЕ доходят сюда.
+// React.memo: пропсы (anchorRef-объект, mode-строка, processing-флаг)
+// референциально стабильны для не-relevant апдейтов, поэтому ре-рендеры
+// page.tsx от текстового/статусного стейта НЕ доходят сюда. Смена mode/
+// processing — намеренно проходит (управляет анимацией), но тяжёлый
+// rebuild-эффект завязан только на anchorRef и не пересоздаётся.
 export const DotField = memo(DotFieldInner);

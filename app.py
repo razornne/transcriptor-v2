@@ -58,6 +58,10 @@ _job_progress_keys: dict[str, str] = {}
 _job_language: dict[str, str | None] = {}
 # job_id → user_id: чтобы знать чьи vocab additions сохранять.
 _job_user: dict[str, str] = {}
+# user_id → job_id: текущая активная транскрипция юзера. При НОВОЙ транскрипции
+# мы принудительно гасим предыдущую (см. _terminate_modal_job) — чтобы частые
+# рестарты/отмены не плодили зомби-контейнеры в очереди Modal.
+_user_active_job: dict[str, str] = {}
 
 # Ленивая ссылка на modal.Dict для прогресса — инициализируется при первом use.
 _progress_dict = None
@@ -1029,6 +1033,9 @@ def job_status_endpoint(job_id):
             _job_language.pop(job_id, None)
             _job_user.pop(job_id, None)
             _job_progress_keys.pop(job_id, None)
+            # Снять отметку активной джобы юзера (zombie-guard)
+            if g.user_id and _user_active_job.get(g.user_id) == job_id:
+                _user_active_job.pop(g.user_id, None)
         return jsonify(result)
 
     # Local: обычный uuid hex
@@ -1037,6 +1044,32 @@ def job_status_endpoint(job_id):
     if not job:
         return jsonify({"error": "job not found or expired"}), 404
     return jsonify({k: v for k, v in job.items() if not isinstance(v, datetime)})
+
+
+def _terminate_modal_job(job_id: str | None) -> bool:
+    """Принудительно гасит запущенный Modal FunctionCall + чистит трекинг-словари.
+
+    Best-effort и идемпотентно: на уже завершённой/отменённой джобе Modal cancel —
+    no-op. Возвращает True если это Modal-джоба (была попытка терминирования).
+    Используется и из cancel-эндпоинта, и при старте новой транскрипции (чтобы
+    предыдущая активная джоба того же юзера не висела зомби-контейнером).
+    """
+    if not (USE_MODAL and job_id and len(job_id) > 2 and job_id[1] == "_"):
+        return False
+    call_id = job_id[2:]
+    try:
+        _modal.FunctionCall.from_id(call_id).cancel()
+    except Exception as e:
+        # Джоба могла уже завершиться — это нормально.
+        print(f"[cancel] modal terminate non-fatal for {job_id}: {e}", flush=True)
+    _job_language.pop(job_id, None)
+    _job_user.pop(job_id, None)
+    _job_progress_keys.pop(job_id, None)
+    # Снять отметку активной джобы (ключ — user_id, значение — job_id).
+    for uid, jid in list(_user_active_job.items()):
+        if jid == job_id:
+            _user_active_job.pop(uid, None)
+    return True
 
 
 @app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
@@ -1053,22 +1086,10 @@ def job_cancel_endpoint(job_id):
     if not job_id:
         return jsonify({"error": "job_id required"}), 400
 
-    # Modal: prefix-encoded call_id
+    # Modal: prefix-encoded call_id — гасим контейнер + чистим трекинг.
     if USE_MODAL and len(job_id) > 2 and job_id[1] == "_":
-        call_id = job_id[2:]
         try:
-            call = _modal.FunctionCall.from_id(call_id)
-            # Check if already done — cancel on done is a no-op but Modal
-            # returns gracefully either way
-            try:
-                call.cancel()
-            except Exception as e:
-                # Job might already be complete; treat as no-op
-                print(f"[cancel] modal cancel non-fatal: {e}", flush=True)
-            # Clean up our local job tracking dicts
-            _job_language.pop(job_id, None)
-            _job_user.pop(job_id, None)
-            _job_progress_keys.pop(job_id, None)
+            _terminate_modal_job(job_id)
             return jsonify({"ok": True, "status": "cancelled"})
         except Exception as e:
             return jsonify({"error": f"cancel failed: {e}"}), 500
@@ -1617,8 +1638,27 @@ def stripe_portal():
         )
         return jsonify({"url": session.url})
     except Exception as e:
-        # Чаще всего это "default configuration has not been created" (портал не
-        # настроен в Stripe Dashboard) — логируем полностью, отдаём читаемый текст.
+        msg = str(e)
+        # ── Stale / mismatched customer (защита от утечки тестовых cus_) ──────
+        # Типовой кейс: в базе лежит тестовый customer (cus_…), а ключ — Live
+        # (или наоборот). Stripe бросает InvalidRequestError "No such customer".
+        # Стираем мусорный stripe_customer_id, чтобы следующий checkout создал
+        # свежего валидного клиента, и говорим фронту уйти на обычный checkout.
+        if "No such customer" in msg:
+            try:
+                _sb_admin("user_profiles", method="PATCH",
+                          params={"id": f"eq.{g.user_id}"},
+                          data={"stripe_customer_id": None})
+                print(f"[stripe-portal] cleared invalid customer={customer_id} "
+                      f"for user={g.user_id}", flush=True)
+            except Exception as e2:
+                print(f"[stripe-portal] failed clearing bad customer={customer_id}: {e2}", flush=True)
+            return jsonify({
+                "error": "invalid_customer",
+                "message": "Stripe ID mismatched. Please clear checkout again.",
+            }), 400
+        # Иначе — чаще всего "default configuration has not been created" (портал
+        # не настроен в Stripe Dashboard). Логируем полностью, отдаём читаемый текст.
         print(f"[stripe-portal] billing_portal.Session.create failed "
               f"(customer={customer_id}): {e}", flush=True)
         return jsonify({"error": f"Could not open billing portal: {e}"}), 502
@@ -3354,6 +3394,15 @@ def transcribe_endpoint():
 
     # ── Modal path: spawn() возвращает FunctionCall сразу, обработка идёт в облаке
     if USE_MODAL:
+        # Зомби-защита: если у юзера уже есть активная транскрипция (быстрый
+        # рестарт / не дождался отмены) — принудительно гасим её ПЕРЕД новым
+        # spawn'ом, чтобы не копить параллельные контейнеры в очереди Modal.
+        if g.user_id:
+            prev_job = _user_active_job.get(g.user_id)
+            if prev_job:
+                print(f"[transcribe] terminating user's previous job {prev_job}", flush=True)
+                _terminate_modal_job(prev_job)
+
         audio_bytes = audio_file.read()
         progress_key = uuid.uuid4().hex  # уникальный ключ для modal.Dict прогресса
         # Resolve Privacy Mode for this user — if on, Modal will skip Gemini
@@ -3393,6 +3442,7 @@ def transcribe_endpoint():
         _job_language[job_id] = language
         if g.user_id:
             _job_user[job_id] = g.user_id
+            _user_active_job[g.user_id] = job_id  # отметка активной джобы (zombie-guard)
         return jsonify({"job_id": job_id, "status": "queued"})
 
     # ── Local path: пишем на диск, обрабатываем в фоновом потоке

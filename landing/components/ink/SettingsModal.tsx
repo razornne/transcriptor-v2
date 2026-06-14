@@ -3,19 +3,20 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import type { Profile, WorkspaceInfo } from "@/lib/ink/api";
 import {
-  setPrivacyMode, UpgradeRequiredError,
+  setPrivacyMode, UpgradeRequiredError, StripeCustomerInvalidError,
   createWorkspace as apiCreateWorkspace,
   inviteMember as apiInviteMember,
   removeMember as apiRemoveMember,
   leaveWorkspace as apiLeaveWorkspace,
   createStripeCheckout, createStripePortal,
+  notionOAuthStart, notionDisconnect as apiNotionDisconnect,
   deleteAccount as apiDeleteAccount,
 } from "@/lib/ink/api";
 import { sb } from "@/lib/ink/supabase";
 import { saveSettings, type InkSettings } from "@/lib/ink/settings";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 
-type NavSection = "account" | "subscription" | "workspace" | "settings" | "invite" | "danger";
+type NavSection = "account" | "subscription" | "workspace" | "integrations" | "settings" | "invite" | "danger";
 type Lang = "en" | "ua";
 
 // ── i18n dictionary ────────────────────────────────────────────────────────
@@ -26,7 +27,8 @@ const DICT = {
     title: "Settings",
     nav: {
       account: "Account", subscription: "Subscription", workspace: "Workspace",
-      settings: "Settings", invite: "Invite friends", danger: "Danger zone",
+      integrations: "Integrations", settings: "Settings",
+      invite: "Invite friends", danger: "Danger zone",
     },
     // Account
     account: "Account", planSuffix: "plan", usageMonth: "Usage this month",
@@ -64,6 +66,17 @@ const DICT = {
     privacySub: "No Gemini — self-hosted models only",
     appearance: "Appearance", theme: "Theme", light: "Light", dark: "Dark",
     interfaceLanguage: "Interface language",
+    // Integrations
+    integrationsTitle: "Integrations",
+    notionTitle: "Notion",
+    notionConnected: "Notion connected",
+    notionWorkspaceFallback: "Connected workspace",
+    notionConnectDesc: "Send transcripts, summaries and action items straight to a Notion page.",
+    notionConnect: "Connect Notion Workspace",
+    notionConnecting: "Connecting…",
+    notionDisconnect: "Disconnect Notion",
+    notionDisconnecting: "Disconnecting…",
+    notionErrorFallback: "Notion request failed.",
     // Invite
     referTitle: "Refer a friend",
     referBody: "Share your referral link — you both get +60 min when they subscribe.",
@@ -82,7 +95,8 @@ const DICT = {
     title: "Налаштування",
     nav: {
       account: "Акаунт", subscription: "Підписка", workspace: "Воркспейс",
-      settings: "Налаштування", invite: "Запросити друзів", danger: "Небезпечна зона",
+      integrations: "Інтеграції", settings: "Налаштування",
+      invite: "Запросити друзів", danger: "Небезпечна зона",
     },
     // Account
     account: "Акаунт", planSuffix: "план", usageMonth: "Використання цього місяця",
@@ -120,6 +134,17 @@ const DICT = {
     privacySub: "Без Gemini — лише власні моделі",
     appearance: "Вигляд", theme: "Тема", light: "Світла", dark: "Темна",
     interfaceLanguage: "Мова інтерфейсу",
+    // Integrations
+    integrationsTitle: "Інтеграції",
+    notionTitle: "Notion",
+    notionConnected: "Notion підключено",
+    notionWorkspaceFallback: "Підключений простір",
+    notionConnectDesc: "Надсилайте транскрипти, підсумки та завдання прямо на сторінку Notion.",
+    notionConnect: "Підключити Notion",
+    notionConnecting: "Підключення…",
+    notionDisconnect: "Відключити Notion",
+    notionDisconnecting: "Відключення…",
+    notionErrorFallback: "Помилка запиту до Notion.",
     // Invite
     referTitle: "Запросіть друга",
     referBody: "Поділіться реферальним посиланням — ви обидва отримаєте +60 хв, коли друг оформить підписку.",
@@ -194,6 +219,8 @@ function NavIcon({ id }: { id: NavSection }) {
       return <svg {...p}><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>;
     case "workspace":
       return <svg {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+    case "integrations":
+      return <svg {...p}><path d="M10.59 13.41a2 2 0 0 0 2.83 0l3.59-3.59a2 2 0 0 0 0-2.83l-1-1a2 2 0 0 0-2.83 0l-.59.59"/><path d="M13.41 10.59a2 2 0 0 0-2.83 0l-3.59 3.59a2 2 0 0 0 0 2.83l1 1a2 2 0 0 0 2.83 0l.59-.59"/></svg>;
     case "settings":
       return <svg {...p}><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>;
     case "invite":
@@ -203,7 +230,7 @@ function NavIcon({ id }: { id: NavSection }) {
   }
 }
 
-const NAV_ORDER: NavSection[] = ["account", "subscription", "workspace", "settings", "invite", "danger"];
+const NAV_ORDER: NavSection[] = ["account", "subscription", "workspace", "integrations", "settings", "invite", "danger"];
 
 export function SettingsModal({
   session, profile, settings, onSettingsChange, onClose, onSignOut,
@@ -256,8 +283,54 @@ export function SettingsModal({
       const url = await createStripePortal();
       window.location.href = url;
     } catch (e) {
+      // Stored customer was invalid (e.g. test cus_ under a live key). The backend
+      // already wiped it; restart Checkout for the current paid plan so a fresh,
+      // valid customer is created. Free users just see the message.
+      if (e instanceof StripeCustomerInvalidError) {
+        if (plan === "pro" || plan === "max") {
+          try {
+            const url = await createStripeCheckout(plan);
+            window.location.href = url;
+            return;
+          } catch { /* fall through to toast */ }
+        }
+        setBillingError(e.message);
+        setLoadingPortal(false);
+        return;
+      }
       setBillingError(e instanceof Error ? e.message : t.billingErrFallback);
       setLoadingPortal(false);
+    }
+  };
+
+  // ── Notion integration (Integrations tab) ────────────────────────
+  const [notionConnectedLocal, setNotionConnectedLocal] = useState<boolean>(!!profile?.notion_connected);
+  const [notionBusy, setNotionBusy] = useState<"connect" | "disconnect" | null>(null);
+  const [notionError, setNotionError] = useState("");
+  useEffect(() => { setNotionConnectedLocal(!!profile?.notion_connected); }, [profile?.notion_connected]);
+
+  const handleNotionConnect = async () => {
+    if (notionBusy) return;
+    setNotionBusy("connect"); setNotionError("");
+    try {
+      const url = await notionOAuthStart();
+      window.location.href = url;   // full-page OAuth redirect
+    } catch (e) {
+      setNotionError(e instanceof Error ? e.message : t.notionErrorFallback);
+      setNotionBusy(null);
+    }
+  };
+
+  const handleNotionDisconnect = async () => {
+    if (notionBusy) return;
+    setNotionBusy("disconnect"); setNotionError("");
+    try {
+      await apiNotionDisconnect();
+      setNotionConnectedLocal(false);   // optimistic — profile refreshes on next load
+    } catch (e) {
+      setNotionError(e instanceof Error ? e.message : t.notionErrorFallback);
+    } finally {
+      setNotionBusy(null);
     }
   };
 
@@ -706,6 +779,50 @@ export function SettingsModal({
                     )}
                   </>
                 )}
+              </div>
+            )}
+
+            {/* ── Integrations ── */}
+            {nav === "integrations" && (
+              <div className="i-modal-pane">
+                <p className="i-msect-title">{t.integrationsTitle}</p>
+                <div className="i-msect-card">
+                  <div className="i-integration-row">
+                    <div className="i-integration-main">
+                      <div className="i-integration-head">
+                        <span className={`i-integration-dot${notionConnectedLocal ? " on" : ""}`} aria-hidden="true" />
+                        <span className="i-integration-name">
+                          {notionConnectedLocal ? t.notionConnected : t.notionTitle}
+                        </span>
+                      </div>
+                      <div className="i-mrow-sub" style={{ marginTop: 4 }}>
+                        {notionConnectedLocal
+                          ? (profile?.notion_workspace_name || t.notionWorkspaceFallback)
+                          : t.notionConnectDesc}
+                      </div>
+                    </div>
+                    {notionConnectedLocal ? (
+                      <button
+                        type="button"
+                        className="i-integration-btn danger"
+                        disabled={notionBusy !== null}
+                        onClick={() => void handleNotionDisconnect()}
+                      >
+                        {notionBusy === "disconnect" ? t.notionDisconnecting : t.notionDisconnect}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="i-integration-btn"
+                        disabled={notionBusy !== null}
+                        onClick={() => void handleNotionConnect()}
+                      >
+                        {notionBusy === "connect" ? t.notionConnecting : t.notionConnect}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {notionError && <p className="i-error">{notionError}</p>}
               </div>
             )}
 
