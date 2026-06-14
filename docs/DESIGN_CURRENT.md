@@ -146,12 +146,23 @@ chunk k/N» (`_showChunkProgress`). Кнопка **Cancel** (отменяет Mo
   ✎ rename / × delete; "+ Add a term"; collapse до 18 ("Show all N"). Персист
   через `POST /api/vocabulary`.
 
-### 4.8 Settings (`#settingsModal`)
-Модалка с левым меню табов: **Account** (email, plan, usage), **Subscription**
-(планы, Stripe checkout/portal, Privacy Mode toggle для Max/Team), **Workspace**
-(команда, инвайты, per-seat биллинг), **Integrations** (Notion connect),
-**Invite friends** (реф-ссылка, бонусные минуты), **Preferences** (язык, число
-спикеров, тема), **Danger zone** (удаление данных).
+### 4.8 Settings (SettingsModal.tsx) — обновлено Sprint 8
+Модалка с левым меню табов. Размер: **880×580px** desktop (max 95vw / 88dvh),
+нав **180px** слева, контент padding **32px**. Мобайл ≤640px — one-column stack.
+
+| Таб | Содержимое |
+|-----|------------|
+| Account | email, план, прогресс-бар минут |
+| Subscription | карточки Free/Pro/Max, Privacy Mode (Max/Team). **Upgrade** → `createStripeCheckout()`. **Downgrade/manage** → `createStripePortal()` (Customer Portal). `loadingPortal` state блокирует Portal-кнопки. |
+| Workspace | create (активна при любом непустом имени; без Team-плана → upsell-баннер + Team-glow); члены, инвайты, leave |
+| Integrations | Notion OAuth |
+| Invite friends | реф-ссылка + бонус |
+| Preferences | язык, спикеры, тема |
+| Danger zone | очистка истории + **удаление аккаунта** (2-click, 3s auto-cancel, `apiDeleteAccount()` → `sb.auth.signOut()` → redirect `/`) |
+
+**Billing split (критично):** Upgrade и Downgrade — два разных API. Не смешивать:
+`createStripeCheckout()` создаёт новую подписку; `createStripePortal()` управляет
+существующей (downgrade, cancel, update card).
 
 ### 4.9 Прочие модалки
 - **Shortcuts** — клавиатурные сокращения.

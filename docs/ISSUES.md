@@ -145,3 +145,22 @@ Gemini-чистку полностью мусорных сегментов по�
 ### ISS-12 · Подключить Linear для трекинга задач
 **Status:** 🔴 planned. Юзер хочет подцепить Linear, чтобы загружать туда таски
 и Claude их видел. Пока — этот файл.
+
+---
+
+## 🟢 Sprint 8 — done (2026-06-14)
+
+### ISS-13 · Downgrade кнопки ничего не делали
+**Status:** 🟢 done — `openPortal()` (Stripe Customer Portal) отделена от `startCheckout()` (Checkout). Downgrade/manage → Portal. `loadingPortal` state предотвращает двойной клик. `SettingsModal.tsx`.
+
+### ISS-14 · Workspace Create постоянно disabled без Team-плана
+**Status:** 🟢 done — кнопка `disabled` только при пустом имени или в процессе создания. Без Team-плана: клик → upsell-баннер (`.i-team-upsell-banner`) + glow на Team-карточке (`.team-upsell-glow`), навигация в Subscription таб. `SettingsModal.tsx`.
+
+### ISS-15 · Settings модалка слишком маленькая на десктопе
+**Status:** 🟢 done — `.i-modal.i-modal-wide` теперь `880×580px` (было ~480px). Нав `180px`, контент `padding: 32px`. `ink.css`.
+
+### ISS-16 · Нет самостоятельного удаления аккаунта (GDPR)
+**Status:** 🟢 done — Danger Zone → «Видалити акаунт»: двойное подтверждение (3с auto-cancel), `deleteAccount()` в `api.ts` (DELETE /api/profile), потом `sb.auth.signOut()` + redirect `/`. `SettingsModal.tsx`, `api.ts`.
+
+### ISS-17 · DotField — статичный фон, слабая реакция на курсор
+**Status:** 🟢 done — Spring/velocity физика для курсора (MOUSE_SPRING=0.12, MOUSE_DAMP=0.78), MOUSE_R 150→185 (+23%), MOUSE_DISP 4→6. Cloud sinusoid t-multipliers +35% — дыхание заметно без движения. `DotField.tsx`.
