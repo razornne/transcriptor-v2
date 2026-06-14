@@ -79,11 +79,21 @@ export async function cancelJob(jobId: string): Promise<void> {
   } catch { /* best-effort */ }
 }
 
+export type PipelineStepStatus = "pending" | "running" | "completed" | "failed";
+export type PipelineStep = {
+  status: PipelineStepStatus;
+  duration_sec?: number;   // честное итоговое время (completed/failed)
+  elapsed_sec?: number;    // серверный снимок живого времени (running)
+  started_ts?: number;     // epoch начала шага (для клиентской интерполяции)
+};
+export type PipelineSteps = Record<string, PipelineStep>;
+
 export type JobProgress = {
   stage?: string;
   chunks_total?: number;
   chunks_done?: number;
   chunks_failed?: number;
+  pipeline_steps?: PipelineSteps;
 };
 
 export async function pollJob(

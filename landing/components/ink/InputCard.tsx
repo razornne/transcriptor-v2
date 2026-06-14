@@ -1,11 +1,87 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
+import type { PipelineSteps } from "@/lib/ink/api";
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
+// Honest pipeline stages — fixed order + human labels for the timeline.
+const STEP_ORDER = ["container", "audio_split", "transcription", "diarization", "ai_formatting"] as const;
+const STEP_LABELS: Record<string, string> = {
+  container: "Container",
+  audio_split: "Audio split",
+  transcription: "Transcription",
+  diarization: "Diarization",
+  ai_formatting: "AI formatting",
+};
+
+// ── Processing timeline ─────────────────────────────────────────────────────
+// Ultra-minimal vertical stage list. Running step pulses in cinnabar and ticks a
+// live seconds counter (server elapsed re-synced each poll, interpolated on the
+// client via rAF). Completed steps show their honest measured duration.
+function StepTimeline({ pipeline }: { pipeline: PipelineSteps }) {
+  const [, force] = useState(0);
+  const syncRef = useRef<{ step: string; base: number; at: number } | null>(null);
+
+  const running = STEP_ORDER.find((k) => pipeline[k]?.status === "running") || null;
+
+  // Re-sync the live counter to the server's elapsed_sec on every poll.
+  useEffect(() => {
+    if (running) {
+      const server = pipeline[running]?.elapsed_sec ?? 0;
+      syncRef.current = { step: running, base: server, at: performance.now() };
+    } else {
+      syncRef.current = null;
+    }
+  }, [pipeline, running]);
+
+  // rAF tick while a step runs — throttled to ~5fps (a seconds counter needs no more).
+  useEffect(() => {
+    if (!running) return;
+    let raf = 0;
+    let last = 0;
+    const loop = (t: number) => {
+      if (t - last > 180) { last = t; force((n) => (n + 1) % 1_000_000); }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [running]);
+
+  const liveElapsed = (step: string): number => {
+    const s = syncRef.current;
+    if (s && s.step === step) return Math.max(0, s.base + (performance.now() - s.at) / 1000);
+    return pipeline[step]?.elapsed_sec ?? 0;
+  };
+
+  return (
+    <ol className="i-timeline" aria-label="Processing pipeline">
+      {STEP_ORDER.map((key) => {
+        const st = pipeline[key];
+        if (!st) return null;
+        const status = st.status;
+        return (
+          <li key={key} className={`i-tl-step ${status}`}>
+            <span className="i-tl-marker" aria-hidden="true" />
+            <span className="i-tl-label">{STEP_LABELS[key] || key}</span>
+            <span className="i-tl-time">
+              {status === "running"
+                ? `${Math.floor(liveElapsed(key))}s`
+                : status === "completed"
+                  ? `${Math.round(st.duration_sec ?? 0)}s`
+                  : status === "failed"
+                    ? "failed"
+                    : ""}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 export function InputCard({
-  cooking, recording, recSeconds,
+  cooking, pipeline, recording, recSeconds,
   language, onLanguage,
   speakers, onSpeakers,
   context, onContext,
@@ -13,6 +89,7 @@ export function InputCard({
   inWorkspace, visibility, onVisibility,
 }: {
   cooking: boolean;
+  pipeline?: PipelineSteps | null;
   recording: boolean;
   recSeconds: number;
   language: string;
@@ -32,6 +109,7 @@ export function InputCard({
   const fileRef = useRef<HTMLInputElement>(null);
   const ctxRef = useRef<HTMLInputElement>(null);
   const hasContext = context.trim().length > 0;
+  const hasPipeline = !!pipeline && Object.keys(pipeline).length > 0;
 
   useEffect(() => { if (contextOpen) ctxRef.current?.focus(); }, [contextOpen]);
 
@@ -47,7 +125,7 @@ export function InputCard({
       }}
     >
       {/* ── Dropzone body ── */}
-      <div className={`i-dropzone${recording ? " live" : ""}${drag ? " dragging" : ""}`}>
+      <div className={`i-dropzone${recording ? " live" : ""}${cooking ? " cooking" : ""}${drag ? " dragging" : ""}`}>
         {recording ? (
           <div className="i-dropzone-rec">
             <span className="i-rec-dot-lg" />
@@ -55,9 +133,13 @@ export function InputCard({
             <span className="i-dropzone-hint-sub">Recording in progress — click Stop when done</span>
           </div>
         ) : cooking ? (
-          <div className="i-dropzone-rec">
-            <span className="i-dropzone-hint-sub">Processing…</span>
-          </div>
+          hasPipeline ? (
+            <StepTimeline pipeline={pipeline!} />
+          ) : (
+            <div className="i-dropzone-rec">
+              <span className="i-dropzone-hint-sub">Processing…</span>
+            </div>
+          )
         ) : (
           <div className="i-dropzone-idle">
             <svg

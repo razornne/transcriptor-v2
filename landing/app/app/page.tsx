@@ -15,6 +15,7 @@ import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "
 import {
   transcribe, generateTitle, fetchProfile, fetchWorkspace, cancelJob, savePresets, saveTeamPresets,
   CancelledError, type CancelToken, type Profile, type JobProgress, type Preset, type WorkspaceInfo,
+  type PipelineSteps,
 } from "@/lib/ink/api";
 import {
   fetchHistory, insertEntry, patchEntry, deleteEntry,
@@ -50,6 +51,13 @@ function applyThemeSmooth(next: "light" | "dark") {
 }
 
 const STAGE_LABELS: Record<string, string> = {
+  // New honest pipeline step names (modal_app _PipelineProgress)
+  container: "spinning up…",
+  audio_split: "decoding audio…",
+  transcription: "transcribing…",
+  diarization: "separating speakers…",
+  ai_formatting: "formatting…",
+  // Legacy stage names (back-compat for in-flight jobs during deploy)
   convert: "decoding audio…",
   split: "splitting audio…",
   processing: "transcribing…",
@@ -228,6 +236,7 @@ export default function InkApp() {
   const [teamPresets, setTeamPresets] = useState<Preset[]>([]);
 
   const [cooking, setCooking] = useState(false);
+  const [pipeline, setPipeline] = useState<PipelineSteps | null>(null);
   const [recording, setRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const [status, setStatus] = useState("");
@@ -358,7 +367,7 @@ export default function InkApp() {
 
   const cookBlob = useCallback(async (blob: Blob, durationSec: number, sessionId: string | null = null) => {
     if (cooking) return;
-    setCooking(true); setSbOpen(false); setStatusKind("info"); setStatus("uploading…");
+    setCooking(true); setPipeline(null); setSbOpen(false); setStatusKind("info"); setStatus("uploading…");
     dotsRef.current?.wave(0.8);
 
     const token: CancelToken = { cancelled: false, jobId: null };
@@ -368,12 +377,14 @@ export default function InkApp() {
 
     let lastStage = "", lastChunks = 0;
     const onProgress = (pr: JobProgress) => {
+      // Honest pipeline timeline (rendered inside InputCard) — drives the radar too.
+      if (pr.pipeline_steps) setPipeline(pr.pipeline_steps);
       if (pr.chunks_total) {
         if ((pr.chunks_done || 0) > lastChunks) { lastChunks = pr.chunks_done || 0; dotsRef.current?.wave(1); }
         setStatus(`chunk ${pr.chunks_done || 0}/${pr.chunks_total} · transcribing…`);
       } else if (pr.stage && pr.stage !== lastStage) {
         lastStage = pr.stage; dotsRef.current?.wave(1);
-        setStatus(STAGE_LABELS[pr.stage] || `${pr.stage}…`);
+        setStatus(STAGE_LABELS[pr.stage] || "");
       }
     };
 
@@ -406,7 +417,7 @@ export default function InkApp() {
         phCapture("transcription_failed", { error: String(e), duration_sec: durationSec });
       }
     } finally {
-      cancelRef.current = null; setCooking(false);
+      cancelRef.current = null; setCooking(false); setPipeline(null);
     }
   }, [cooking, language, speakers, context, finishWithSegments]);
 
@@ -643,6 +654,7 @@ export default function InkApp() {
 
                 <InputCard
                   cooking={cooking}
+                  pipeline={pipeline}
                   recording={recording}
                   recSeconds={recSeconds}
                   language={language}

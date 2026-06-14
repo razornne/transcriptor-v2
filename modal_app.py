@@ -35,6 +35,87 @@ app = modal.App("transcriptor-v2")
 # flask_app читает при polling и включает в ответ фронту.
 progress_store = modal.Dict.from_name("transcription-progress", create_if_missing=True)
 
+
+class _PipelineProgress:
+    """Честный трекер стадий пайплайна для real-time UI-мониторинга.
+
+    Пишет в progress_store[progress_key] структуру:
+      {
+        "pipeline_steps": {
+          "container":     {"status": "completed", "duration_sec": 4.0},
+          "audio_split":   {"status": "completed", "duration_sec": 2.1},
+          "transcription": {"status": "running",   "started_ts": 1718.., "elapsed_sec": 0},
+          "diarization":   {"status": "pending"},
+          "ai_formatting": {"status": "pending"},
+        },
+        "stage": "<имя текущего шага>",   # legacy back-compat
+        "chunks_total"?: N, "chunks_done"?: K, "chunks_failed"?: F,
+        "ts": <epoch>,
+      }
+
+    Каждый шаг проходит pending → running → completed. duration_sec фиксируется
+    честно по реальному времени между start() и done(). started_ts даёт Flask'у
+    считать живой elapsed на каждом polling'е (часы контейнеров Modal NTP-синхр.).
+
+    Best-effort: любая ошибка записи проглатывается — мониторинг НИКОГДА не
+    должен валить транскрипцию.
+    """
+    STEPS = ("container", "audio_split", "transcription", "diarization", "ai_formatting")
+
+    def __init__(self, progress_key, container_sec: float = 0.0):
+        self.key = progress_key
+        self.steps = {s: {"status": "pending"} for s in self.STEPS}
+        self._t: dict = {}
+        self.extra: dict = {}
+        # Контейнер уже готов к моменту, когда метод реально исполняется —
+        # фиксируем его как completed с измеренным временем cold start (или ~0 на тёплом).
+        self.steps["container"] = {"status": "completed", "duration_sec": round(max(0.0, container_sec), 1)}
+        self._flush("container")
+
+    def start(self, step: str, **extra):
+        self._t[step] = time.time()
+        self.steps[step] = {"status": "running", "started_ts": self._t[step], "elapsed_sec": 0}
+        if extra:
+            self.extra.update(extra)
+        self._flush(step)
+
+    def update(self, step: str, **extra):
+        """Освежает live-метрики бегущего шага (напр. chunks_done) без смены статуса."""
+        st = self.steps.get(step)
+        if st and st.get("status") == "running":
+            st["elapsed_sec"] = round(time.time() - self._t.get(step, time.time()), 1)
+        if extra:
+            self.extra.update(extra)
+        self._flush(step)
+
+    def done(self, step: str, **extra):
+        dur = time.time() - self._t.get(step, time.time())
+        self.steps[step] = {"status": "completed", "duration_sec": round(max(0.0, dur), 1)}
+        if extra:
+            self.extra.update(extra)
+        self._flush(step)
+
+    def fail(self, step: str, **extra):
+        """Помечает текущий шаг как упавший (UI покажет красным), не валит джобу."""
+        dur = time.time() - self._t.get(step, time.time())
+        self.steps[step] = {"status": "failed", "duration_sec": round(max(0.0, dur), 1)}
+        if extra:
+            self.extra.update(extra)
+        self._flush(step)
+
+    def _flush(self, stage: str):
+        if not self.key:
+            return
+        try:
+            progress_store[self.key] = {
+                "pipeline_steps": {k: dict(v) for k, v in self.steps.items()},
+                "stage": stage,
+                "ts": time.time(),
+                **self.extra,
+            }
+        except Exception as e:
+            print(f"[progress] flush failed: {e}", flush=True)
+
 # Persistent Volume — модели кэшируются между запусками.
 # Первый запуск скачает всё (~12 GB), последующие грузят за секунды.
 volume = modal.Volume.from_name("transcriptor-models", create_if_missing=True)
@@ -279,6 +360,12 @@ class Transcriptor:
         from pyannote.audio import Pipeline
         from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
+        # Замер cold start (загрузка моделей) — honest «container» step в UI.
+        # _served=0 → первый запрос на этом контейнере платит за boot; тёплые
+        # переиспользования показывают container ~0с.
+        _boot0 = time.time()
+        self._served = 0
+
         hf_token = os.environ["HF_TOKEN"]
 
         # large-v3-turbo — дефолт: ~3-4x быстрее large-v3, чуть слабее на UA/RU
@@ -371,6 +458,9 @@ class Transcriptor:
         self.llm_model.eval()
         print(f"[modal] {llm_model} ready", flush=True)
 
+        self._boot_secs = time.time() - _boot0
+        print(f"[modal] container ready in {self._boot_secs:.1f}s", flush=True)
+
     # ── Transcription ────────────────────────────────────────────
 
     @modal.method()
@@ -395,9 +485,10 @@ class Transcriptor:
           { "segments": [{speaker, start, end, text}, ...],
             "vocab_additions": [term1, term2, ...] }
 
-        progress_key: если задан, пишем этапы в modal.Dict progress_store
-        чтобы фронт видел реальный прогресс.
-        Этапы: "convert" → "transcribe" → "diarize" → "merge" → "correct"
+        progress_key: если задан, пишем честные стадии (pipeline_steps) в
+        modal.Dict progress_store через _PipelineProgress — фронт видит реальный
+        прогресс с таймингами. Шаги: container → audio_split → transcription →
+        diarization → ai_formatting (pending → running → completed).
 
         quality: "fast" (large-v3-turbo, default) | "best" (large-v3).
         Best качество доступно только для Max-юзеров (проверяется в Flask).
@@ -407,13 +498,11 @@ class Transcriptor:
         import torch
         from merger import merge
 
-        def _report(stage: str):
-            if progress_key:
-                try:
-                    progress_store[progress_key] = {"stage": stage, "ts": time.time()}
-                    print(f"[modal] progress → {stage}", flush=True)
-                except Exception as _e:
-                    print(f"[modal] progress report failed: {_e}", flush=True)
+        # Honest pipeline monitoring: container (cold start) уже позади — фиксируем
+        # его реальную длительность на первом запросе контейнера, далее ~0 на тёплом.
+        container_sec = getattr(self, "_boot_secs", 0.0) if getattr(self, "_served", 0) == 0 else 0.0
+        self._served = getattr(self, "_served", 0) + 1
+        pp = _PipelineProgress(progress_key, container_sec=container_sec)
 
         # WebM → WAV (16kHz mono)
         webm_fd, webm_path = tempfile.mkstemp(suffix=".webm")
@@ -424,11 +513,13 @@ class Transcriptor:
             with open(webm_path, "wb") as f:
                 f.write(audio_bytes)
 
+            pp.start("audio_split")
             subprocess.run(
                 ["ffmpeg", "-y", "-i", webm_path, "-ar", "16000", "-ac", "1", wav_path],
                 check=True, capture_output=True,
             )
-            _report("convert")  # ffmpeg done — warmup + decode complete
+            pp.done("audio_split")  # ffmpeg done — warmup + decode complete
+            pp.start("transcription")
 
             # --- Whisper ---
             lang_hint = _LANG_PROMPTS.get(language or "")
@@ -475,10 +566,12 @@ class Transcriptor:
                 for s in segments_iter
                 if s.text.strip()
             ]
-            _report("transcribe")  # whisper done
+            pp.done("transcription")  # whisper done
 
             if not segments:
                 return {"segments": [], "vocab_additions": []}
+
+            pp.start("diarization")
 
             # --- Pyannote ---
             waveform, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
@@ -505,18 +598,18 @@ class Transcriptor:
                 {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
                 for turn, _, speaker in annotation.itertracks(yield_label=True)
             ]
-            _report("diarize")  # pyannote done
 
-            # --- Merge ---
+            # --- Merge --- (часть стадии diarization: разнос слов по спикерам)
             merged = merge(segments, speaker_turns)
             # На случай если merger пропустил numpy типы — финальная нормализация
             for m in merged:
                 m["start"]   = float(m["start"])
                 m["end"]     = float(m["end"])
                 m["speaker"] = str(m["speaker"])
-            _report("merge")  # merge done
+            pp.done("diarization")  # pyannote + merge done
 
             # --- LLM correction ---
+            pp.start("ai_formatting")
             merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints)
 
             # После Gemini boundary-fix соседние сегменты могут оказаться
@@ -529,7 +622,7 @@ class Transcriptor:
                 else:
                     re_merged.append(dict(seg))
             merged = re_merged
-            _report("correct")  # LLM correction done
+            pp.done("ai_formatting")  # LLM correction done
 
             return {"segments": merged, "vocab_additions": vocab_additions}
 
@@ -1297,14 +1390,11 @@ def transcribe_long(
     import soundfile as sf
     import numpy as np
 
-    def _progress(**kw):
-        if not progress_key:
-            return
-        try:
-            progress_store[progress_key] = {**kw, "ts": time.time()}
-            print(f"[long] progress → {kw}", flush=True)
-        except Exception as e:
-            print(f"[long] progress report failed: {e}", flush=True)
+    # Честный мониторинг стадий (тот же контракт что у transcribe_full). Для
+    # длинной записи per-chunk транскрипция+диаризация+коррекция идут параллельно
+    # внутри «transcription»; «diarization» = глобальное сшивание спикеров,
+    # «ai_formatting» = финальная агрегация. container_sec=0 (CPU-оркестратор).
+    pp = _PipelineProgress(progress_key, container_sec=0.0)
 
     src_fd, src_path = tempfile.mkstemp(suffix=".bin")
     wav_fd, wav_path = tempfile.mkstemp(suffix=".wav")
@@ -1315,7 +1405,7 @@ def transcribe_long(
             f.write(audio_bytes)
 
         # 1. Декод полного аудио → 16k mono wav (на диск, не в RAM)
-        _progress(stage="convert")
+        pp.start("audio_split")
         subprocess.run(
             ["ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "1", wav_path],
             check=True, capture_output=True,
@@ -1323,7 +1413,6 @@ def transcribe_long(
         duration = float(sf.info(wav_path).duration)
 
         # 2. Silence-aware split
-        _progress(stage="split")
         sil_proc = subprocess.run(
             ["ffmpeg", "-i", wav_path, "-af", "silencedetect=noise=-30dB:d=0.5", "-f", "null", "-"],
             capture_output=True, text=True,
@@ -1331,6 +1420,7 @@ def transcribe_long(
         silences = _parse_silences(sil_proc.stderr)
         boundaries = _plan_chunk_boundaries(duration, silences)
         n = len(boundaries)
+        pp.done("audio_split")  # decode + silence-aware split planned
         print(f"[long] duration={duration:.0f}s → {n} chunks (silences={len(silences)})", flush=True)
 
         # 3. Фан-аут: извлекаем чанк и сразу спавним воркер (память — один чанк за раз).
@@ -1339,7 +1429,7 @@ def transcribe_long(
         # transcribe_chunk отбрасывает сегменты из пад-зон (_trim_to_core) —
         # дубликатов на стыках нет. pad_starts[i] — глобальное время начала
         # ПАДДЕД-аудио чанка (нужно для оффсета при стиче).
-        _progress(stage="processing", chunks_total=n, chunks_done=0)
+        pp.start("transcription", chunks_total=n, chunks_done=0, chunks_failed=0)
         calls = []
         pad_starts: list[float] = []
         for i, (start, end) in enumerate(boundaries):
@@ -1388,13 +1478,15 @@ def transcribe_long(
                 res = None
             results[i] = (start, res)
             done += 1
-            _progress(stage="processing", chunks_total=n, chunks_done=done,
+            pp.update("transcription", chunks_total=n, chunks_done=done,
                       chunks_failed=len(failed_chunks))
         if len(failed_chunks) == n:
+            pp.fail("transcription", chunks_total=n, chunks_done=done, chunks_failed=len(failed_chunks))
             raise RuntimeError(f"all {n} chunks failed — cannot produce a transcript")
+        pp.done("transcription", chunks_total=n, chunks_done=done, chunks_failed=len(failed_chunks))
 
         # 5. Глобальная кластеризация спикеров по centroid-эмбеддингам
-        _progress(stage="merge")
+        pp.start("diarization")
         items: list[tuple[int, str]] = []   # (chunk_idx, local_label)
         groups: list[list[list[float]]] = []
         for i, (_start, res) in enumerate(results):
@@ -1498,7 +1590,10 @@ def transcribe_long(
             else:
                 final.append({"speaker": spk, "start": s["start"], "end": s["end"], "text": s["text"]})
 
+        pp.done("diarization")  # global speaker clustering + stitch + re-merge
+
         # 8. Агрегируем vocab_additions (list[dict] {wrong, right}, дедуп по right)
+        pp.start("ai_formatting", chunks_total=n, chunks_done=n, chunks_failed=len(failed_chunks))
         vocab: list[dict] = []
         seen: set[str] = set()
         for _i, (_start, res) in enumerate(results):
@@ -1512,8 +1607,8 @@ def transcribe_long(
                     seen.add(kl)
                     vocab.append(p)
 
-        _progress(stage="correct", chunks_total=n, chunks_done=n,
-                  chunks_failed=len(failed_chunks))
+        pp.done("ai_formatting", chunks_total=n, chunks_done=n,
+                chunks_failed=len(failed_chunks))
         print(f"[long] done: {len(final)} segments, {len(order)} speakers, "
               f"vocab+{len(vocab)}, failed_chunks={failed_chunks or 'none'}", flush=True)
         return {"segments": final, "vocab_additions": vocab}

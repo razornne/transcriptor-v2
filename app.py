@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -140,7 +141,10 @@ def _modal_job_status(job_id: str) -> dict:
         call = _modal.FunctionCall.from_id(call_id)
         result = call.get(timeout=0)  # 0 = не ждать
     except TimeoutError:
-        # Job still running — enrich with real backend progress if available
+        # Job still running — enrich with real backend progress if available.
+        # Прогресс пишется GPU-функциями в modal.Dict (pipeline_steps + stage +
+        # chunks_*). Разворачиваем его на верхний уровень ответа, чтобы фронт
+        # читал поля напрямую (pr.pipeline_steps / pr.stage / pr.chunks_total).
         resp: dict = {"status": "processing"}
         if kind == "transcribe":
             pk = _job_progress_keys.get(job_id)
@@ -149,8 +153,19 @@ def _modal_job_status(job_id: str) -> dict:
                     pdict = _get_progress_dict()
                     if pdict is not None:
                         prog = pdict.get(pk)
-                        if prog:
-                            resp["progress"] = prog
+                        if prog and isinstance(prog, dict):
+                            # Честный live-elapsed для бегущего шага — считаем на
+                            # сервере (часы контейнеров Modal NTP-синхронизированы).
+                            steps = prog.get("pipeline_steps")
+                            if isinstance(steps, dict):
+                                now = time.time()
+                                for st in steps.values():
+                                    if (isinstance(st, dict)
+                                            and st.get("status") == "running"
+                                            and st.get("started_ts")):
+                                        st["elapsed_sec"] = round(max(0.0, now - st["started_ts"]), 1)
+                            resp.update(prog)          # flatten на верхний уровень
+                            resp["progress"] = prog    # back-compat (legacy nested)
                 except Exception:
                     pass
         return resp
