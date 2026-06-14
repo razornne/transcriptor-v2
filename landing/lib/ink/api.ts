@@ -318,3 +318,9 @@ export async function createStripePortal(): Promise<string> {
   if (!res.ok || !data?.url) throw new Error(data?.error || `HTTP ${res.status}`);
   return data.url;
 }
+
+export async function deleteAccount(): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/profile`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+}

@@ -42,8 +42,12 @@ const MAX_ALPHA = 0.5;       // макс. базовая прозрачност�
 const MAX_RADIUS = 1.5;      // макс. радиус точки облака, px
 const WAVE_SPEED = 0.3;      // px/мс — скорость системной волны Cook
 const WAVE_SIGMA = 52;
-const MOUSE_R = 150;
-const MOUSE_DISP = 4;        // макс. искажение позиции у курсора, px
+// Sprint 8: cursor radius +23%, stronger displacement, spring physics
+const MOUSE_R = 185;
+const MOUSE_DISP = 6;        // макс. искажение позиции у курсора, px
+// Spring cursor physics — stiffness + damping (< 1 = subtle overshoot/oscillation)
+const MOUSE_SPRING = 0.12;
+const MOUSE_DAMP = 0.78;
 
 type Dot = {
   x: number; y: number;   // строго на сетке (координаты вьюпорта = canvas)
@@ -70,15 +74,16 @@ function sdfRoundRect(
 }
 
 // Дрейфующее облако: интерференция синусоид (две октавы) → [0,1]
+// Sprint 8: t-множители +35% — заметнее «дыхание» сетки в покое
 function cloud(x: number, y: number, t: number): number {
-  const a1 = Math.sin(x * 0.0045 + t * 0.00020);
-  const a2 = Math.cos(y * 0.0052 - t * 0.00016);
-  const a3 = Math.sin((x * 0.6 + y * 0.8) * 0.0050 + t * 0.00024);
-  const a4 = Math.cos((x * 0.8 - y * 0.5) * 0.0042 - t * 0.00013);
+  const a1 = Math.sin(x * 0.0045 + t * 0.00027);
+  const a2 = Math.cos(y * 0.0052 - t * 0.00021);
+  const a3 = Math.sin((x * 0.6 + y * 0.8) * 0.0050 + t * 0.00032);
+  const a4 = Math.cos((x * 0.8 - y * 0.5) * 0.0042 - t * 0.00018);
   const base = (a1 + a2 + a3 + a4) * 0.25;                    // [-1,1]
   // вторая октава для биллоунга (рвёт регулярность интерференции)
-  const b1 = Math.sin((x + 1000) * 0.0083 + t * 0.00028);
-  const b2 = Math.cos((y + 500) * 0.0091 - t * 0.00022);
+  const b1 = Math.sin((x + 1000) * 0.0083 + t * 0.00038);
+  const b2 = Math.cos((y + 500) * 0.0091 - t * 0.00030);
   const detail = (b1 + b2) * 0.5;                            // [-1,1]
   const v = base * 0.66 + detail * 0.34;                      // [-1,1]
   return v * 0.5 + 0.5;                                       // [0,1]
@@ -129,7 +134,8 @@ const DotFieldInner = forwardRef<
     let vw = 0, vh = 0;
     let centerX = 0, centerY = 0;
 
-    const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999, act: 0 };
+    // vx/vy: cursor spring velocity (Sprint 8 — elastic trailing feel)
+    const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999, act: 0, vx: 0, vy: 0 };
 
     const dotColor = (): string => {
       const el = canvas.closest(".ink-root") || document.documentElement;
@@ -193,8 +199,12 @@ const DotFieldInner = forwardRef<
       );
 
       if (live) {
-        mouse.x += (mouse.tx - mouse.x) * 0.15;
-        mouse.y += (mouse.ty - mouse.y) * 0.15;
+        // Sprint 8: spring physics — stiffness * distance, then damp velocity.
+        // Produces subtle elastic overshoot that settles in ~2-3 oscillations.
+        mouse.vx = (mouse.vx + (mouse.tx - mouse.x) * MOUSE_SPRING) * MOUSE_DAMP;
+        mouse.vy = (mouse.vy + (mouse.ty - mouse.y) * MOUSE_SPRING) * MOUSE_DAMP;
+        mouse.x += mouse.vx;
+        mouse.y += mouse.vy;
         // активность мыши плавно затухает (рябь гаснет после остановки)
         const near = Math.hypot(mouse.tx - centerX, mouse.ty - centerY) < Math.max(vw, vh);
         mouse.act += ((near ? 1 : 0) - mouse.act) * 0.05;
@@ -273,7 +283,8 @@ const DotFieldInner = forwardRef<
     const onMove = (e: PointerEvent) => {
       if (reducedRef.current || modeRef.current !== "live") return;
       mouse.tx = e.clientX; mouse.ty = e.clientY;
-      if (mouse.act < 0.01) { mouse.x = mouse.tx; mouse.y = mouse.ty; }
+      // Snap position + reset spring velocity on first entry so there's no "launch"
+      if (mouse.act < 0.01) { mouse.x = mouse.tx; mouse.y = mouse.ty; mouse.vx = 0; mouse.vy = 0; }
       kick();
     };
     window.addEventListener("pointermove", onMove, { passive: true });

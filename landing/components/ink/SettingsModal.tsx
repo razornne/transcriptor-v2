@@ -9,7 +9,9 @@ import {
   removeMember as apiRemoveMember,
   leaveWorkspace as apiLeaveWorkspace,
   createStripeCheckout, createStripePortal,
+  deleteAccount as apiDeleteAccount,
 } from "@/lib/ink/api";
+import { sb } from "@/lib/ink/supabase";
 import { saveSettings, type InkSettings } from "@/lib/ink/settings";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 
@@ -113,21 +115,46 @@ export function SettingsModal({
   const plan = profile?.plan || "free";
   const isPremium = plan === "max" || plan === "team";
 
-  // Stripe checkout — plan card CTAs
+  // ── Fix 1: Stripe — separate upgrade vs. downgrade flows ──────────
+  // Upgrade: createStripeCheckout → new subscription
+  // Downgrade: createStripePortal → Stripe Customer Portal (cancel/switch)
   const [checkoutPlan, setCheckoutPlan] = useState<string | null>(null);
+  const [loadingPortal, setLoadingPortal] = useState(false);
+
   const startCheckout = async (targetPlan: "pro" | "max") => {
-    if (checkoutPlan) return;
+    if (checkoutPlan || loadingPortal) return;
     setCheckoutPlan(targetPlan);
     try {
-      const isUpgrade = PLAN_DATA.findIndex((x) => x.id === targetPlan) > PLAN_DATA.findIndex((x) => x.id === plan);
-      const url = isUpgrade
-        ? await createStripeCheckout(targetPlan)
-        : await createStripePortal();
+      const url = await createStripeCheckout(targetPlan);
       window.location.href = url;
     } catch {
       setCheckoutPlan(null);
     }
   };
+
+  // All downgrade / plan-management actions → Stripe Customer Portal
+  const openPortal = async () => {
+    if (loadingPortal || checkoutPlan) return;
+    setLoadingPortal(true);
+    try {
+      const url = await createStripePortal();
+      window.location.href = url;
+    } catch {
+      setLoadingPortal(false);
+    }
+  };
+
+  // ── Fix 2: Team upsell — highlight when coming from Workspace tab ─
+  const [highlightTeam, setHighlightTeam] = useState(false);
+  const highlightTimerRef = useRef<number>(0);
+
+  const navigateToTeamUpsell = () => {
+    window.clearTimeout(highlightTimerRef.current);
+    setHighlightTeam(true);
+    setNav("subscription");
+    highlightTimerRef.current = window.setTimeout(() => setHighlightTeam(false), 2800);
+  };
+  useEffect(() => () => window.clearTimeout(highlightTimerRef.current), []);
 
   // Strict workspace validity: must have a real id
   const hasValidWorkspace = !!(workspace?.id);
@@ -209,8 +236,14 @@ export function SettingsModal({
   const [removing, setRemoving] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
 
+  // ── Fix 2 continued: workspace create — gate with upsell, not disabled ─
   const handleCreateWs = async () => {
     if (!wsName.trim()) return;
+    // Non-team plan: redirect to subscription with Team upsell instead of silent disable
+    if (plan !== "team") {
+      navigateToTeamUpsell();
+      return;
+    }
     setWsCreating(true); setWsError("");
     try {
       const created = await apiCreateWorkspace(wsName.trim());
@@ -256,6 +289,33 @@ export function SettingsModal({
     } catch { /* best-effort */ } finally { setLeaving(false); }
   };
 
+  // ── Fix 4: Delete account — two-click confirmation with 3s timeout ─
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const deleteTimerRef = useRef<number>(0);
+
+  const handleDeleteAccount = async () => {
+    if (deleting) return;
+    if (!deleteConfirm) {
+      window.clearTimeout(deleteTimerRef.current);
+      setDeleteConfirm(true);
+      deleteTimerRef.current = window.setTimeout(() => setDeleteConfirm(false), 3000);
+      return;
+    }
+    // Second click within 3s — confirmed
+    window.clearTimeout(deleteTimerRef.current);
+    setDeleting(true);
+    try {
+      await apiDeleteAccount();
+      await sb.auth.signOut();
+      window.location.href = "/";
+    } catch {
+      setDeleting(false);
+      setDeleteConfirm(false);
+    }
+  };
+  useEffect(() => () => window.clearTimeout(deleteTimerRef.current), []);
+
   // Referral copy
   const [refCopied, setRefCopied] = useState(false);
   const refUrl = profile?.referral_code ? `https://skriptly.io?ref=${profile.referral_code}` : null;
@@ -278,6 +338,10 @@ export function SettingsModal({
   const limit = profile?.minutes_limit || 60;
   const ratio = limit > 0 ? Math.min(1, used / limit) : 0;
   const filledDots = Math.round(ratio * 16);
+
+  // Helper: is the given plan an upgrade from current?
+  const planIdx = (id: string) => PLAN_DATA.findIndex((x) => x.id === id);
+  const isUpgrade = (targetId: string) => planIdx(targetId) > planIdx(plan);
 
   return (
     <div
@@ -355,10 +419,43 @@ export function SettingsModal({
             {/* ── Subscription ── */}
             {nav === "subscription" && (
               <div className="i-modal-pane">
+
+                {/* ── Fix 2: Team upsell banner — appears when user came from Workspace tab ── */}
+                {highlightTeam && (
+                  <div className="i-team-upsell-banner" role="status">
+                    <div className="i-team-upsell-icon" aria-hidden="true">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                        <circle cx="9" cy="7" r="4"/>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
+                      </svg>
+                    </div>
+                    <div className="i-team-upsell-text">
+                      <p className="i-team-upsell-title">Workspace requires Team plan</p>
+                      <p className="i-team-upsell-body">$14 / seat / mo · 600 min per seat · shared presets · team billing</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="i-team-upsell-cta"
+                      disabled={loadingPortal}
+                      onClick={() => void openPortal()}
+                    >
+                      {loadingPortal ? "Opening…" : "Manage plan →"}
+                    </button>
+                  </div>
+                )}
+
                 <p className="i-msect-title">Your plan</p>
                 <div className="i-plan-cards">
                   {PLAN_DATA.map((p) => (
-                    <div key={p.id} className={`i-plan-card${p.id === plan ? " current" : ""}`}>
+                    <div
+                      key={p.id}
+                      className={[
+                        "i-plan-card",
+                        p.id === plan ? "current" : "",
+                        highlightTeam && p.id === "max" ? "team-upsell-glow" : "",
+                      ].filter(Boolean).join(" ")}
+                    >
                       <div className="i-plan-name">{p.name}</div>
                       <div>
                         <span className="i-plan-price">{p.price}</span>
@@ -372,18 +469,28 @@ export function SettingsModal({
                       </div>
                       {p.id === plan
                         ? <span className="i-plan-current-badge">CURRENT PLAN</span>
-                        : <button
-                            type="button"
-                            className="i-plan-cta"
-                            disabled={!!checkoutPlan}
-                            onClick={() => void startCheckout(p.id as "pro" | "max")}
-                          >
-                            {checkoutPlan === p.id ? "Redirecting…" : (
-                              PLAN_DATA.findIndex((x) => x.id === p.id) > PLAN_DATA.findIndex((x) => x.id === plan)
-                                ? "Upgrade →"
-                                : "Downgrade"
-                            )}
-                          </button>
+                        : isUpgrade(p.id)
+                          ? (
+                            <button
+                              type="button"
+                              className="i-plan-cta"
+                              disabled={!!checkoutPlan || loadingPortal}
+                              onClick={() => void startCheckout(p.id as "pro" | "max")}
+                            >
+                              {checkoutPlan === p.id ? "Redirecting…" : "Upgrade →"}
+                            </button>
+                          )
+                          : (
+                            /* Fix 1: Downgrade routes explicitly to Stripe Customer Portal */
+                            <button
+                              type="button"
+                              className="i-plan-cta i-plan-cta-down"
+                              disabled={loadingPortal || !!checkoutPlan}
+                              onClick={() => void openPortal()}
+                            >
+                              {loadingPortal ? "Opening…" : "Downgrade"}
+                            </button>
+                          )
                       }
                     </div>
                   ))}
@@ -412,13 +519,14 @@ export function SettingsModal({
                         value={wsName}
                         onChange={(e) => setWsName(e.target.value)}
                         placeholder={ws.namePlaceholder}
-                        onKeyDown={(e) => { if (e.key === "Enter" && plan === "team") void handleCreateWs(); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWs(); }}
                       />
                       {wsError && <p className="i-error">{wsError}</p>}
+                      {/* Fix 2: button enabled whenever name is non-empty; plan gate moved into handler */}
                       <button
                         type="button"
                         className="i-ws-invite-btn"
-                        disabled={wsCreating || !wsName.trim() || plan !== "team"}
+                        disabled={wsCreating || !wsName.trim()}
                         onClick={() => void handleCreateWs()}
                       >
                         {wsCreating ? ws.creating : ws.createBtn}
@@ -426,7 +534,7 @@ export function SettingsModal({
                       {plan !== "team" && (
                         <p className="i-ws-plan-note">
                           {ws.planNote}{" "}
-                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>{ws.viewPlans}</button>
+                          <button type="button" className="i-link" onClick={navigateToTeamUpsell}>{ws.viewPlans}</button>
                         </p>
                       )}
                     </div>
@@ -668,6 +776,8 @@ export function SettingsModal({
             {nav === "danger" && (
               <div className="i-modal-pane">
                 <p className="i-msect-title">Danger zone</p>
+
+                {/* Sign out */}
                 <div className="i-msect-card">
                   <div className="i-mrow">
                     <div>
@@ -689,12 +799,36 @@ export function SettingsModal({
                     </button>
                   </div>
                 </div>
-                <p style={{ fontSize: 12, color: "var(--i-graphite)", marginTop: 16 }}>
-                  To delete your account and all data, contact{" "}
-                  <a href="mailto:support@skriptly.io" style={{ color: "var(--i-accent)" }}>
-                    support@skriptly.io
-                  </a>.
-                </p>
+
+                {/* Fix 4: Delete account — GDPR-compliant self-serve with 2-click confirm */}
+                <div className="i-msect-card" style={{ marginTop: 10 }}>
+                  <div className="i-mrow" style={{ flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+                    <div>
+                      <div className="i-mrow-label" style={{ color: "var(--i-danger)" }}>Delete account</div>
+                      <div className="i-mrow-sub" style={{ maxWidth: 340 }}>
+                        Повне видалення вашого акаунту, історії записів та всіх пов&apos;язаних даних без можливості відновлення.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className={`i-danger-del-btn${deleteConfirm ? " confirming" : ""}`}
+                      disabled={deleting}
+                      onClick={() => void handleDeleteAccount()}
+                    >
+                      {deleting
+                        ? "Видалення…"
+                        : deleteConfirm
+                          ? "Підтвердити видалення?"
+                          : "Видалити акаунт"
+                      }
+                    </button>
+                    {deleteConfirm && !deleting && (
+                      <p style={{ fontSize: 11.5, color: "var(--i-graphite)", margin: 0 }}>
+                        Натисніть ще раз для підтвердження. Скасується автоматично через 3 с.
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
