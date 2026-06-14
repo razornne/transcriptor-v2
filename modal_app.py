@@ -111,8 +111,9 @@ web_image = (
         "stripe",
     )
     .add_local_python_source("app")
-    # Шаблон index.html и статика подгружаются как файлы (Flask их ищет рядом с app.py)
-    .add_local_dir("templates", remote_path="/root/templates")
+    # Cutover (2026-06-14): фронт переехал на Next.js /app, GET / теперь 301-редирект.
+    # templates/index.html заархивирован в legacy/ — Flask его больше не рендерит,
+    # поэтому каталог templates/ не монтируется (его и нет в корне).
 )
 
 # Лёгкий CPU образ для оркестратора длинных записей (transcribe_long).
