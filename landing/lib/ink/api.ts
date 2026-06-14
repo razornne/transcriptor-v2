@@ -298,24 +298,44 @@ export async function leaveWorkspace(): Promise<void> {
 
 // ── Billing ───────────────────────────────────────────────────
 
+// Upgrade flow — creates a NEW subscription via Stripe Checkout.
+// plan "team" is the engineered-upsell path: the user has no workspace yet, types
+// a name, and we pass it as `pending_workspace_name`. Stripe's webhook reads it on
+// checkout.session.completed and auto-creates the workspace right after payment.
 export async function createStripeCheckout(
-  plan: "pro" | "max",
+  plan: "pro" | "max" | "team",
   billing: "monthly" | "annual" = "monthly",
+  pendingWorkspaceName?: string,
 ): Promise<string> {
+  const body: Record<string, unknown> = { plan, billing };
+  const wsName = (pendingWorkspaceName || "").trim();
+  if (wsName) body.pending_workspace_name = wsName;
   const res = await authFetch(`${API_BASE}/api/stripe/checkout`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ plan, billing }),
+    body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => null) as { url?: string; error?: string } | null;
   if (!res.ok || !data?.url) throw new Error(data?.error || `HTTP ${res.status}`);
   return data.url;
 }
 
+// Downgrade / manage flow — opens the Stripe Customer Portal for the existing
+// subscription. The customer id is resolved server-side from user_profiles, so we
+// don't pass it from the client (avoids trusting a spoofable field). On any failure
+// this throws a clean Error so the caller can surface a toast and reset its loader —
+// never leaving the Settings UI stuck in a perpetual loading state.
 export async function createStripePortal(): Promise<string> {
-  const res = await authFetch(`${API_BASE}/api/stripe/portal`, { method: "POST" });
+  let res: Response;
+  try {
+    res = await authFetch(`${API_BASE}/api/stripe/portal`, { method: "POST" });
+  } catch {
+    throw new Error("Network error — could not reach billing. Please try again.");
+  }
   const data = await res.json().catch(() => null) as { url?: string; error?: string } | null;
-  if (!res.ok || !data?.url) throw new Error(data?.error || `HTTP ${res.status}`);
+  if (!res.ok || !data?.url) {
+    throw new Error(data?.error || `Could not open billing portal (HTTP ${res.status})`);
+  }
   return data.url;
 }
 

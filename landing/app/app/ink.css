@@ -1604,3 +1604,26 @@
   .i-plan-card.team-upsell-glow,
   .i-danger-del-btn.confirming { animation: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   SPRINT 9 — Workspace upsell flow, Stripe portal error toast, i18n
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Inline billing error toast (Subscription tab) — shown when the Stripe
+   Customer Portal can't be opened, so the UI never hangs on a silent failure. */
+.i-billing-error {
+  font-size: 12.5px; line-height: 1.45;
+  color: var(--i-danger);
+  background: color-mix(in srgb, var(--i-danger) 7%, var(--i-paper));
+  border: 1px solid color-mix(in srgb, var(--i-danger) 30%, var(--i-hairline));
+  border-radius: var(--i-r-md);
+  padding: 9px 12px; margin: 0 0 14px;
+  animation: i-billing-error-in .2s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes i-billing-error-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .i-billing-error { animation: none; }
+}

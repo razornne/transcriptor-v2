@@ -16,6 +16,125 @@ import { saveSettings, type InkSettings } from "@/lib/ink/settings";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 
 type NavSection = "account" | "subscription" | "workspace" | "settings" | "invite" | "danger";
+type Lang = "en" | "ua";
+
+// ── i18n dictionary ────────────────────────────────────────────────────────
+// Every visible string in this modal resolves through `t = DICT[uiLang]`. Mirror
+// of the pattern used in InkSidebar.tsx so the whole app shares one convention.
+const DICT = {
+  en: {
+    title: "Settings",
+    nav: {
+      account: "Account", subscription: "Subscription", workspace: "Workspace",
+      settings: "Settings", invite: "Invite friends", danger: "Danger zone",
+    },
+    // Account
+    account: "Account", planSuffix: "plan", usageMonth: "Usage this month",
+    signOut: "Sign out",
+    // Subscription
+    yourPlan: "Your plan", currentPlan: "CURRENT PLAN",
+    upgrade: "Upgrade →", redirecting: "Redirecting…",
+    downgrade: "Downgrade", opening: "Opening…",
+    billingErrFallback: "Could not open billing portal.",
+    // Workspace — empty state
+    wsEmptyTitle: "Create a workspace",
+    wsEmptyBody: "Share transcripts with teammates, build shared presets, and collaborate together.",
+    wsNamePlaceholder: "Workspace name",
+    wsCreateBtn: "Create workspace",
+    wsUpgradeCreate: "Upgrade to Team & Create",
+    wsCreating: "Creating…",
+    wsRedirecting: "Redirecting…",
+    wsUpgradeNote: "$14 / seat / mo · 600 min per seat · shared presets. Your workspace is created automatically right after checkout.",
+    // Workspace — manage
+    wsTitle: "Workspace",
+    wsInviteByEmail: "Invite by email",
+    wsInvitePlaceholder: "teammate@company.com",
+    wsInvite: "Invite", wsInviteSent: "Sent ✓",
+    wsMembers: "Members",
+    wsNoMembers: "No members yet — invite your team above.",
+    wsInvited: "invited", wsRemove: "Remove",
+    wsLeave: "Leave workspace", wsLeaving: "Leaving…",
+    wsLeaveConfirm: "Leave the workspace? You will lose access to shared recordings.",
+    // Settings pane
+    recDefaults: "Recording defaults",
+    fieldLanguage: "Language", fieldSpeakers: "Speakers", auto: "Auto",
+    bestQuality: "Best Quality", bestQualitySub: "large-v3 — slower but more accurate",
+    requiresMaxTeam: "Requires Max or Team plan.", upgradeArrow: "Upgrade →",
+    privacy: "Privacy", privacyMode: "Privacy Mode",
+    privacySub: "No Gemini — self-hosted models only",
+    appearance: "Appearance", theme: "Theme", light: "Light", dark: "Dark",
+    interfaceLanguage: "Interface language",
+    // Invite
+    referTitle: "Refer a friend",
+    referBody: "Share your referral link — you both get +60 min when they subscribe.",
+    copy: "Copy", copied: "Copied!", loadingRef: "Loading referral link…",
+    // Danger zone
+    dangerTitle: "Danger zone",
+    signOutSub: "You will need to sign in again to access your recordings.",
+    delTitle: "Delete account",
+    delDesc: "Permanent deletion of your account, recording history, and all associated data without recovery.",
+    delBtn: "Delete account",
+    delConfirm: "Confirm deletion?",
+    delDeleting: "Deleting…",
+    delAutoCancel: "Click again to confirm. Cancels automatically in 3s.",
+  },
+  ua: {
+    title: "Налаштування",
+    nav: {
+      account: "Акаунт", subscription: "Підписка", workspace: "Воркспейс",
+      settings: "Налаштування", invite: "Запросити друзів", danger: "Небезпечна зона",
+    },
+    // Account
+    account: "Акаунт", planSuffix: "план", usageMonth: "Використання цього місяця",
+    signOut: "Вийти",
+    // Subscription
+    yourPlan: "Ваш план", currentPlan: "ПОТОЧНИЙ ПЛАН",
+    upgrade: "Оновити →", redirecting: "Перенаправлення…",
+    downgrade: "Понизити", opening: "Відкриваємо…",
+    billingErrFallback: "Не вдалося відкрити портал оплати.",
+    // Workspace — empty state
+    wsEmptyTitle: "Створіть командний простір",
+    wsEmptyBody: "Діліться транскриптами з колегами, створюйте спільні пресети та працюйте разом.",
+    wsNamePlaceholder: "Назва воркспейсу",
+    wsCreateBtn: "Створити воркспейс",
+    wsUpgradeCreate: "Оновити до Team і створити",
+    wsCreating: "Створення…",
+    wsRedirecting: "Перенаправлення…",
+    wsUpgradeNote: "$14 / місце / міс · 600 хв на місце · спільні пресети. Ваш воркспейс буде створено автоматично одразу після оплати.",
+    // Workspace — manage
+    wsTitle: "Воркспейс",
+    wsInviteByEmail: "Запросити за email",
+    wsInvitePlaceholder: "colega@company.com",
+    wsInvite: "Запросити", wsInviteSent: "Надіслано ✓",
+    wsMembers: "Учасники",
+    wsNoMembers: "Ще немає учасників — запросіть команду вище.",
+    wsInvited: "запрошено", wsRemove: "Прибрати",
+    wsLeave: "Покинути воркспейс", wsLeaving: "Виходимо…",
+    wsLeaveConfirm: "Покинути воркспейс? Ви втратите доступ до спільних записів.",
+    // Settings pane
+    recDefaults: "Налаштування запису",
+    fieldLanguage: "Мова", fieldSpeakers: "Спікери", auto: "Авто",
+    bestQuality: "Найкраща якість", bestQualitySub: "large-v3 — повільніше, але точніше",
+    requiresMaxTeam: "Потрібен план Max або Team.", upgradeArrow: "Оновити →",
+    privacy: "Приватність", privacyMode: "Режим приватності",
+    privacySub: "Без Gemini — лише власні моделі",
+    appearance: "Вигляд", theme: "Тема", light: "Світла", dark: "Темна",
+    interfaceLanguage: "Мова інтерфейсу",
+    // Invite
+    referTitle: "Запросіть друга",
+    referBody: "Поділіться реферальним посиланням — ви обидва отримаєте +60 хв, коли друг оформить підписку.",
+    copy: "Копіювати", copied: "Скопійовано!", loadingRef: "Завантаження посилання…",
+    // Danger zone
+    dangerTitle: "Небезпечна зона",
+    signOutSub: "Вам потрібно буде увійти знову, щоб отримати доступ до записів.",
+    delTitle: "Видалити акаунт",
+    delDesc: "Повне видалення вашого акаунту, історії записів та всіх пов'язаних даних без можливості відновлення.",
+    delBtn: "Видалити акаунт",
+    delConfirm: "Підтвердити видалення?",
+    delDeleting: "Видалення…",
+    delAutoCancel: "Натисніть ще раз для підтвердження. Скасується автоматично через 3 с.",
+  },
+} as const;
 
 const PLAN_DATA = [
   {
@@ -84,14 +203,7 @@ function NavIcon({ id }: { id: NavSection }) {
   }
 }
 
-const NAV_ITEMS: { id: NavSection; label: string }[] = [
-  { id: "account", label: "Account" },
-  { id: "subscription", label: "Subscription" },
-  { id: "workspace", label: "Workspace" },
-  { id: "settings", label: "Settings" },
-  { id: "invite", label: "Invite friends" },
-  { id: "danger", label: "Danger zone" },
-];
+const NAV_ORDER: NavSection[] = ["account", "subscription", "workspace", "settings", "invite", "danger"];
 
 export function SettingsModal({
   session, profile, settings, onSettingsChange, onClose, onSignOut,
@@ -107,81 +219,55 @@ export function SettingsModal({
   onSignOut: () => void;
   workspace?: WorkspaceInfo | null;
   onWorkspaceChange?: (ws: WorkspaceInfo | null) => void;
-  uiLang?: "en" | "ua";
-  onUiLangChange?: (lang: "en" | "ua") => void;
+  uiLang?: Lang;
+  onUiLangChange?: (lang: Lang) => void;
   initialSection?: NavSection;
 }) {
+  const t = DICT[uiLang] ?? DICT.en;
   const [nav, setNav] = useState<NavSection>(initialSection);
   const plan = profile?.plan || "free";
   const isPremium = plan === "max" || plan === "team";
 
-  // ── Fix 1: Stripe — separate upgrade vs. downgrade flows ──────────
-  // Upgrade: createStripeCheckout → new subscription
+  // ── Fix 2: Stripe — separate upgrade vs. downgrade flows ──────────
+  // Upgrade: createStripeCheckout → new subscription (Checkout Session)
   // Downgrade: createStripePortal → Stripe Customer Portal (cancel/switch)
   const [checkoutPlan, setCheckoutPlan] = useState<string | null>(null);
   const [loadingPortal, setLoadingPortal] = useState(false);
+  const [billingError, setBillingError] = useState("");
 
   const startCheckout = async (targetPlan: "pro" | "max") => {
     if (checkoutPlan || loadingPortal) return;
-    setCheckoutPlan(targetPlan);
+    setCheckoutPlan(targetPlan); setBillingError("");
     try {
       const url = await createStripeCheckout(targetPlan);
       window.location.href = url;
-    } catch {
+    } catch (e) {
+      setBillingError(e instanceof Error ? e.message : "Checkout failed.");
       setCheckoutPlan(null);
     }
   };
 
-  // All downgrade / plan-management actions → Stripe Customer Portal
+  // All downgrade / plan-management actions → Stripe Customer Portal.
+  // On failure we surface a toast and reset the loader so the UI never hangs.
   const openPortal = async () => {
     if (loadingPortal || checkoutPlan) return;
-    setLoadingPortal(true);
+    setLoadingPortal(true); setBillingError("");
     try {
       const url = await createStripePortal();
       window.location.href = url;
-    } catch {
+    } catch (e) {
+      setBillingError(e instanceof Error ? e.message : t.billingErrFallback);
       setLoadingPortal(false);
     }
   };
 
-  // ── Fix 2: Team upsell — highlight when coming from Workspace tab ─
-  const [highlightTeam, setHighlightTeam] = useState(false);
-  const highlightTimerRef = useRef<number>(0);
-
-  const navigateToTeamUpsell = () => {
-    window.clearTimeout(highlightTimerRef.current);
-    setHighlightTeam(true);
-    setNav("subscription");
-    highlightTimerRef.current = window.setTimeout(() => setHighlightTeam(false), 2800);
-  };
-  useEffect(() => () => window.clearTimeout(highlightTimerRef.current), []);
-
   // Strict workspace validity: must have a real id
   const hasValidWorkspace = !!(workspace?.id);
-
-  // Workspace i18n strings
-  const ws = uiLang === "ua" ? {
-    emptyTitle: "Створіть командний простір",
-    emptyBody: "Діліться транскриптами з колегами, створюйте спільні кастомні пресети та працюйте разом.",
-    namePlaceholder: "Назва воркспейсу",
-    createBtn: "Створити воркспейс",
-    creating: "Створення…",
-    planNote: "Потрібен Team план.",
-    viewPlans: "Переглянути плани →",
-  } : {
-    emptyTitle: "Create a workspace",
-    emptyBody: "Share transcripts with teammates, build shared presets, and collaborate together.",
-    namePlaceholder: "Workspace name",
-    createBtn: "Create workspace",
-    creating: "Creating…",
-    planNote: "Requires Team plan.",
-    viewPlans: "View plans →",
-  };
 
   // Best Quality
   const [qualityError, setQualityError] = useState("");
   const handleQuality = (v: boolean) => {
-    if (v && !isPremium) { setQualityError("Requires Max or Team plan."); return; }
+    if (v && !isPremium) { setQualityError(t.requiresMaxTeam); return; }
     setQualityError("");
     const next = saveSettings({ quality: v ? "best" : "fast" });
     onSettingsChange(next);
@@ -195,7 +281,7 @@ export function SettingsModal({
 
   const handlePrivMode = async (next: boolean) => {
     if (privSaving) return;
-    if (next && !isPremium) { setPrivError("Requires Max or Team plan."); return; }
+    if (next && !isPremium) { setPrivError(t.requiresMaxTeam); return; }
     setPrivMode(next); setPrivError(""); setPrivSaving(true);
     try {
       await setPrivacyMode(next);
@@ -203,7 +289,7 @@ export function SettingsModal({
       setPrivMode(!next);
       setPrivError(
         e instanceof UpgradeRequiredError
-          ? "Requires Max or Team plan."
+          ? t.requiresMaxTeam
           : (e instanceof Error ? e.message : "save failed"),
       );
     } finally { setPrivSaving(false); }
@@ -227,7 +313,8 @@ export function SettingsModal({
 
   // Workspace state
   const [wsName, setWsName] = useState("");
-  const [wsCreating, setWsCreating] = useState(false);
+  const [wsCreating, setWsCreating] = useState(false);   // API create (already Team)
+  const [wsUpgrading, setWsUpgrading] = useState(false); // redirecting to Team checkout
   const [wsError, setWsError] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
@@ -236,17 +323,28 @@ export function SettingsModal({
   const [removing, setRemoving] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
 
-  // ── Fix 2 continued: workspace create — gate with upsell, not disabled ─
+  // ── Fix 1: workspace create — engineered upsell, never a dead end ─
+  // Team plan → create immediately via API.
+  // No Team plan → Stripe Checkout for Team with the typed name carried as
+  //   `pending_workspace_name`; the webhook creates the workspace post-payment.
   const handleCreateWs = async () => {
-    if (!wsName.trim()) return;
-    // Non-team plan: redirect to subscription with Team upsell instead of silent disable
+    const name = wsName.trim();
+    if (!name) return;
     if (plan !== "team") {
-      navigateToTeamUpsell();
+      if (wsUpgrading || wsCreating) return;
+      setWsUpgrading(true); setWsError("");
+      try {
+        const url = await createStripeCheckout("team", "monthly", name);
+        window.location.href = url;
+      } catch (e) {
+        setWsError(e instanceof Error ? e.message : "Checkout failed.");
+        setWsUpgrading(false);
+      }
       return;
     }
     setWsCreating(true); setWsError("");
     try {
-      const created = await apiCreateWorkspace(wsName.trim());
+      const created = await apiCreateWorkspace(name);
       onWorkspaceChange?.(created);
       setWsName("");
     } catch (e) {
@@ -280,7 +378,7 @@ export function SettingsModal({
   };
 
   const handleLeave = async () => {
-    if (!window.confirm("Leave the workspace? You will lose access to shared recordings.")) return;
+    if (!window.confirm(t.wsLeaveConfirm)) return;
     setLeaving(true);
     try {
       await apiLeaveWorkspace();
@@ -343,13 +441,15 @@ export function SettingsModal({
   const planIdx = (id: string) => PLAN_DATA.findIndex((x) => x.id === id);
   const isUpgrade = (targetId: string) => planIdx(targetId) > planIdx(plan);
 
+  const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
+
   return (
     <div
       ref={backdropRef}
       className="i-modal-back"
       onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
     >
-      <div className="i-modal i-modal-wide" role="dialog" aria-modal="true" aria-label="Settings">
+      <div className="i-modal i-modal-wide" role="dialog" aria-modal="true" aria-label={t.title}>
 
         {/* ── Header ── */}
         <div className="i-modal-header">
@@ -357,7 +457,7 @@ export function SettingsModal({
             <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
           </svg>
-          <span className="i-modal-title">Settings</span>
+          <span className="i-modal-title">{t.title}</span>
           <button type="button" className="i-modal-close" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
@@ -366,7 +466,7 @@ export function SettingsModal({
 
           {/* Left nav */}
           <nav className="i-modal-nav" aria-label="Settings navigation">
-            {NAV_ITEMS.map(({ id, label }) => (
+            {NAV_ORDER.map((id) => (
               <button
                 key={id}
                 type="button"
@@ -374,7 +474,7 @@ export function SettingsModal({
                 onClick={() => setNav(id)}
               >
                 <NavIcon id={id} />
-                {label}
+                {t.nav[id]}
               </button>
             ))}
           </nav>
@@ -385,18 +485,18 @@ export function SettingsModal({
             {/* ── Account ── */}
             {nav === "account" && (
               <div className="i-modal-pane">
-                <p className="i-msect-title">Account</p>
+                <p className="i-msect-title">{t.account}</p>
                 <div className="i-msect-card">
                   <div className="i-mrow">
                     <div>
                       <div className="i-account-email">{email}</div>
                       <div className="i-account-plan">
-                        {plan.charAt(0).toUpperCase() + plan.slice(1)} plan
+                        {planLabel} {t.planSuffix}
                       </div>
                     </div>
                   </div>
                   <div className="i-mrow" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
-                    <span className="i-mrow-label">Usage this month</span>
+                    <span className="i-mrow-label">{t.usageMonth}</span>
                     <div className="i-usage-meter">
                       {Array.from({ length: 16 }, (_, k) => (
                         <span key={k} className={`i-um-dot${k < filledDots ? " fill" : ""}`} />
@@ -411,7 +511,7 @@ export function SettingsModal({
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
                   </svg>
-                  Sign out
+                  {t.signOut}
                 </button>
               </div>
             )}
@@ -419,42 +519,17 @@ export function SettingsModal({
             {/* ── Subscription ── */}
             {nav === "subscription" && (
               <div className="i-modal-pane">
+                <p className="i-msect-title">{t.yourPlan}</p>
 
-                {/* ── Fix 2: Team upsell banner — appears when user came from Workspace tab ── */}
-                {highlightTeam && (
-                  <div className="i-team-upsell-banner" role="status">
-                    <div className="i-team-upsell-icon" aria-hidden="true">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                        <circle cx="9" cy="7" r="4"/>
-                        <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
-                      </svg>
-                    </div>
-                    <div className="i-team-upsell-text">
-                      <p className="i-team-upsell-title">Workspace requires Team plan</p>
-                      <p className="i-team-upsell-body">$14 / seat / mo · 600 min per seat · shared presets · team billing</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="i-team-upsell-cta"
-                      disabled={loadingPortal}
-                      onClick={() => void openPortal()}
-                    >
-                      {loadingPortal ? "Opening…" : "Manage plan →"}
-                    </button>
-                  </div>
+                {billingError && (
+                  <div className="i-billing-error" role="alert">{billingError}</div>
                 )}
 
-                <p className="i-msect-title">Your plan</p>
                 <div className="i-plan-cards">
                   {PLAN_DATA.map((p) => (
                     <div
                       key={p.id}
-                      className={[
-                        "i-plan-card",
-                        p.id === plan ? "current" : "",
-                        highlightTeam && p.id === "max" ? "team-upsell-glow" : "",
-                      ].filter(Boolean).join(" ")}
+                      className={["i-plan-card", p.id === plan ? "current" : ""].filter(Boolean).join(" ")}
                     >
                       <div className="i-plan-name">{p.name}</div>
                       <div>
@@ -468,7 +543,7 @@ export function SettingsModal({
                         ))}
                       </div>
                       {p.id === plan
-                        ? <span className="i-plan-current-badge">CURRENT PLAN</span>
+                        ? <span className="i-plan-current-badge">{t.currentPlan}</span>
                         : isUpgrade(p.id)
                           ? (
                             <button
@@ -477,18 +552,18 @@ export function SettingsModal({
                               disabled={!!checkoutPlan || loadingPortal}
                               onClick={() => void startCheckout(p.id as "pro" | "max")}
                             >
-                              {checkoutPlan === p.id ? "Redirecting…" : "Upgrade →"}
+                              {checkoutPlan === p.id ? t.redirecting : t.upgrade}
                             </button>
                           )
                           : (
-                            /* Fix 1: Downgrade routes explicitly to Stripe Customer Portal */
+                            /* Fix 2: Downgrade routes explicitly to Stripe Customer Portal */
                             <button
                               type="button"
                               className="i-plan-cta i-plan-cta-down"
                               disabled={loadingPortal || !!checkoutPlan}
                               onClick={() => void openPortal()}
                             >
-                              {loadingPortal ? "Opening…" : "Downgrade"}
+                              {loadingPortal ? t.opening : t.downgrade}
                             </button>
                           )
                       }
@@ -502,7 +577,7 @@ export function SettingsModal({
             {nav === "workspace" && (
               <div className="i-modal-pane">
                 {!hasValidWorkspace ? (
-                  /* Beautiful empty state — create workspace */
+                  /* Beautiful empty state — create workspace (engineered upsell) */
                   <div className="i-ws-empty">
                     <div className="i-ws-empty-icon">
                       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
@@ -511,44 +586,46 @@ export function SettingsModal({
                         <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>
                       </svg>
                     </div>
-                    <h2 className="i-ws-empty-title">{ws.emptyTitle}</h2>
-                    <p className="i-ws-empty-body">{ws.emptyBody}</p>
+                    <h2 className="i-ws-empty-title">{t.wsEmptyTitle}</h2>
+                    <p className="i-ws-empty-body">{t.wsEmptyBody}</p>
                     <div className="i-ws-create">
                       <input
                         className="i-field"
                         value={wsName}
                         onChange={(e) => setWsName(e.target.value)}
-                        placeholder={ws.namePlaceholder}
+                        placeholder={t.wsNamePlaceholder}
                         onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWs(); }}
                       />
                       {wsError && <p className="i-error">{wsError}</p>}
-                      {/* Fix 2: button enabled whenever name is non-empty; plan gate moved into handler */}
+                      {/* Fix 1: button is enabled whenever the name is non-empty; the
+                          label & action morph based on plan (create vs upgrade-and-create). */}
                       <button
                         type="button"
                         className="i-ws-invite-btn"
-                        disabled={wsCreating || !wsName.trim()}
+                        disabled={wsCreating || wsUpgrading || !wsName.trim()}
                         onClick={() => void handleCreateWs()}
                       >
-                        {wsCreating ? ws.creating : ws.createBtn}
+                        {wsUpgrading
+                          ? t.wsRedirecting
+                          : wsCreating
+                            ? t.wsCreating
+                            : (plan === "team" ? t.wsCreateBtn : t.wsUpgradeCreate)}
                       </button>
                       {plan !== "team" && (
-                        <p className="i-ws-plan-note">
-                          {ws.planNote}{" "}
-                          <button type="button" className="i-link" onClick={navigateToTeamUpsell}>{ws.viewPlans}</button>
-                        </p>
+                        <p className="i-ws-plan-note">{t.wsUpgradeNote}</p>
                       )}
                     </div>
                   </div>
                 ) : (
                   /* Workspace exists — manage it */
                   <>
-                    <p className="i-msect-title">Workspace</p>
+                    <p className="i-msect-title">{t.wsTitle}</p>
                     <div className="i-msect-card">
                       <div className="i-mrow">
                         <div>
                           <div className="i-account-email">{workspace!.name}</div>
                           <div className="i-account-plan">
-                            {workspace!.role} · {workspace!.plan} plan
+                            {workspace!.role} · {workspace!.plan} {t.planSuffix}
                           </div>
                         </div>
                       </div>
@@ -557,13 +634,13 @@ export function SettingsModal({
                     {/* Invite form — owners only */}
                     {workspace!.role === "owner" && (
                       <>
-                        <p className="i-msect-title" style={{ marginTop: 14 }}>Invite by email</p>
+                        <p className="i-msect-title" style={{ marginTop: 14 }}>{t.wsInviteByEmail}</p>
                         <div className="i-ws-invite">
                           <input
                             className="i-field"
                             value={inviteEmail}
                             onChange={(e) => setInviteEmail(e.target.value)}
-                            placeholder="teammate@company.com"
+                            placeholder={t.wsInvitePlaceholder}
                             onKeyDown={(e) => { if (e.key === "Enter") void handleInvite(); }}
                           />
                           <button
@@ -572,7 +649,7 @@ export function SettingsModal({
                             disabled={inviting || !inviteEmail.trim()}
                             onClick={() => void handleInvite()}
                           >
-                            {inviting ? "…" : inviteOk ? "Sent ✓" : "Invite"}
+                            {inviting ? "…" : inviteOk ? t.wsInviteSent : t.wsInvite}
                           </button>
                         </div>
                         {inviteError && <p className="i-error">{inviteError}</p>}
@@ -580,18 +657,18 @@ export function SettingsModal({
                     )}
 
                     {/* Members list */}
-                    <p className="i-msect-title" style={{ marginTop: 14 }}>Members</p>
+                    <p className="i-msect-title" style={{ marginTop: 14 }}>{t.wsMembers}</p>
                     <div className="i-ws-members">
                       {(workspace!.members ?? []).length === 0 && (
                         <p style={{ fontSize: 12.5, color: "var(--i-graphite)", padding: "10px 0" }}>
-                          No members yet — invite your team above.
+                          {t.wsNoMembers}
                         </p>
                       )}
                       {(workspace!.members ?? []).map((m) => (
                         <div key={m.id} className="i-ws-member">
                           <div className="i-ws-member-email">{m.email}</div>
                           {m.status === "invited" && (
-                            <span className="i-ws-member-status">invited</span>
+                            <span className="i-ws-member-status">{t.wsInvited}</span>
                           )}
                           <span className={`i-ws-member-role${m.role === "owner" ? " owner" : ""}`}>
                             {m.role}
@@ -602,9 +679,9 @@ export function SettingsModal({
                               className="i-ws-remove"
                               disabled={removing === m.id}
                               onClick={() => void handleRemoveMember(m.id)}
-                              aria-label={`Remove ${m.email}`}
+                              aria-label={`${t.wsRemove} ${m.email}`}
                             >
-                              {removing === m.id ? "…" : "Remove"}
+                              {removing === m.id ? "…" : t.wsRemove}
                             </button>
                           )}
                         </div>
@@ -624,7 +701,7 @@ export function SettingsModal({
                         disabled={leaving}
                         onClick={() => void handleLeave()}
                       >
-                        {leaving ? "Leaving…" : "Leave workspace"}
+                        {leaving ? t.wsLeaving : t.wsLeave}
                       </button>
                     )}
                   </>
@@ -635,10 +712,10 @@ export function SettingsModal({
             {/* ── Settings ── */}
             {nav === "settings" && (
               <div className="i-modal-pane">
-                <p className="i-msect-title">Recording defaults</p>
+                <p className="i-msect-title">{t.recDefaults}</p>
                 <div className="i-msect-card">
                   <div className="i-mrow">
-                    <label className="i-mrow-label" htmlFor="s-lang">Language</label>
+                    <label className="i-mrow-label" htmlFor="s-lang">{t.fieldLanguage}</label>
                     <select
                       id="s-lang"
                       className="i-mini"
@@ -654,7 +731,7 @@ export function SettingsModal({
                     </select>
                   </div>
                   <div className="i-mrow">
-                    <label className="i-mrow-label" htmlFor="s-spk">Speakers</label>
+                    <label className="i-mrow-label" htmlFor="s-spk">{t.fieldSpeakers}</label>
                     <select
                       id="s-spk"
                       className="i-mini"
@@ -664,7 +741,7 @@ export function SettingsModal({
                         onSettingsChange(next);
                       }}
                     >
-                      <option value="">Auto</option>
+                      <option value="">{t.auto}</option>
                       {[1, 2, 3, 4, 5, 6].map((n) => (
                         <option key={n} value={String(n)}>{n}</option>
                       ))}
@@ -673,14 +750,14 @@ export function SettingsModal({
                   <div className="i-mrow">
                     <div>
                       <div className="i-toggle-wrap">
-                        <span className="i-mrow-label">Best Quality</span>
+                        <span className="i-mrow-label">{t.bestQuality}</span>
                         <MaxBadge />
                       </div>
-                      <div className="i-mrow-sub">large-v3 — slower but more accurate</div>
+                      <div className="i-mrow-sub">{t.bestQualitySub}</div>
                       {qualityError && (
                         <div className="i-toggle-nudge">
                           {qualityError}{" "}
-                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>Upgrade →</button>
+                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>{t.upgradeArrow}</button>
                         </div>
                       )}
                     </div>
@@ -688,19 +765,19 @@ export function SettingsModal({
                   </div>
                 </div>
 
-                <p className="i-msect-title" style={{ marginTop: 14 }}>Privacy</p>
+                <p className="i-msect-title" style={{ marginTop: 14 }}>{t.privacy}</p>
                 <div className="i-msect-card">
                   <div className="i-mrow">
                     <div>
                       <div className="i-toggle-wrap">
-                        <span className="i-mrow-label">Privacy Mode</span>
+                        <span className="i-mrow-label">{t.privacyMode}</span>
                         <MaxBadge />
                       </div>
-                      <div className="i-mrow-sub">No Gemini — self-hosted models only</div>
+                      <div className="i-mrow-sub">{t.privacySub}</div>
                       {privError && (
                         <div className="i-toggle-nudge">
                           {privError}{" "}
-                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>Upgrade →</button>
+                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>{t.upgradeArrow}</button>
                         </div>
                       )}
                     </div>
@@ -713,35 +790,31 @@ export function SettingsModal({
                   </div>
                 </div>
 
-                <p className="i-msect-title" style={{ marginTop: 14 }}>Appearance</p>
+                <p className="i-msect-title" style={{ marginTop: 14 }}>{t.appearance}</p>
                 <div className="i-msect-card">
                   <div className="i-mrow" style={{ gap: 6 }}>
-                    <span className="i-mrow-label">Theme</span>
+                    <span className="i-mrow-label">{t.theme}</span>
                     <div className="i-theme-seg">
                       <button
                         type="button"
                         className={`i-theme-btn${theme === "light" ? " on" : ""}`}
                         onClick={() => toggleTheme("light")}
-                      >Light</button>
+                      >{t.light}</button>
                       <button
                         type="button"
                         className={`i-theme-btn${theme === "dark" ? " on" : ""}`}
                         onClick={() => toggleTheme("dark")}
-                      >Dark</button>
+                      >{t.dark}</button>
                     </div>
                   </div>
                   {onUiLangChange && (
                     <div className="i-mrow">
-                      <label className="i-mrow-label" htmlFor="s-uilang">Interface language</label>
+                      <label className="i-mrow-label" htmlFor="s-uilang">{t.interfaceLanguage}</label>
                       <select
                         id="s-uilang"
                         className="i-mini"
                         value={uiLang}
-                        onChange={(e) => {
-                          const lang = e.target.value as "en" | "ua";
-                          try { localStorage.setItem("ink_uiLang", lang); } catch {}
-                          onUiLangChange(lang);
-                        }}
+                        onChange={(e) => onUiLangChange(e.target.value as Lang)}
                       >
                         <option value="en">English</option>
                         <option value="ua">Українська</option>
@@ -755,19 +828,19 @@ export function SettingsModal({
             {/* ── Invite friends ── */}
             {nav === "invite" && (
               <div className="i-modal-pane">
-                <p className="i-msect-title">Refer a friend</p>
+                <p className="i-msect-title">{t.referTitle}</p>
                 <p style={{ fontSize: 13, color: "var(--i-graphite)", margin: "0 0 12px" }}>
-                  Share your referral link — you both get +60 min when they subscribe.
+                  {t.referBody}
                 </p>
                 {refUrl ? (
                   <div className="i-ref-box">
                     <span className="i-ref-url">{refUrl}</span>
                     <button type="button" className="i-ref-copy" onClick={copyRef}>
-                      {refCopied ? "Copied!" : "Copy"}
+                      {refCopied ? t.copied : t.copy}
                     </button>
                   </div>
                 ) : (
-                  <p style={{ fontSize: 12.5, color: "var(--i-graphite)" }}>Loading referral link…</p>
+                  <p style={{ fontSize: 12.5, color: "var(--i-graphite)" }}>{t.loadingRef}</p>
                 )}
               </div>
             )}
@@ -775,16 +848,14 @@ export function SettingsModal({
             {/* ── Danger zone ── */}
             {nav === "danger" && (
               <div className="i-modal-pane">
-                <p className="i-msect-title">Danger zone</p>
+                <p className="i-msect-title">{t.dangerTitle}</p>
 
                 {/* Sign out */}
                 <div className="i-msect-card">
                   <div className="i-mrow">
                     <div>
-                      <div className="i-mrow-label">Sign out</div>
-                      <div className="i-mrow-sub">
-                        You will need to sign in again to access your recordings.
-                      </div>
+                      <div className="i-mrow-label">{t.signOut}</div>
+                      <div className="i-mrow-sub">{t.signOutSub}</div>
                     </div>
                     <button
                       type="button"
@@ -795,18 +866,18 @@ export function SettingsModal({
                       }}
                       onClick={() => { onSignOut(); onClose(); }}
                     >
-                      Sign out
+                      {t.signOut}
                     </button>
                   </div>
                 </div>
 
-                {/* Fix 4: Delete account — GDPR-compliant self-serve with 2-click confirm */}
+                {/* Fix 3: Delete account — fully localized, GDPR self-serve, 2-click confirm */}
                 <div className="i-msect-card" style={{ marginTop: 10 }}>
                   <div className="i-mrow" style={{ flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
                     <div>
-                      <div className="i-mrow-label" style={{ color: "var(--i-danger)" }}>Delete account</div>
+                      <div className="i-mrow-label" style={{ color: "var(--i-danger)" }}>{t.delTitle}</div>
                       <div className="i-mrow-sub" style={{ maxWidth: 340 }}>
-                        Повне видалення вашого акаунту, історії записів та всіх пов&apos;язаних даних без можливості відновлення.
+                        {t.delDesc}
                       </div>
                     </div>
                     <button
@@ -816,15 +887,14 @@ export function SettingsModal({
                       onClick={() => void handleDeleteAccount()}
                     >
                       {deleting
-                        ? "Видалення…"
+                        ? t.delDeleting
                         : deleteConfirm
-                          ? "Підтвердити видалення?"
-                          : "Видалити акаунт"
-                      }
+                          ? t.delConfirm
+                          : t.delBtn}
                     </button>
                     {deleteConfirm && !deleting && (
                       <p style={{ fontSize: 11.5, color: "var(--i-graphite)", margin: 0 }}>
-                        Натисніть ще раз для підтвердження. Скасується автоматично через 3 с.
+                        {t.delAutoCancel}
                       </p>
                     )}
                   </div>
