@@ -8,9 +8,10 @@ import {
   inviteMember as apiInviteMember,
   removeMember as apiRemoveMember,
   leaveWorkspace as apiLeaveWorkspace,
+  createStripeCheckout, createStripePortal,
 } from "@/lib/ink/api";
 import { saveSettings, type InkSettings } from "@/lib/ink/settings";
-import { SUPPORTED_LANGUAGES, BILLING_URL } from "@/lib/ink/config";
+import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 
 type NavSection = "account" | "subscription" | "workspace" | "settings" | "invite" | "danger";
 
@@ -94,6 +95,7 @@ export function SettingsModal({
   session, profile, settings, onSettingsChange, onClose, onSignOut,
   workspace, onWorkspaceChange,
   uiLang = "en", onUiLangChange,
+  initialSection = "account",
 }: {
   session: Session;
   profile: Profile | null;
@@ -105,10 +107,27 @@ export function SettingsModal({
   onWorkspaceChange?: (ws: WorkspaceInfo | null) => void;
   uiLang?: "en" | "ua";
   onUiLangChange?: (lang: "en" | "ua") => void;
+  initialSection?: NavSection;
 }) {
-  const [nav, setNav] = useState<NavSection>("account");
+  const [nav, setNav] = useState<NavSection>(initialSection);
   const plan = profile?.plan || "free";
   const isPremium = plan === "max" || plan === "team";
+
+  // Stripe checkout — plan card CTAs
+  const [checkoutPlan, setCheckoutPlan] = useState<string | null>(null);
+  const startCheckout = async (targetPlan: "pro" | "max") => {
+    if (checkoutPlan) return;
+    setCheckoutPlan(targetPlan);
+    try {
+      const isUpgrade = PLAN_DATA.findIndex((x) => x.id === targetPlan) > PLAN_DATA.findIndex((x) => x.id === plan);
+      const url = isUpgrade
+        ? await createStripeCheckout(targetPlan)
+        : await createStripePortal();
+      window.location.href = url;
+    } catch {
+      setCheckoutPlan(null);
+    }
+  };
 
   // Strict workspace validity: must have a real id
   const hasValidWorkspace = !!(workspace?.id);
@@ -353,11 +372,18 @@ export function SettingsModal({
                       </div>
                       {p.id === plan
                         ? <span className="i-plan-current-badge">CURRENT PLAN</span>
-                        : <a href={BILLING_URL} target="_blank" rel="noreferrer" className="i-plan-cta">
-                            {PLAN_DATA.findIndex((x) => x.id === p.id) > PLAN_DATA.findIndex((x) => x.id === plan)
-                              ? "Upgrade →"
-                              : "Downgrade"}
-                          </a>
+                        : <button
+                            type="button"
+                            className="i-plan-cta"
+                            disabled={!!checkoutPlan}
+                            onClick={() => void startCheckout(p.id as "pro" | "max")}
+                          >
+                            {checkoutPlan === p.id ? "Redirecting…" : (
+                              PLAN_DATA.findIndex((x) => x.id === p.id) > PLAN_DATA.findIndex((x) => x.id === plan)
+                                ? "Upgrade →"
+                                : "Downgrade"
+                            )}
+                          </button>
                       }
                     </div>
                   ))}
@@ -400,7 +426,7 @@ export function SettingsModal({
                       {plan !== "team" && (
                         <p className="i-ws-plan-note">
                           {ws.planNote}{" "}
-                          <a href={BILLING_URL} target="_blank" rel="noreferrer">{ws.viewPlans}</a>
+                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>{ws.viewPlans}</button>
                         </p>
                       )}
                     </div>
@@ -546,7 +572,7 @@ export function SettingsModal({
                       {qualityError && (
                         <div className="i-toggle-nudge">
                           {qualityError}{" "}
-                          <a href={BILLING_URL} target="_blank" rel="noreferrer">Upgrade →</a>
+                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>Upgrade →</button>
                         </div>
                       )}
                     </div>
@@ -566,7 +592,7 @@ export function SettingsModal({
                       {privError && (
                         <div className="i-toggle-nudge">
                           {privError}{" "}
-                          <a href={BILLING_URL} target="_blank" rel="noreferrer">Upgrade →</a>
+                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>Upgrade →</button>
                         </div>
                       )}
                     </div>

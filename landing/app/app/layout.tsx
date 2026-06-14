@@ -1,9 +1,9 @@
 import "./ink.css";
 
-// /v2 — Ink & Halftone (направление 2026-06-12). Instrument Serif —
+// /app — Ink & Halftone, production (cutover 2026-06-14). Instrument Serif —
 // editorial-акцент в display-заголовках; остальные шрифты (Bricolage,
 // Manrope, JetBrains Mono) уже грузятся в root layout.
-export default function V2Layout({ children }: { children: React.ReactNode }) {
+export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <link

@@ -788,7 +788,16 @@
 .i-toggle-nudge {
   font-size: 11px; color: var(--i-accent); font-weight: 500; margin-top: 4px;
 }
-.i-toggle-nudge a { color: inherit; text-decoration: underline; }
+.i-toggle-nudge a,
+.i-toggle-nudge .i-link,
+.i-ws-plan-note .i-link {
+  color: inherit; text-decoration: underline;
+}
+/* button reset for inline link buttons */
+.i-link {
+  all: unset; cursor: pointer; text-decoration: underline; color: inherit;
+  font: inherit;
+}
 
 /* ── Undo-delete toast ──────────────────────────────────────── */
 .i-toast {

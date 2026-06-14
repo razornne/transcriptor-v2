@@ -282,6 +282,7 @@ export function ResultView({
   entry, plan, presets, teamPresets, notionConnected,
   activeTab, onTabChange,
   onPatch, onPresetsChange, onTeamPresetsChange,
+  onUpgrade,
 }: {
   entry: HistoryEntry;
   plan: string;
@@ -293,6 +294,7 @@ export function ResultView({
   onPatch: (fields: Partial<HistoryEntry>, db: Record<string, unknown>) => void;
   onPresetsChange: (updated: Preset[]) => void;
   onTeamPresetsChange: (updated: Preset[]) => void;
+  onUpgrade?: () => void;
 }) {
   const [genBusy, setGenBusy] = useState<Tab | null>(null);
   const [genError, setGenError] = useState("");
@@ -592,6 +594,7 @@ export function ResultView({
             <UpgradeCard
               title="AI analysis is a Pro feature"
               body="Summaries and action items need the Pro plan. Transcription stays free."
+              onUpgrade={onUpgrade}
             />
           ) : (
             <>
@@ -641,6 +644,7 @@ export function ResultView({
             <UpgradeCard
               title="Custom presets are a Pro feature"
               body="Create your own analysis templates with the Pro plan."
+              onUpgrade={onUpgrade}
             />
           ) : runningPresetId ? (
             <p className="i-status" style={{ marginTop: 14 }}>

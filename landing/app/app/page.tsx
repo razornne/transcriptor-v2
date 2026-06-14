@@ -22,10 +22,11 @@ import {
 } from "@/lib/ink/db";
 import { loadSettings, saveSettings, type InkSettings } from "@/lib/ink/settings";
 
-// /v2 — Ink & Halftone, fully functional app.
+// /app — Ink & Halftone, production (cutover 2026-06-14).
 // Sprint 5: InputCard MediaHub, two-column SettingsModal, workspace + visibility, onboarding demo.
 // Sprint 6: PostHog (privacy-masked), i18n EN/UA, mobile polish.
 // Sprint 7: Insights removed, workspace-UI isolation fix, Cmd+D theme hotkey, uniform control row.
+// Cutover: /v2 → /app, billing in-app (SettingsModal subscription tab).
 
 // ── PostHog helper (fire-and-forget, never throws) ────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -165,6 +166,7 @@ export default function InkApp() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sbOpen, setSbOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<"account" | "subscription">("account");
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [team, setTeam] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
@@ -626,6 +628,7 @@ export default function InkApp() {
                   onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
                   onPresetsChange={handlePresetsChange}
                   onTeamPresetsChange={handleTeamPresetsChange}
+                  onUpgrade={() => { setSettingsSection("subscription"); setSettingsOpen(true); }}
                 />
                 {status && (
                   <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">
@@ -668,6 +671,7 @@ export default function InkApp() {
                   <UpgradeCard
                     title="You've used all your minutes"
                     body="Upgrade your plan to keep transcribing this month."
+                    onUpgrade={() => { setSettingsSection("subscription"); setSettingsOpen(true); }}
                   />
                 )}
 
@@ -731,12 +735,13 @@ export default function InkApp() {
           profile={profile}
           settings={settings}
           onSettingsChange={(patch) => setSettings((prev) => ({ ...prev, ...patch }))}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => { setSettingsOpen(false); setSettingsSection("account"); }}
           onSignOut={() => { void sb.auth.signOut(); }}
           workspace={workspace}
           onWorkspaceChange={setWorkspace}
           uiLang={uiLang}
           onUiLangChange={handleUiLangChange}
+          initialSection={settingsSection}
         />
       )}
 
