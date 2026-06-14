@@ -786,41 +786,41 @@ export function SettingsModal({
             {nav === "integrations" && (
               <div className="i-modal-pane">
                 <p className="i-msect-title">{t.integrationsTitle}</p>
-                <div className="i-msect-card">
-                  <div className="i-integration-row">
-                    <div className="i-integration-main">
-                      <div className="i-integration-head">
-                        <span className={`i-integration-dot${notionConnectedLocal ? " on" : ""}`} aria-hidden="true" />
-                        <span className="i-integration-name">
-                          {notionConnectedLocal ? t.notionConnected : t.notionTitle}
-                        </span>
-                      </div>
-                      <div className="i-mrow-sub" style={{ marginTop: 4 }}>
-                        {notionConnectedLocal
-                          ? (profile?.notion_workspace_name || t.notionWorkspaceFallback)
-                          : t.notionConnectDesc}
-                      </div>
+                <div className="i-notion-card">
+                  <div className="i-integration-main">
+                    <div className="i-integration-head">
+                      <span className={`i-integration-dot${notionConnectedLocal ? " on" : ""}`} aria-hidden="true" />
+                      <span className="i-integration-name">
+                        {notionConnectedLocal ? t.notionConnected : t.notionTitle}
+                      </span>
                     </div>
                     {notionConnectedLocal ? (
-                      <button
-                        type="button"
-                        className="i-integration-btn danger"
-                        disabled={notionBusy !== null}
-                        onClick={() => void handleNotionDisconnect()}
-                      >
-                        {notionBusy === "disconnect" ? t.notionDisconnecting : t.notionDisconnect}
-                      </button>
+                      <div className="i-integration-ws">
+                        {profile?.notion_workspace_name || t.notionWorkspaceFallback}
+                      </div>
                     ) : (
-                      <button
-                        type="button"
-                        className="i-integration-btn"
-                        disabled={notionBusy !== null}
-                        onClick={() => void handleNotionConnect()}
-                      >
-                        {notionBusy === "connect" ? t.notionConnecting : t.notionConnect}
-                      </button>
+                      <div className="i-integration-desc">{t.notionConnectDesc}</div>
                     )}
                   </div>
+                  {notionConnectedLocal ? (
+                    <button
+                      type="button"
+                      className="i-integration-btn danger"
+                      disabled={notionBusy !== null}
+                      onClick={() => void handleNotionDisconnect()}
+                    >
+                      {notionBusy === "disconnect" ? t.notionDisconnecting : t.notionDisconnect}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="i-integration-btn"
+                      disabled={notionBusy !== null}
+                      onClick={() => void handleNotionConnect()}
+                    >
+                      {notionBusy === "connect" ? t.notionConnecting : t.notionConnect}
+                    </button>
+                  )}
                 </div>
                 {notionError && <p className="i-error">{notionError}</p>}
               </div>
