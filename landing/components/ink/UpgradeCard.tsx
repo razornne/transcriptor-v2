@@ -1,18 +1,19 @@
 "use client";
-import { BILLING_URL } from "@/lib/ink/config";
 
-// Единый upgrade-блок (Спринт 2): лимит исчерпан / AI-гейт Free / 402 с сервера.
-// Klein-accent (не киноварь — киноварь только для rec). CTA ведёт в биллинг
-// боевого /app (до Спринта 3, который перенесёт Settings в Ink).
+// Единый upgrade-блок: лимит исчерпан / AI-гейт Free / 402 с сервера.
+// Klein-accent (не киноварь — киноварь только для rec).
+// onUpgrade открывает SettingsModal на вкладке Subscription.
 
 export function UpgradeCard({
   title,
   body,
-  ctaLabel = "Open billing",
+  ctaLabel = "View plans",
+  onUpgrade,
 }: {
   title: string;
   body: string;
   ctaLabel?: string;
+  onUpgrade?: () => void;
 }) {
   return (
     <div className="i-upsell">
@@ -20,9 +21,9 @@ export function UpgradeCard({
         <span className="i-upsell-title">{title}</span>
         <span className="i-upsell-body">{body}</span>
       </div>
-      <a className="i-upsell-cta" href={BILLING_URL} target="_blank" rel="noopener noreferrer">
+      <button type="button" className="i-upsell-cta" onClick={onUpgrade}>
         {ctaLabel}
-      </a>
+      </button>
     </div>
   );
 }

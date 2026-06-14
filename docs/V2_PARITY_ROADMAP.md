@@ -260,7 +260,11 @@ Context → локальный state карточки → FormData `prompt`.
 | Сегментед-контрол, типографика, физика мыши v1 | ✅ shipped |
 | **Спринт 1** | ✅ 100% Shipped (SDF-Canvas, Viewport-clamp, Performance decoupling, Cloud-noise hotfix) |
 | **Спринт 2** | ✅ Shipped (Limit gates, 402 handlers, Cooking cancel) |
-| Спринты 3–7 | ⬜ очередь |
+| **Спринт 3** | ✅ Shipped (Settings-центр, Best Quality, Privacy Mode, Custom Presets) |
+| **Спринт 4** | ✅ Shipped (Inline edit, Notes tab, Undo delete, Hotkeys, Notion) |
+| **Спринт 5** | ✅ Shipped (InputCard MediaHub, two-column Settings, Workspace + visibility, Onboarding demo) |
+| **Спринт 6** | ✅ Shipped (PostHog privacy-masked, i18n EN/UA, Mobile touch zones) |
+| **Спринт 7** | ✅ 100% Released — Cutover complete (2026-06-14). /v2 → /app, billing in-app, legacy archived. |
 
 ### Что в коде сейчас (для следующей сессии)
 - **DotField v4** (`components/ink/DotField.tsx`): амбиентное **облако** точек —

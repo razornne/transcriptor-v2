@@ -13,7 +13,7 @@ export function LoginScreen() {
   const google = () =>
     sb.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin + "/v2" },
+      options: { redirectTo: window.location.origin + "/app" },
     });
 
   const magic = async () => {
@@ -22,7 +22,7 @@ export function LoginScreen() {
     setState("sending");
     const { error: err } = await sb.auth.signInWithOtp({
       email: e,
-      options: { emailRedirectTo: window.location.origin + "/v2" },
+      options: { emailRedirectTo: window.location.origin + "/app" },
     });
     if (err) { setError(err.message); setState("error"); }
     else setState("sent");

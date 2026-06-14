@@ -295,3 +295,26 @@ export async function leaveWorkspace(): Promise<void> {
   const data = await res.json().catch(() => ({})) as { error?: string };
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 }
+
+// ── Billing ───────────────────────────────────────────────────
+
+export async function createStripeCheckout(
+  plan: "pro" | "max",
+  billing: "monthly" | "annual" = "monthly",
+): Promise<string> {
+  const res = await authFetch(`${API_BASE}/api/stripe/checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan, billing }),
+  });
+  const data = await res.json().catch(() => null) as { url?: string; error?: string } | null;
+  if (!res.ok || !data?.url) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data.url;
+}
+
+export async function createStripePortal(): Promise<string> {
+  const res = await authFetch(`${API_BASE}/api/stripe/portal`, { method: "POST" });
+  const data = await res.json().catch(() => null) as { url?: string; error?: string } | null;
+  if (!res.ok || !data?.url) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data.url;
+}

@@ -8,19 +8,21 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 v1 (`C:\projects\transcriptor\`) — старая Railway-версия на OpenAI API. **Продолжает работать параллельно, намеренно. Не сливать.**
 
-## Архитектура (Stage 2 — production)
+## Архитектура (Stage 2 — production, после Cutover 2026-06-14)
 
 ```
 Browser
    │
    │ load skriptly.io
    ▼
-Vercel (Next.js landing + Studio v2 redesign)
+Vercel (Next.js landing + Ink & Halftone Studio)
    │
    ├─ skriptly.io/              → Next.js landing
-   ├─ skriptly.io/app           → rewrite to Modal flask_app `/` (текущий transcriptor)
-   ├─ skriptly.io/v2            → НОВЫЙ Studio redesign (Next.js, в разработке)
-   └─ skriptly.io/api/*         → rewrite to Modal flask_app /api/* (fallback)
+   ├─ skriptly.io/app           → Next.js landing/app/app/ (Ink & Halftone Studio — production)
+   └─ skriptly.io/api/*         → rewrite to Modal flask_app /api/* (audio bypasses Vercel: прямо на Modal)
+
+УДАЛЕНО: rewrite /app → Modal. Modal GET / теперь 301 → skriptly.io/app.
+Старый templates/index.html → legacy/templates/index.html (архив).
 
 Browser JS (on skriptly.io/app)
    │
@@ -62,9 +64,8 @@ Supabase Postgres
 
 **Production URLs:**
 - **skriptly.io** — landing (Vercel)
-- **skriptly.io/app** — текущее приложение (HTML с Modal через Vercel rewrite, API напрямую на Modal). РАБОТАЕТ, не трогать пока v2 не готов.
-- **skriptly.io/v2** — новый Studio редизайн (Next.js, статичный каркас сделан, ML-логика не подключена)
-- **razornne--transcriptor-v2-flask-app.modal.run** — Modal endpoint напрямую
+- **skriptly.io/app** — Ink & Halftone Studio (Next.js, production после Cutover 2026-06-14)
+- **razornne--transcriptor-v2-flask-app.modal.run** — Modal endpoint напрямую (API + 301 редирект на /app)
 
 **Стек:**
 - **Modal** — serverless GPU. Функции в одном app (`transcriptor-v2`):
@@ -73,8 +74,8 @@ Supabase Postgres
   - `gemini_generate` fn — лёгкий CPU контейнер, вызывает Gemini 2.5 Pro REST API для summary/action items (Qwen на длинной аналитике сильно слабее)
   - `flask_app` wsgi — лёгкий CPU контейнер, тонкий прокси + роутинг по длительности
 - **Supabase** — Auth (Google + magic link) + Postgres (история транскриптов, RLS)
-- **Vercel** — Next.js landing на `skriptly.io`, rewrites для `/app` и `/api/*` (fallback)
-- **Frontend приложения** — `templates/index.html` отдаётся Modal Flask, проксируется через Vercel на `/app`
+- **Vercel** — Next.js landing на `skriptly.io`, rewrite только для `/api/*` (аудио идёт прямо на Modal)
+- **Frontend приложения** — `landing/app/app/` (Next.js, Ink & Halftone Studio). Старый `templates/index.html` в `legacy/` (архив).
 
 **Поток обработки:**
 1. Юзер логинится через Supabase Auth (Google или magic link)

@@ -14,10 +14,8 @@ const nextConfig = {
       // PostHog ingest — static assets и API endpoints. ВАЖНО: static ДО общего!
       { source: "/ingest/static/:path*", destination: `${POSTHOG_ASSETS}/static/:path*` },
       { source: "/ingest/:path*",        destination: `${POSTHOG_API}/:path*` },
-      // Backend API + Modal-served /app HTML
+      // Backend API (audio goes direct to Modal — bypasses 4MB Vercel edge limit)
       { source: "/api/:path*", destination: `${MODAL_URL}/api/:path*` },
-      { source: "/app",         destination: `${MODAL_URL}/` },
-      { source: "/app/:path*",  destination: `${MODAL_URL}/:path*` },
     ];
   },
 };

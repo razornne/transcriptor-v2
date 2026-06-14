@@ -1,13 +1,9 @@
-// Конфигурация Ink-аппки (/v2). Значения зеркалят боевой templates/index.html.
+// Конфигурация Ink-аппки (/app, production). Значения зеркалят modal_app.py.
 
 // API напрямую на Modal, мимо Vercel-прокси: Vercel Edge имеет ~4MB body
 // limit на проксированных запросах — аудио легко больше (см. CLAUDE.md).
 // CORS на Flask открыт. На localhost тоже бьём в прод-Modal (бэк один).
 export const API_BASE = "https://razornne--transcriptor-v2-flask-app.modal.run";
-
-// Биллинг/настройки плана пока живут в боевом /app (Settings → Subscription).
-// Спринт 3 перенесёт это в Ink Settings; до тех пор upgrade-CTA ведёт туда.
-export const BILLING_URL = "https://skriptly.io/app";
 
 // Публичные client-side ключи Supabase (безопасно в коде)
 export const SUPABASE_URL = "https://bmonakhktbaliwgobrxv.supabase.co";
