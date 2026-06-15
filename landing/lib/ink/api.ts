@@ -41,6 +41,30 @@ export type Profile = {
   team_presets?: Preset[];
 };
 
+// ── Projects (client-side, localStorage) ─────────────────────
+// No migration needed — stored purely on-device. Entry IDs reference
+// Supabase transcript rows; membership is stored in the project's entryIds[].
+export type Project = {
+  id: string;
+  name: string;
+  entryIds: string[];
+  createdAt: string;
+};
+
+const PROJECTS_LS_KEY = "skriptly_projects_v1";
+
+export function loadProjects(): Project[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(PROJECTS_LS_KEY);
+    return raw ? (JSON.parse(raw) as Project[]) : [];
+  } catch { return []; }
+}
+
+export function saveProjects(projects: Project[]): void {
+  try { localStorage.setItem(PROJECTS_LS_KEY, JSON.stringify(projects)); } catch {}
+}
+
 // Thrown when the Stripe Customer Portal can't open because the stored customer
 // id is invalid for the active Stripe mode (e.g. a test cus_ under a live key).
 // The backend has already wiped the bad id; the caller should restart Checkout.

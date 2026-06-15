@@ -17,6 +17,7 @@ import {
   renameSpeaker as apiRenameSpeaker,
   CancelledError, type CancelToken, type Profile, type JobProgress, type Preset, type WorkspaceInfo,
   type PipelineSteps,
+  type Project, loadProjects, saveProjects,
 } from "@/lib/ink/api";
 import {
   fetchHistory, insertEntry, patchEntry, deleteEntry,
@@ -247,6 +248,7 @@ export default function InkApp() {
   const [context, setContext] = useState("");
   const [limitHit, setLimitHit] = useState(false);
   const [recover, setRecover] = useState<RecoverState | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
 
   const [undoEntry, setUndoEntry] = useState<HistoryEntry | null>(null);
   const undoTimerRef = useRef<number>(0);
@@ -267,6 +269,8 @@ export default function InkApp() {
     setLanguage(s.language);
     setSpeakers(s.speakers);
   }, []);
+
+  useEffect(() => { setProjects(loadProjects()); }, []);
 
   useEffect(() => {
     void sb.auth.getSession().then(({ data }) => setSession(data.session));
@@ -570,6 +574,29 @@ export default function InkApp() {
     catch (e) { console.error("[team-presets] save failed:", e); }
   }, []);
 
+  // ── Projects ─────────────────────────────────────────────────────
+  const handleCreateProject = useCallback((name: string) => {
+    const p: Project = { id: crypto.randomUUID(), name, entryIds: [], createdAt: new Date().toISOString() };
+    setProjects((prev) => { const next = [...prev, p]; saveProjects(next); return next; });
+  }, []);
+
+  const handleDeleteProject = useCallback((id: string) => {
+    setProjects((prev) => { const next = prev.filter((p) => p.id !== id); saveProjects(next); return next; });
+  }, []);
+
+  const handleMoveEntry = useCallback((entryId: string, targetProjectId: string | null) => {
+    setProjects((prev) => {
+      const next = prev.map((p) => ({
+        ...p,
+        entryIds: p.id === targetProjectId
+          ? (p.entryIds.includes(entryId) ? p.entryIds : [...p.entryIds, entryId])
+          : p.entryIds.filter((id) => id !== entryId),
+      }));
+      saveProjects(next);
+      return next;
+    });
+  }, []);
+
   // ── Render ───────────────────────────────────────────────────────
   if (session === undefined) return <div className="ink-root" />;
   if (!session) return <LoginScreen />;
@@ -589,6 +616,10 @@ export default function InkApp() {
         profile={profile}
         hasWorkspace={inWorkspace}
         uiLang={uiLang}
+        projects={projects}
+        onCreateProject={handleCreateProject}
+        onDeleteProject={handleDeleteProject}
+        onMoveEntry={handleMoveEntry}
         onClose={() => setSbOpen(false)}
         onTeamChange={setTeam}
         onSelect={(id) => setActiveId(id)}
