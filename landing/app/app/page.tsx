@@ -705,7 +705,7 @@ export default function InkApp() {
                   />
                 )}
 
-                {recover && !cooking && (
+                {recover && !cooking && !recording && (
                   <div className="i-recover">
                     <span className="i-recover-text">
                       {recover.source === "crash" ? "Unfinished recording found" : "Upload failed — recording kept"}

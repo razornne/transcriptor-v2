@@ -3,7 +3,19 @@ import { useEffect, useRef, useState } from "react";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 import type { PipelineSteps } from "@/lib/ink/api";
 
-const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+function formatDuration(s: number): string {
+  const sec = Math.floor(s);
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) {
+    const m = Math.floor(sec / 60);
+    const ss = sec % 60;
+    return `${m}:${String(ss).padStart(2, "0")}`;
+  }
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const ss = sec % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
 
 // Honest pipeline stages — fixed order + human labels for the timeline.
 const STEP_ORDER = ["container", "audio_split", "transcription", "diarization", "ai_formatting"] as const;
@@ -66,9 +78,9 @@ function StepTimeline({ pipeline }: { pipeline: PipelineSteps }) {
             <span className="i-tl-label">{STEP_LABELS[key] || key}</span>
             <span className="i-tl-time">
               {status === "running"
-                ? `${Math.floor(liveElapsed(key))}s`
+                ? formatDuration(liveElapsed(key))
                 : status === "completed"
-                  ? `${Math.round(st.duration_sec ?? 0)}s`
+                  ? formatDuration(Math.round(st.duration_sec ?? 0))
                   : status === "failed"
                     ? "failed"
                     : ""}
@@ -129,7 +141,7 @@ export function InputCard({
         {recording ? (
           <div className="i-dropzone-rec">
             <span className="i-rec-dot-lg" />
-            <span className="i-dropzone-timer">{fmt(recSeconds)}</span>
+            <span className="i-dropzone-timer">{formatDuration(recSeconds)}</span>
             <span className="i-dropzone-hint-sub">Recording in progress — click Stop when done</span>
           </div>
         ) : cooking ? (
@@ -177,7 +189,7 @@ export function InputCard({
         >
           <span className="i-rec-dot" />
           {recording
-            ? <><span>Stop</span> · <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(recSeconds)}</span></>
+            ? <><span>Stop</span> · <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatDuration(recSeconds)}</span></>
             : "Record"
           }
         </button>

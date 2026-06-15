@@ -483,6 +483,7 @@
   height: 26px; padding: 0 12px; border-radius: 7px;
   border: 1px solid transparent;
   display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap; flex-shrink: 0;
   transition: color .12s ease, background .12s ease, border-color .12s ease;
 }
 .i-tab:hover { color: var(--i-ink); }
@@ -503,6 +504,7 @@
   height: 32px; padding: 0 13px; border-radius: 8px;
   border: 1px solid var(--i-hairline); background: transparent;
   display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap; flex-shrink: 0;
   transition: color .13s ease, border-color .13s ease, background .13s ease;
 }
 .i-tbtn:hover { color: var(--i-ink); border-color: var(--i-graphite); }
@@ -1766,7 +1768,7 @@
 }
 .i-tl-label { flex: 1; letter-spacing: .01em; color: var(--i-graphite); }
 .i-tl-time {
-  font-variant-numeric: tabular-nums; min-width: 34px; text-align: right;
+  font-variant-numeric: tabular-nums; min-width: 52px; text-align: right;
   color: var(--i-graphite);
 }
 
