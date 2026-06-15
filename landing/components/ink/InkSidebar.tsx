@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HistoryEntry } from "@/lib/ink/db";
-import type { Profile } from "@/lib/ink/api";
+import type { Profile, Project } from "@/lib/ink/api";
 
 const DICT = {
   en: {
@@ -11,6 +11,9 @@ const DICT = {
     settings: "Settings", signOut: "Sign out",
     today: "Today", yesterday: "Yesterday", thisWeek: "This week", earlier: "Earlier",
     untitled: "Untitled",
+    newProject: "+ New project",
+    unsorted: "Unsorted",
+    removeFromProject: "Remove from project",
   },
   ua: {
     personal: "Особисте", team: "Команда", search: "Пошук…",
@@ -19,6 +22,9 @@ const DICT = {
     settings: "Налаштування", signOut: "Вийти",
     today: "Сьогодні", yesterday: "Вчора", thisWeek: "Цього тижня", earlier: "Раніше",
     untitled: "Без назви",
+    newProject: "+ Новий проект",
+    unsorted: "Без проекту",
+    removeFromProject: "Видалити з проекту",
   },
 } as const;
 type Lang = keyof typeof DICT;
@@ -45,6 +51,7 @@ function groupOf(iso: string): string {
 
 export function InkSidebar({
   open, team, entries, activeId, profile, hasWorkspace,
+  projects, onCreateProject, onDeleteProject, onMoveEntry,
   onClose, onTeamChange, onSelect, onDelete, onSignOut, onSettings,
   uiLang = "en",
 }: {
@@ -54,6 +61,10 @@ export function InkSidebar({
   activeId: string | null;
   profile: Profile | null;
   hasWorkspace: boolean;
+  projects: Project[];
+  onCreateProject: (name: string) => void;
+  onDeleteProject: (id: string) => void;
+  onMoveEntry: (entryId: string, targetProjectId: string | null) => void;
   onClose: () => void;
   onTeamChange: (team: boolean) => void;
   onSelect: (id: string) => void;
@@ -64,7 +75,12 @@ export function InkSidebar({
 }) {
   const [q, setQ] = useState("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [closedProjects, setClosedProjects] = useState<Set<string>>(new Set());
+  const [moveDropEntry, setMoveDropEntry] = useState<string | null>(null);
+  const [newProjOpen, setNewProjOpen] = useState(false);
+  const [newProjName, setNewProjName] = useState("");
   const confirmTimerRef = useRef<number>(0);
+  const newProjRef = useRef<HTMLInputElement>(null);
 
   const s = DICT[uiLang] ?? DICT.en;
 
@@ -82,10 +98,25 @@ export function InkSidebar({
     if (!open) {
       window.clearTimeout(confirmTimerRef.current);
       setConfirmingId(null);
+      setMoveDropEntry(null);
     }
   }, [open]);
 
   useEffect(() => () => window.clearTimeout(confirmTimerRef.current), []);
+
+  useEffect(() => { if (newProjOpen) newProjRef.current?.focus(); }, [newProjOpen]);
+
+  // Close move dropdown when clicking outside
+  useEffect(() => {
+    if (!moveDropEntry) return;
+    const h = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest(".i-move-drop, .i-move-btn")) {
+        setMoveDropEntry(null);
+      }
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [moveDropEntry]);
 
   const handleDeleteClick = (id: string) => {
     if (confirmingId === id) {
@@ -111,9 +142,28 @@ export function InkSidebar({
     return list;
   }, [entries, team, q]);
 
-  const groups = useMemo(() => {
+  const entryById = useMemo(() => {
+    const m = new Map<string, HistoryEntry>();
+    for (const e of filtered) m.set(e.id, e);
+    return m;
+  }, [filtered]);
+
+  // When searching, show everything flat (no project grouping)
+  const searching = q.trim().length > 0;
+
+  const projectedIds = useMemo(
+    () => searching ? new Set<string>() : new Set(projects.flatMap((p) => p.entryIds)),
+    [projects, searching],
+  );
+
+  const unsorted = useMemo(
+    () => filtered.filter((e) => !projectedIds.has(e.id)),
+    [filtered, projectedIds],
+  );
+
+  const unsortedGroups = useMemo(() => {
     const m = new Map<string, HistoryEntry[]>();
-    for (const e of filtered) {
+    for (const e of unsorted) {
       const g = groupOf(e.date);
       if (!m.has(g)) m.set(g, []);
       m.get(g)!.push(e);
@@ -121,18 +171,101 @@ export function InkSidebar({
     return ["Today", "Yesterday", "This week", "Earlier"]
       .filter((g) => m.has(g))
       .map((g) => [g, m.get(g)!] as const);
-  }, [filtered]);
+  }, [unsorted]);
 
   const usedRatio = profile && profile.minutes_limit > 0
     ? profile.minutes_used / profile.minutes_limit
     : 0;
+
+  const handleNewProject = () => {
+    const name = newProjName.trim();
+    if (!name) return;
+    onCreateProject(name);
+    setNewProjName("");
+    setNewProjOpen(false);
+  };
+
+  const toggleProject = (id: string) => {
+    setClosedProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const renderEntry = (e: HistoryEntry, inProjectId?: string) => (
+    <div key={e.id} className={`i-item${e.id === activeId ? " active" : ""}`}>
+      <button
+        type="button"
+        className="i-item-main"
+        onClick={() => { onSelect(e.id); onClose(); }}
+      >
+        <span className="i-item-title">{e.title || s.untitled}</span>
+        <span className="dur">{fmtDur(e)}</span>
+      </button>
+
+      {/* Move-to folder dropdown — only for real entries when projects exist */}
+      {e.id !== "demo" && projects.length > 0 && (
+        <div className="i-move-wrap">
+          <button
+            type="button"
+            className={`i-move-btn${moveDropEntry === e.id ? " open" : ""}`}
+            aria-label="Move to project"
+            onClick={(ev) => {
+              ev.stopPropagation();
+              setMoveDropEntry((v) => (v === e.id ? null : e.id));
+            }}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+          </button>
+          {moveDropEntry === e.id && (
+            <div className="i-move-drop">
+              {inProjectId && (
+                <button
+                  type="button"
+                  className="i-move-opt i-move-opt-remove"
+                  onClick={() => { onMoveEntry(e.id, null); setMoveDropEntry(null); }}
+                >
+                  {s.removeFromProject}
+                </button>
+              )}
+              {projects.filter((p) => p.id !== inProjectId).map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="i-move-opt"
+                  onClick={() => { onMoveEntry(e.id, p.id); setMoveDropEntry(null); }}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        type="button"
+        className={`i-del${confirmingId === e.id ? " confirming" : ""}`}
+        aria-label={confirmingId === e.id ? "Confirm delete" : "Delete recording"}
+        onClick={() => handleDeleteClick(e.id)}
+      >
+        {confirmingId === e.id ? "Delete?" : "✕"}
+      </button>
+    </div>
+  );
+
+  const showProjects = !searching && !team;
+  const showUnsortedLabel = showProjects && projects.length > 0 && unsortedGroups.length > 0;
 
   return (
     <>
       <div className="i-scrim" onClick={onClose} aria-hidden="true" />
       <aside className="i-sb" aria-hidden={!open} aria-label="Workspace and history">
 
-        {/* Personal / Team toggle — only when user has a real workspace */}
+        {/* Personal / Team toggle */}
         {hasWorkspace && (
           <div className="i-seg-toggle" role="tablist">
             <button type="button" className={team ? "" : "on"} onClick={() => onTeamChange(false)}>
@@ -158,34 +291,108 @@ export function InkSidebar({
         </div>
 
         <div className="i-sb-scroll">
-          {groups.length === 0 && (
+
+          {/* ── Projects section ── */}
+          {showProjects && (
+            <div className="i-proj-section">
+              {projects.map((proj) => {
+                const projEntries = proj.entryIds
+                  .map((id) => entryById.get(id))
+                  .filter((e): e is HistoryEntry => !!e);
+                const isOpen = !closedProjects.has(proj.id);
+                return (
+                  <div key={proj.id} className="i-proj">
+                    <div className="i-proj-head">
+                      <button
+                        type="button"
+                        className="i-proj-toggle"
+                        onClick={() => toggleProject(proj.id)}
+                        aria-expanded={isOpen}
+                      >
+                        <svg
+                          className={`i-proj-chevron${isOpen ? " open" : ""}`}
+                          width="9" height="9" viewBox="0 0 24 24"
+                          fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+                        >
+                          <path d="M9 18l6-6-6-6" />
+                        </svg>
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                        </svg>
+                        <span className="i-proj-name">{proj.name}</span>
+                        <span className="i-proj-count">{projEntries.length}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="i-proj-del"
+                        aria-label={`Delete project ${proj.name}`}
+                        onClick={() => onDeleteProject(proj.id)}
+                      >✕</button>
+                    </div>
+                    {isOpen && (
+                      <div className="i-proj-entries">
+                        {projEntries.length === 0
+                          ? <p className="i-proj-empty">No recordings yet</p>
+                          : projEntries.map((e) => renderEntry(e, proj.id))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* New project input / button */}
+              {newProjOpen ? (
+                <div className="i-proj-new-row">
+                  <input
+                    ref={newProjRef}
+                    className="i-proj-new-input"
+                    value={newProjName}
+                    onChange={(e) => setNewProjName(e.target.value)}
+                    placeholder="Project name"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); handleNewProject(); }
+                      if (e.key === "Escape") { setNewProjOpen(false); setNewProjName(""); }
+                    }}
+                    onBlur={() => {
+                      if (!newProjName.trim()) { setNewProjOpen(false); setNewProjName(""); }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="i-proj-new-ok"
+                    onClick={handleNewProject}
+                    disabled={!newProjName.trim()}
+                  >✓</button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="i-proj-new-btn"
+                  onClick={() => setNewProjOpen(true)}
+                >
+                  {s.newProject}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ── Unsorted / flat entries ── */}
+          {filtered.length === 0 && (
             <p className="i-sb-empty">
               {team ? s.noShared : q ? s.noFound : s.noRecs}
             </p>
           )}
-          {groups.map(([g, items]) => (
+
+          {showUnsortedLabel && (
+            <div className="i-sect">{s.unsorted}</div>
+          )}
+
+          {unsortedGroups.map(([g, items]) => (
             <div key={g}>
-              <div className="i-sect">{groupLabelOf(g)}</div>
-              {items.map((e) => (
-                <div key={e.id} className={`i-item${e.id === activeId ? " active" : ""}`}>
-                  <button
-                    type="button"
-                    className="i-item-main"
-                    onClick={() => { onSelect(e.id); onClose(); }}
-                  >
-                    <span className="i-item-title">{e.title || s.untitled}</span>
-                    <span className="dur">{fmtDur(e)}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`i-del${confirmingId === e.id ? " confirming" : ""}`}
-                    aria-label={confirmingId === e.id ? "Confirm delete" : "Delete recording"}
-                    onClick={() => handleDeleteClick(e.id)}
-                  >
-                    {confirmingId === e.id ? "Delete?" : "✕"}
-                  </button>
-                </div>
-              ))}
+              <div className={`i-sect${showUnsortedLabel ? " i-sect-sub" : ""}`}>
+                {groupLabelOf(g)}
+              </div>
+              {items.map((e) => renderEntry(e))}
             </div>
           ))}
         </div>
