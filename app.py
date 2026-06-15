@@ -139,16 +139,18 @@ def _modal_job_status(job_id: str) -> dict:
         # Job still running — enrich with real backend progress if available
         resp: dict = {"status": "processing"}
         if kind == "transcribe":
-            pk = _job_progress_keys.get(job_id)
-            if pk:
-                try:
-                    pdict = _get_progress_dict()
-                    if pdict is not None:
+            try:
+                pdict = _get_progress_dict()
+                if pdict is not None:
+                    # in-memory mapping → если пусто (другой контейнер),
+                    # восстанавливаем progress_key из самого Dict по call_id
+                    pk = _job_progress_keys.get(job_id) or pdict.get(f"pk:{call_id}")
+                    if pk:
                         prog = pdict.get(pk)
                         if prog:
                             resp["progress"] = prog
-                except Exception:
-                    pass
+            except Exception:
+                pass
         return resp
     except _modal.exception.OutputExpiredError:
         return {"status": "error", "error": "result expired"}
@@ -1007,9 +1009,20 @@ def job_status_endpoint(job_id):
                 except Exception as e:
                     print(f"[vocab] save failed: {e}")
             # Cleanup tracking dicts
+            pk = _job_progress_keys.pop(job_id, None)
             _job_language.pop(job_id, None)
             _job_user.pop(job_id, None)
-            _job_progress_keys.pop(job_id, None)
+            # Чистим progress-store от записей этой джобы (иначе modal.Dict
+            # растёт без границ — авто-экспирации нет)
+            try:
+                pdict = _get_progress_dict()
+                if pdict is not None:
+                    pk = pk or pdict.get(f"pk:{call_id}")
+                    if pk:
+                        pdict.pop(pk, None)
+                    pdict.pop(f"pk:{call_id}", None)
+            except Exception:
+                pass
         return jsonify(result)
 
     # Local: обычный uuid hex
@@ -3049,7 +3062,17 @@ def transcribe_endpoint():
         except Exception as e:
             return jsonify({"error": f"modal spawn failed: {e}"}), 502
         job_id = JOB_PREFIX_TRANSCRIBE + call.object_id
-        _job_progress_keys[job_id] = progress_key  # сохраняем для polling
+        _job_progress_keys[job_id] = progress_key  # быстрый in-memory путь
+        # Дублируем mapping в сам progress-store (modal.Dict, глобальный):
+        # на длинной джобе polling может попасть в ДРУГОЙ Flask-контейнер,
+        # где in-memory _job_progress_keys пуст → прогресс терялся. Ключ в
+        # Dict переживает смену контейнера.
+        try:
+            pd = _get_progress_dict()
+            if pd is not None:
+                pd[f"pk:{call.object_id}"] = progress_key
+        except Exception:
+            pass
         # сохраняем язык и user_id для последующего vocab save (см. /api/jobs polling)
         _job_language[job_id] = language
         if g.user_id:

@@ -79,7 +79,11 @@ export async function pollJob(
     if (data.status === "done") return data;
     if (data.status === "cancelled") throw new CancelledError();
     if (data.status === "error") throw new Error((data.error as string) || "processing failed");
-    onProgress?.(data as JobProgress);
+    // Бэкенд вкладывает реальный прогресс под data.progress
+    // ({stage, chunks_total, chunks_done, ...}); на верхнем уровне только
+    // status. Без распаковки гранулярный прогресс не доходил до UI и статус
+    // застывал на "uploading…".
+    onProgress?.((data.progress ?? data) as JobProgress);
     if (Date.now() > deadline) throw new Error("timeout while processing");
     // прерываемое ожидание 2с — Cancel реагирует мгновенно
     for (let i = 0; i < 20; i++) {
