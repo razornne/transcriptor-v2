@@ -459,12 +459,23 @@
    (Notion / .txt / .md / Copy) выровнены по одной базовой линии на высоте 32px,
    радиус 7–8px, Manrope 13px / 500. Сегмент-трек = 26px таб + 2px паддинг +
    1px бордер = ровно 32px внешней высоты, как у .i-tbtn. */
-.i-tabs { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; flex-wrap: wrap; }
+/* Тулбар = segmented control слева + утилиты экспорта справа, в ОДНУ строку.
+   space-between разводит группы по краям, nowrap запрещает перенос на десктопе. */
+.i-tabs {
+  display: flex; flex-direction: row; align-items: center;
+  justify-content: space-between; flex-wrap: nowrap;
+  width: 100%; gap: 12px; margin: 2px 0 10px;
+}
+/* Правый блок утилит — Notion / .txt / .md / Copy на одной линии, высота 32px */
+.i-toolbar-actions {
+  display: flex; align-items: center; gap: 8px; flex: none;
+}
 .i-segctl {
   display: inline-flex; align-items: center; gap: 2px; padding: 2px;
   background: color-mix(in srgb, var(--i-surface) 55%, transparent);
   border: 1px solid var(--i-hairline);
   border-radius: 9px;
+  min-width: 0;   /* пусть сегмент-трек ужимается, а не толкает утилиты вниз */
 }
 .i-tab {
   font-family: var(--i-ui); font-size: 13px; font-weight: 500; line-height: 1;
@@ -1462,11 +1473,16 @@
   .i-iconbtn {
     width: 44px; height: 44px;
   }
+  /* On phones the two groups may stack — allow the toolbar to wrap here only
+     (desktop stays strictly one row). Actions keep their own row alignment. */
+  .i-tabs { flex-wrap: wrap; }
+  .i-toolbar-actions { flex-wrap: wrap; }
   /* Tab bar scrolls horizontally, no wrap, hidden scrollbar */
   .i-segctl {
     overflow-x: auto;
     flex-wrap: nowrap;
     scrollbar-width: none;
+    width: 100%;
   }
   .i-segctl::-webkit-scrollbar { display: none; }
   /* Individual tabs: taller touch zone */

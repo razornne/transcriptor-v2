@@ -64,23 +64,44 @@ const SegmentRow = memo(function SegmentRow({
   onSaveText: (idx: number, val: string) => void;
   onCancelTextEdit: () => void;
 }) {
+  // Focus the rename input WITHOUT scrolling the page. The browser's default
+  // autofocus scroll-into-view is what yanked the transcript around on click.
+  const spkInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (editingSpk) spkInputRef.current?.focus({ preventScroll: true });
+  }, [editingSpk]);
+
   return (
     <div className="i-seg">
       <div className="i-seg-head">
         {editingSpk ? (
           <input
-            className="i-spk-edit" autoFocus
+            ref={spkInputRef}
+            className="i-spk-edit"
             style={{ color }}
             defaultValue={name} placeholder={displayName}
+            // Keep every interaction inside the input — never let it bubble to
+            // the segment row (which could seek/scroll the player).
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             onBlur={(e) => onRename(speaker, e.target.value)}
             onKeyDown={(e) => {
+              e.stopPropagation();
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
               if (e.key === "Escape") onCancelEdit();
             }}
           />
         ) : (
-          <button type="button" className="i-spk" style={{ color }}
-            title="Rename speaker" onClick={() => onStartEdit(speaker)}>
+          <button
+            type="button" className="i-spk" style={{ color }}
+            title="Rename speaker"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();   // изолирует клик от родительского контейнера фразы
+              e.preventDefault();    // отменяет дефолтное поведение
+              onStartEdit(speaker);
+            }}
+          >
             {displayName}
           </button>
         )}
@@ -546,22 +567,24 @@ export function ResultView({
           </div>
         </div>
 
-        <span className="i-spacer" />
-        {notionConnected && (
-          <button
-            type="button"
-            className={`i-tbtn i-notion-btn${notionSending ? " sending" : ""}${notionSent ? " sent" : ""}`}
-            onClick={() => void handleSendNotion()}
-            disabled={notionSending}
-            title={notionError || undefined}
-          >
-            <NotionIcon />
-            {notionSent ? "Sent!" : notionSending ? "Sending…" : "Notion"}
-          </button>
-        )}
-        <button type="button" className="i-tbtn" onClick={downloadTxt}>.txt</button>
-        <button type="button" className="i-tbtn" onClick={downloadMd}>.md</button>
-        <button type="button" className="i-tbtn" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button>
+        {/* Right utility group — Notion / .txt / .md / Copy on ONE row, 32px each */}
+        <div className="i-toolbar-actions">
+          {notionConnected && (
+            <button
+              type="button"
+              className={`i-tbtn i-notion-btn${notionSending ? " sending" : ""}${notionSent ? " sent" : ""}`}
+              onClick={() => void handleSendNotion()}
+              disabled={notionSending}
+              title={notionError || undefined}
+            >
+              <NotionIcon />
+              {notionSent ? "Sent!" : notionSending ? "Sending…" : "Notion"}
+            </button>
+          )}
+          <button type="button" className="i-tbtn" onClick={downloadTxt}>.txt</button>
+          <button type="button" className="i-tbtn" onClick={downloadMd}>.md</button>
+          <button type="button" className="i-tbtn" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button>
+        </div>
       </div>
 
       {/* ── Transcript ── */}
