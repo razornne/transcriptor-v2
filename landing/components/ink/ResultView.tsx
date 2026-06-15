@@ -11,7 +11,9 @@ import { UpgradeCard } from "./UpgradeCard";
 
 export type Tab = "transcript" | "summary" | "actions" | "notes" | "custom";
 
-const SPK_COLORS = ["var(--i-accent)", "#C77D2E", "#7E6BC4", "#3E8E6E"];
+// Matte "expensive ink" speaker palette — defined as CSS vars in ink.css so the
+// whole set is themeable in one place. Klein blue + muted copper/plum/teal.
+const SPK_COLORS = ["var(--i-spk-1)", "var(--i-spk-2)", "var(--i-spk-3)", "var(--i-spk-4)"];
 
 function spkColor(label: string): string {
   const m = label.match(/(\d+)/);
@@ -68,6 +70,7 @@ const SegmentRow = memo(function SegmentRow({
         {editingSpk ? (
           <input
             className="i-spk-edit" autoFocus
+            style={{ color }}
             defaultValue={name} placeholder={displayName}
             onBlur={(e) => onRename(speaker, e.target.value)}
             onKeyDown={(e) => {
@@ -281,7 +284,7 @@ function PresetDropdown({
 export function ResultView({
   entry, plan, presets, teamPresets, notionConnected,
   activeTab, onTabChange,
-  onPatch, onPresetsChange, onTeamPresetsChange,
+  onPatch, onRenameSpeaker, onPresetsChange, onTeamPresetsChange,
   onUpgrade,
 }: {
   entry: HistoryEntry;
@@ -292,6 +295,7 @@ export function ResultView({
   activeTab: Tab;
   onTabChange: (t: Tab) => void;
   onPatch: (fields: Partial<HistoryEntry>, db: Record<string, unknown>) => void;
+  onRenameSpeaker: (rawLabel: string, newName: string) => void;
   onPresetsChange: (updated: Preset[]) => void;
   onTeamPresetsChange: (updated: Preset[]) => void;
   onUpgrade?: () => void;
@@ -396,10 +400,10 @@ export function ResultView({
   const onCancelEdit = useCallback(() => setEditingSpk(null), []);
   const onRename = useCallback((label: string, value: string) => {
     setEditingSpk(null);
-    const next = { ...entry.speakerNames };
-    if (value.trim()) next[label] = value.trim(); else delete next[label];
-    onPatch({ speakerNames: next }, { speaker_names: next });
-  }, [entry.speakerNames, onPatch]);
+    // Optimistic local update + persist via /api/entries/<id>/rename-speaker.
+    // Applies to every block of this speaker (display derives from the map).
+    onRenameSpeaker(label, value.trim());
+  }, [onRenameSpeaker]);
 
   // Segment text edit handlers
   const onStartTextEdit = useCallback((idx: number) => {
