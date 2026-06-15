@@ -127,17 +127,45 @@ def test_segment_level_fallback_without_words():
     assert [s["speaker"] for s in out] == ["SPEAKER_00", "SPEAKER_01"]
 
 
-def test_best_speaker_overlap_beats_proximity():
+def test_best_speaker_midpoint_containment():
     turns = [
         {"start": 0.0, "end": 1.0, "speaker": "A"},
         {"start": 1.1, "end": 2.0, "speaker": "B"},
     ]
-    # Пересекается с B → B, хотя A тоже рядом
+    # Центр слова (1.175) внутри турна B → B
     assert _best_speaker_for(1.05, 1.3, turns) == "B"
-    # Чистая пауза, ближе к A
+    # Центр (1.025) в паузе, ближе к границе A → A
     assert _best_speaker_for(1.01, 1.04, turns) == "A"
-    # Далеко от всех → UNKNOWN
+    # Далеко от всех (центр 10.25, >2с от любой границы) → UNKNOWN
     assert _best_speaker_for(10.0, 10.5, turns) == "SPEAKER_UNKNOWN"
+
+
+def test_boundary_first_word_not_glued_to_previous():
+    """Регресс MYK-17/ISS-13 (speaker bleeding): pyannote растягивает хвост
+    турна предыдущего спикера за реальную границу, задевая первое слово реплики.
+    Overlap-логика приклеивала это слово к ПРЕДЫДУЩЕМУ (больше пересечения по
+    краю). По СРЕДНЕЙ ТОЧКЕ слово уходит НОВОМУ спикеру."""
+    turns = [
+        {"start": 0.0, "end": 2.5, "speaker": "A"},   # хвост А растянут до 2.5
+        {"start": 2.0, "end": 5.0, "speaker": "B"},   # B реально начался в 2.0
+    ]
+    # слово "Не" 1.9-2.3 (центр 2.1): overlap с A (0.4) > overlap с B (0.3) →
+    # старая логика дала бы A. Центр 2.1 ∈ обоих → берём позже начавшийся B.
+    assert _best_speaker_for(1.9, 2.3, turns) == "B"
+
+    # И в реальном сегменте: первое слово реплики не утекает в предыдущий блок.
+    segments = [{
+        "start": 0.0, "end": 4.0, "text": "нічого не важко було",
+        "words": _words([
+            (0.2, 1.2, "нічого"),          # центр 0.7 → A
+            (2.05, 2.35, "не"),            # центр 2.2 → B (раньше → A)
+            (2.5, 2.9, "важко"), (3.0, 3.3, "було"),
+        ]),
+    }]
+    out = merge(segments, turns)
+    assert len(out) == 2, f"expected 2 blocks: {out}"
+    assert out[0]["speaker"] == "A" and out[0]["text"].strip() == "нічого"
+    assert out[1]["speaker"] == "B" and out[1]["text"].startswith("не")
 
 
 def test_empty_inputs():

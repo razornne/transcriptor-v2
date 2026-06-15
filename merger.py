@@ -102,26 +102,44 @@ def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> floa
 
 
 def _best_speaker_for(start: float, end: float, turns: list[dict]) -> str:
-    """Спикер с максимальным overlap по интервалу [start, end].
+    """Спикер для интервала [start, end] по правилу СРЕДНЕЙ ТОЧКИ (midpoint).
 
-    Если пересечений нет — ближайший турн в пределах NEAREST_TURN_MAX_GAP_S
-    (таймстемпы Whisper-слов гуляют на ±100-300мс, а pyannote часто не
-    покрывает первые/последние полслова реплики)."""
+    midpoint = (start + end) / 2 — интервал принадлежит тому pyannote-турну,
+    внутрь которого попадает его ЦЕНТР. Это лечит «протекание» спикеров
+    (speaker bleeding): первое короткое слово реплики ("Не", "Я", "Там"), чей
+    ХВОСТ ещё задевает турн предыдущего спикера (pyannote регулярно растягивает
+    хвост турна на ~100-300мс), но чей ЦЕНТР уже в новом турне, теперь уходит
+    НОВОМУ спикеру — а не приклеивается к предыдущему по краевому overlap'у,
+    как было в overlap-логике (регресс MYK-17/ISS-13).
+
+    Если центр попал в ПАУЗУ между турнами (нет содержащего сегмента) — берём
+    БЛИЖАЙШИЙ турн по абсолютному расстоянию до любой его границы (левой или
+    правой) в пределах NEAREST_TURN_MAX_GAP_S. НИКАКОГО слепого previous-speaker
+    fill: первое слово реплики после паузы уходит следующему (ближайшему) турну.
+    """
+    if not turns:
+        return "SPEAKER_UNKNOWN"
+
+    mid = (start + end) / 2.0
+
+    # 1. Турн(ы), СОДЕРЖАЩИЕ среднюю точку слова
+    containing = [t for t in turns if t["start"] <= mid <= t["end"]]
+    if containing:
+        if len(containing) == 1:
+            return containing[0]["speaker"]
+        # Перекрывающиеся турны (растянутый хвост предыдущего спикера или
+        # реальная одновременная речь): отдаём ПОЗЖЕ начавшемуся турну — на
+        # стыке реплик это входящий (новый) спикер. Именно это окончательно
+        # убирает приклеивание первого слова к предыдущему блоку.
+        return max(containing, key=lambda t: t["start"])["speaker"]
+
+    # 2. Центр в паузе → ближайший турн по расстоянию до его границ
     best_speaker = "SPEAKER_UNKNOWN"
-    best_overlap = 0.0
+    best_dist = NEAREST_TURN_MAX_GAP_S
     for t in turns:
-        ov = _overlap(start, end, t["start"], t["end"])
-        if ov > best_overlap:
-            best_overlap = ov
-            best_speaker = t["speaker"]
-    if best_overlap > 0.0:
-        return best_speaker
-
-    best_gap = NEAREST_TURN_MAX_GAP_S
-    for t in turns:
-        gap = max(t["start"] - end, start - t["end"])
-        if 0.0 <= gap < best_gap:
-            best_gap = gap
+        dist = min(abs(t["start"] - mid), abs(mid - t["end"]))
+        if dist < best_dist:
+            best_dist = dist
             best_speaker = t["speaker"]
     return best_speaker
 

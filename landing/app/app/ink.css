@@ -21,6 +21,14 @@
   --i-danger:   #B23A22;
   --i-dot:      20, 18, 14;         /* rgb чернил для canvas-точек */
 
+  /* — палитра спикеров: матовые «дорогие чернила» — */
+  /* Klein blue + приглушённая медь + матовый плюм + спокойный тил. Никакого
+     кислотного оранжевого — спокойно и премиально, в гармонии с акцентом. */
+  --i-spk-1:    var(--i-accent);    /* S1 — Klein blue */
+  --i-spk-2:    #B25E4B;            /* S2 — матовая терракота/медь (было #C77D2E) */
+  --i-spk-3:    #6E6496;            /* S3 — приглушённый плюм */
+  --i-spk-4:    #3E7D68;            /* S4 — спокойный тил */
+
   /* — шрифты: Bricolage (display) + Instrument Serif (editorial) +
        Manrope (UI, как в оригинале) + JetBrains Mono (data) — */
   --i-display:  "Bricolage Grotesque", "Manrope", sans-serif;
@@ -43,6 +51,12 @@
   --i-signal:   #F0593A;
   --i-danger:   #E0654E;
   --i-dot:      242, 239, 231;
+
+  /* speaker palette — чуть светлее для читаемости на тёмном графите.
+     --i-spk-1 наследует var(--i-accent) (уже светлее в тёмной теме). */
+  --i-spk-2:    #C97259;            /* терракота, lifted */
+  --i-spk-3:    #9087BC;            /* плюм, lifted */
+  --i-spk-4:    #589A82;            /* тил, lifted */
 }
 
 /* ── каркас ─────────────────────────────────────────────────── */
@@ -495,11 +509,15 @@
 .i-seg-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 3px; }
 .i-spk { font-family: var(--i-ui); font-size: 12.5px; font-weight: 600; letter-spacing: .01em; }
 .i-spk:hover { text-decoration: underline dotted; }
+/* Borderless inline rename — Manrope, faint accent wash for affordance (no frame) */
 .i-spk-edit {
-  background: var(--i-surface); border: 1px solid var(--i-accent);
-  border-radius: 6px; padding: 1px 7px; outline: none;
-  font: inherit; font-size: 12.5px; color: var(--i-ink); width: 150px;
+  background: color-mix(in srgb, var(--i-accent) 8%, transparent);
+  border: none; outline: none; border-radius: 5px;
+  padding: 1px 6px; margin: -1px 0;
+  font-family: var(--i-ui); font-size: 12.5px; font-weight: 600; letter-spacing: .01em;
+  color: var(--i-ink); width: 160px;
 }
+.i-spk-edit::placeholder { color: var(--i-graphite); opacity: .6; font-weight: 500; }
 .i-seg-time { font-family: var(--i-mono); font-size: 10px; color: var(--i-graphite); }
 .i-seg-text { font-size: 14.5px; line-height: 1.6; color: var(--i-ink); margin: 0; }
 

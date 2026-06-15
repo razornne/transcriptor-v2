@@ -383,3 +383,16 @@ export async function notionDisconnect(): Promise<void> {
   const data = await res.json().catch(() => ({})) as { error?: string };
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 }
+
+// ── Speaker rename ────────────────────────────────────────────
+// Global, persisted rename of a speaker within one entry. `oldLabel` is the raw
+// diarization key (e.g. "SPEAKER_01"); empty newName reverts to the default.
+export async function renameSpeaker(entryId: string, oldLabel: string, newName: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/entries/${encodeURIComponent(entryId)}/rename-speaker`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old_name: oldLabel, new_name: newName }),
+  });
+  const data = await res.json().catch(() => ({})) as { error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+}

@@ -1679,6 +1679,61 @@ def stripe_portal():
         return jsonify({"error": f"Could not open billing portal: {e}"}), 502
 
 
+# ── Speaker rename ────────────────────────────────────────────
+@app.route("/api/entries/<entry_id>/rename-speaker", methods=["POST"])
+def rename_speaker(entry_id):
+    """Глобально переименовать спикера в одной записи (запись = transcripts row).
+
+    Body (JSON): {"old_name": "<speaker key>", "new_name": "Артем"}.
+
+    `old_name` — СТАБИЛЬНЫЙ ключ спикера: raw-лейбл диаризации ("SPEAKER_01",
+    который в UI отображается как "Speaker 2"). Имя сохраняем в JSONB-карту
+    `transcripts.speaker_names` (label → отображаемое имя), а сами `segments`
+    оставляем с raw-лейблами. Так переименование применяется ко ВСЕМ блокам
+    спикера разом (UI рендерит имя через эту карту), и при этом НЕ ломаются
+    цвета спикеров (они назначаются по индексу raw-лейбла). Пустой `new_name`
+    — сброс к дефолтному "Speaker N".
+
+    Идемпотентно. Service role + ручная проверка владельца (RLS обходим).
+    """
+    if not g.user_id:
+        return jsonify({"error": "auth required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    old_name = (data.get("old_name") or "").strip()
+    new_name = (data.get("new_name") or "").strip()[:80]
+    if not old_name:
+        return jsonify({"error": "old_name required"}), 400
+
+    try:
+        rows = _sb_admin("transcripts",
+                         params={"id": f"eq.{entry_id}",
+                                 "select": "user_id,speaker_names"})
+    except Exception as e:
+        return jsonify({"error": f"transcript fetch failed: {e}"}), 502
+    if not rows:
+        return jsonify({"error": "entry not found"}), 404
+    if rows[0].get("user_id") != g.user_id:
+        return jsonify({"error": "not your transcript"}), 403
+
+    names = rows[0].get("speaker_names")
+    if not isinstance(names, dict):
+        names = {}
+    if new_name:
+        names[old_name] = new_name
+    else:
+        names.pop(old_name, None)   # revert to default label
+
+    try:
+        _sb_admin("transcripts", method="PATCH",
+                  params={"id": f"eq.{entry_id}"},
+                  data={"speaker_names": names})
+    except Exception as e:
+        return jsonify({"error": f"save failed: {e}"}), 502
+
+    return jsonify({"ok": True, "speaker_names": names})
+
+
 # ── Notion integration ────────────────────────────────────────
 # Public OAuth integration. Flow:
 #   1. Frontend GET /api/notion/oauth/start → returns Notion auth URL
