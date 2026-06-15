@@ -181,6 +181,16 @@ def _trim_to_core(segments: list[dict], lead_s: float, core_len_s: float,
 # старый фейл со склейкой, поэтому порог можно держать выше — 0.68 лечит швы.
 # Используется только если num_speakers не задан. Тюнится через env.
 GLOBAL_SPK_THRESHOLD = float(os.environ.get("GLOBAL_SPK_THRESHOLD", "0.68"))
+# Escape-порог для cannot-link: если два локальных спикера ОДНОГО чанка
+# оказались на cosine-расстоянии меньше этого — это НЕ два разных человека,
+# а pyannote over-сегментировал одного голоса на два (фантом). Такие пары
+# сливаются ДАЖЕ внутри чанка. Иначе (regression из MYK-12, auto-режим без
+# num_speakers, где force-merge фаза не работает) каждая внутричанковая
+# over-сегментация навсегда оставалась отдельным глобальным спикером —
+# 2-спикерный звонок выдавал 5 «спикеров». 0.40 ниже EER (~0.5): реально
+# разные (пусть похожие) голоса (~0.5+) cannot-link держит раздельно, а
+# фантом одного голоса (типично 0.15-0.35) сливается обратно.
+GLOBAL_SPK_PHANTOM_DIST = float(os.environ.get("GLOBAL_SPK_PHANTOM_DIST", "0.40"))
 # Сколько embedding'ов на локального спикера передаёт transcribe_chunk
 # оркестратору. Несколько векторов (вместо одного центроида) делают
 # average-linkage устойчивее к шумным сегментам (overlap, телефонное сжатие).
@@ -1176,6 +1186,7 @@ def _cluster_speaker_embeddings(
     vec_groups: list[list[list[float]]],
     num_speakers: int | None,
     threshold: float,
+    phantom_dist: float = GLOBAL_SPK_PHANTOM_DIST,
 ) -> list[int]:
     """Агломеративная кластеризация локальных спикеров между чанками
     с cannot-link констрейнтом. Возвращает cluster_id для каждого элемента.
@@ -1183,16 +1194,17 @@ def _cluster_speaker_embeddings(
     chunk_ids[i]  — индекс чанка, из которого пришёл локальный спикер i.
     vec_groups[i] — его embedding'и (1+ векторов; нормализуются здесь).
 
-    Cannot-link: два локальных спикера ОДНОГО чанка — заведомо разные люди
+    Cannot-link: два локальных спикера ОДНОГО чанка — обычно разные люди
     (pyannote разделил их, слыша обоих в общем контексте) — их кластеры не
-    сливаются никогда. Это структурно блокирует склейку похожих голосов
-    (старый фейл на звонках 1-на-1, где оба спикера есть в каждом чанке)
-    и позволяет держать порог выше — лечит дубли одного человека на швах
-    чанков (ISS-8). Linkage: average по всем парам векторов двух кластеров.
+    сливаются. Это структурно блокирует склейку похожих голосов (старый фейл
+    на звонках 1-на-1, где оба спикера есть в каждом чанке). ИСКЛЮЧЕНИЕ
+    (phantom_dist): если одночанковая пара ближе phantom_dist — это не два
+    человека, а pyannote over-сегментировал один голос; такие сливаем, иначе
+    в auto-режиме фантомы плодят лишних глобальных спикеров (2 → 5).
+    Linkage: average по всем парам векторов двух кластеров.
 
-    При заданном num_speakers сливаем до k, игнорируя порог; если
-    cannot-link не даёт дойти до k (фантомный локальный спикер в чанке),
-    наименьшие кластеры вливаются в ближайший принудительно.
+    При заданном num_speakers сливаем до k; если cannot-link не даёт дойти
+    до k, наименьшие кластеры вливаются в ближайший принудительно.
     """
     import numpy as np
 
@@ -1202,20 +1214,21 @@ def _cluster_speaker_embeddings(
     if n == 1:
         return [0]
 
-    mats = []
+    # Центроид каждого локального спикера: среднее его L2-нормированных
+    # векторов, затем снова нормируем. Усреднение гасит шум отдельных
+    # сегментов (overlap, короткие реплики, телефонное сжатие) — иначе
+    # average-linkage по всем шумным парам раздувал расстояние «тот же
+    # человек на разных чанках» выше порога → дубли на швах (regression).
+    cents = []
     for g in vec_groups:
         m = np.asarray(g, dtype="float64")
         m = m / np.clip(np.linalg.norm(m, axis=1, keepdims=True), 1e-8, None)
-        mats.append(m)
-
-    # Парные расстояния элементов: средняя cosine-дистанция всех пар векторов
-    big = np.vstack(mats)
-    owners = np.repeat(np.arange(n), [m.shape[0] for m in mats])
-    dist = 1.0 - big @ big.T
-    D = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            D[i, j] = D[j, i] = float(dist[np.ix_(owners == i, owners == j)].mean())
+        c = m.mean(axis=0)
+        c = c / max(float(np.linalg.norm(c)), 1e-8)
+        cents.append(c)
+    C = np.vstack(cents)
+    D = 1.0 - (C @ C.T)
+    np.fill_diagonal(D, 0.0)
 
     clusters: list[set[int]] = [{i} for i in range(n)]
     chunksets: list[set[int]] = [{chunk_ids[i]} for i in range(n)]
@@ -1228,9 +1241,9 @@ def _cluster_speaker_embeddings(
         best = (None, None, float("inf"))
         for a in range(len(clusters)):
             for b in range(a + 1, len(clusters)):
-                if chunksets[a] & chunksets[b]:
-                    continue  # cannot-link: общий чанк
                 d = cdist(a, b)
+                if chunksets[a] & chunksets[b] and d >= phantom_dist:
+                    continue  # cannot-link: общий чанк И не явный фантом
                 if d < best[2]:
                     best = (a, b, d)
         return best

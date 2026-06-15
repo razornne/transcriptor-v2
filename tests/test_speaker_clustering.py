@@ -31,20 +31,40 @@ def _groups_equal(labels: list[int], idx_a: list[int], idx_b: list[int]) -> bool
 
 
 def test_cannot_link_blocks_similar_voices():
-    """Звонок 1-на-1, голоса похожи: cosine dist между спикерами ~0.37 — ниже
-    порога 0.68, БЕЗ cannot-link их бы склеило в одного (старый фейл).
+    """Звонок 1-на-1, голоса похожи: cosine dist между спикерами ~0.63 —
+    ниже порога 0.68, БЕЗ cannot-link их бы склеило в одного (старый фейл),
+    но выше phantom_dist (0.40) → это два РАЗНЫХ человека, не фантом.
     Оба спикера есть в каждом чанке → cannot-link держит их раздельно."""
-    # A под углом 0°, B под углом ~52° → cos 52° ≈ 0.62 → dist ≈ 0.38
+    # A под углом 0°, B под углом 68° → cos 68° ≈ 0.37 → dist ≈ 0.63
     chunk_ids, groups = [], []
     for chunk in range(3):
         chunk_ids.append(chunk)
         groups.append([_unit(0, wobble_deg=2 * chunk)])      # A_chunk
         chunk_ids.append(chunk)
-        groups.append([_unit(52, wobble_deg=-2 * chunk)])    # B_chunk
+        groups.append([_unit(68, wobble_deg=-2 * chunk)])    # B_chunk
     labels = _cluster_speaker_embeddings(chunk_ids, groups, None, GLOBAL_SPK_THRESHOLD)
     a_idx = [0, 2, 4]
     b_idx = [1, 3, 5]
     assert _groups_equal(labels, a_idx, b_idx), f"labels={labels}"
+
+
+def test_auto_mode_absorbs_intra_chunk_phantom():
+    """REGRESSION (звонок 1.5ч, 2 спикера → выдавало 5). В auto-режиме
+    (num_speakers=None) pyannote over-сегментировал один голос в чанке на
+    два локальных «спикера». Раньше cannot-link навсегда оставлял фантом
+    отдельным глобальным спикером (force-merge фаза при auto не работает).
+    phantom_dist escape сливает явный фантом (тот же голос) обратно."""
+    chunk_ids, groups = [], []
+    # 3 чанка, 2 реальных спикера: A=0°, B=70° (dist 0.66 — разные)
+    for chunk in range(3):
+        chunk_ids.append(chunk); groups.append([_unit(0, 1.5 * chunk)])    # A_chunk
+        chunk_ids.append(chunk); groups.append([_unit(70, -1.5 * chunk)])  # B_chunk
+    # в чанке 2 — фантом A (over-сегментация, 5° от A → dist ~0.004)
+    chunk_ids.append(2); groups.append([_unit(5)])                          # phantom of A
+    labels = _cluster_speaker_embeddings(chunk_ids, groups, None, GLOBAL_SPK_THRESHOLD)
+    assert len(set(labels)) == 2, f"phantom not absorbed (got {len(set(labels))} speakers): {labels}"
+    assert labels[6] == labels[0], f"phantom (idx6) not merged into A (idx0): {labels}"
+    assert labels[1] == labels[3] == labels[5], f"B split: {labels}"
 
 
 def test_seam_duplicate_merged():
