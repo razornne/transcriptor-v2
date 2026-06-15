@@ -581,7 +581,6 @@ export function ResultView({
               {notionSent ? "Sent!" : notionSending ? "Sending…" : "Notion"}
             </button>
           )}
-          <button type="button" className="i-tbtn" onClick={downloadTxt}>.txt</button>
           <button type="button" className="i-tbtn" onClick={downloadMd}>.md</button>
           <button type="button" className="i-tbtn" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button>
         </div>
