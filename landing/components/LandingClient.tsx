@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { COPY, DEFAULT_HEADLINE, HEADLINES, type Lang } from "@/lib/content";
 import { useReveal } from "@/lib/hooks";
+import { DotField } from "@/components/ink/DotField";
 import { Nav } from "./Nav";
 import { Hero } from "./Hero";
 import { Social } from "./Social";
@@ -15,7 +16,6 @@ import { Footer } from "./Footer";
 export function LandingClient() {
   const [lang, setLang] = useState<Lang>("en");
 
-  // Sync `data-lang` на <html> для CSS-свапа шрифтов (UA→Unbounded).
   useEffect(() => {
     const saved = (localStorage.getItem("skriptly-lang") as Lang | null) || "en";
     setLang(saved);
@@ -37,6 +37,8 @@ export function LandingClient() {
 
   return (
     <>
+      {/* Ambient dot field — position:fixed, viewport-only, z-index:0 */}
+      <DotField mode="live" />
       <Nav t={t} lang={lang} setLang={changeLang} />
       <Hero t={t} headlineLines={headlineLines} />
       <Social t={t} />
