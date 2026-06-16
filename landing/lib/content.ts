@@ -69,6 +69,23 @@ export type Copy = {
   };
   final: { title: string[]; ctaPrimary: string; ctaSecondary: string; fine: string };
   foot: { links: string[]; copy: string };
+  useCases: {
+    eyebrow: string;
+    title: string;
+    sub: string;
+    tabs: Array<{
+      label: string;
+      headline: string;
+      points: string[];
+      quote: string;
+      author: string;
+    }>;
+  };
+  faq: {
+    eyebrow: string;
+    title: string;
+    items: Array<{ q: string; a: string }>;
+  };
   mock: {
     url: string;
     eyebrow: string;
@@ -234,6 +251,90 @@ export const COPY: Record<Lang, Copy> = {
       links: ["Features", "Pricing", "App", "Privacy", "Terms"],
       copy: "© 2026 Skriptly · Built in Kyiv",
     },
+    useCases: {
+      eyebrow: "Who uses it",
+      title: "One tool, every context.",
+      sub: "Transcript + speaker attribution + AI synthesis — no matter what you record.",
+      tabs: [
+        {
+          label: "Founders",
+          headline: "Every investor call, customer interview, and team standup — searchable.",
+          points: [
+            "Capture investor questions verbatim — no paraphrasing from memory",
+            "Find every mention of a specific pain point across customer calls",
+            "Know who committed to what in the last all-hands",
+          ],
+          quote: "I used to miss half the call while taking notes. Now I'm fully present.",
+          author: "CTO, B2B SaaS startup",
+        },
+        {
+          label: "Researchers",
+          headline: "Interviews transcribed. Participants named. Patterns findable.",
+          points: [
+            "Every session verbatim with per-speaker attribution",
+            "Search across 40 interviews for a specific phrase",
+            "Export clean Markdown for NVivo or direct quoting",
+          ],
+          quote: "I transcribed a month of fieldwork in one afternoon.",
+          author: "UX Researcher, design agency",
+        },
+        {
+          label: "Students",
+          headline: "Lectures, seminars, and study groups — word for word.",
+          points: [
+            "Record lectures and get a searchable transcript instead of notes",
+            "Each voice in a group discussion attributed automatically",
+            "Zero data retention — recordings never leave your session",
+          ],
+          quote: "I stopped missing things while writing. The transcript gets everything.",
+          author: "Graduate student, linguistics",
+        },
+        {
+          label: "Journalists",
+          headline: "Source interviews quoted accurately, attributed correctly.",
+          points: [
+            "Verbatim quotes ready to paste — no re-listening",
+            "Speaker labels survive even noisy phone recordings",
+            "Audio deleted after processing — no storage liability",
+          ],
+          quote: "I can cite a 90-minute interview in minutes, not hours.",
+          author: "Investigative reporter, national paper",
+        },
+        {
+          label: "Teams",
+          headline: "Shared workspace. Every call, every voice, on record.",
+          points: [
+            "Shared transcript library across the whole team",
+            "Full-text search across all team calls by speaker or topic",
+            "Per-user billing, one invoice — no seat minimums",
+          ],
+          quote: "We stopped asking 'wait, what did we decide on that?'",
+          author: "Head of Product, 12-person startup",
+        },
+      ],
+    },
+    faq: {
+      eyebrow: "FAQ",
+      title: "Common questions.",
+      items: [
+        {
+          q: "Is my audio stored anywhere?",
+          a: "No. Audio is processed in-memory on our GPU server and deleted within the same request. We have no recording storage — by design. We also don't use your audio for model training.",
+        },
+        {
+          q: "Which languages are supported?",
+          a: "Polish, English, Ukrainian, and Russian — all at strong accuracy. The model is Whisper large-v3-turbo with an additional AI correction pass that learns your domain terminology. Language is auto-detected per recording.",
+        },
+        {
+          q: "How accurate is the transcription?",
+          a: "Very accurate for clear audio — comparable to professional transcription services. Accuracy depends on audio quality, accents, and speaker overlap. The AI correction layer further improves proper nouns, abbreviations, and domain terms specific to you.",
+        },
+        {
+          q: "How do I cancel my subscription?",
+          a: "From the app: Settings → Subscription → Cancel. Cancellation takes effect at the end of the current billing period. No questions asked, no cancellation fee.",
+        },
+      ],
+    },
     mock: {
       url: "skriptly.io/app/c/k3p2-1a",
       eyebrow: "Live transcript",
@@ -332,6 +433,90 @@ export const COPY: Record<Lang, Copy> = {
     foot: {
       links: ["Можливості", "Тарифи", "Застосунок", "Приватність", "Умови"],
       copy: "© 2026 Skriptly · Зроблено в Києві",
+    },
+    useCases: {
+      eyebrow: "Хто користується",
+      title: "Один інструмент — будь-який контекст.",
+      sub: "Транскрипт + атрибуція спікерів + AI-синтез — незалежно від того, що ти записуєш.",
+      tabs: [
+        {
+          label: "Засновники",
+          headline: "Кожен дзвінок з інвестором, інтерв'ю з клієнтом та стендап — у пошуку.",
+          points: [
+            "Точні цитати інвесторів — без переказу по пам'яті",
+            "Знайди кожне згадування конкретного болю в записах клієнтів",
+            "Хто що пообіцяв на останньому all-hands — одразу видно",
+          ],
+          quote: "Я пропускав половину дзвінка, роблячи нотатки. Тепер я повністю присутній.",
+          author: "CTO, B2B SaaS-стартап",
+        },
+        {
+          label: "Дослідники",
+          headline: "Інтерв'ю розшифровані. Учасники підписані. Паттерни знаходяться.",
+          points: [
+            "Кожна сесія дослівно з атрибуцією по спікерах",
+            "Пошук по 40 інтерв'ю за конкретною фразою",
+            "Чистий Markdown для NVivo або прямих цитат",
+          ],
+          quote: "Я розшифрував місяць польової роботи за один вечір.",
+          author: "UX-дослідник, дизайн-агенція",
+        },
+        {
+          label: "Студенти",
+          headline: "Лекції, семінари та навчальні групи — слово в слово.",
+          points: [
+            "Запиши лекцію й отримай пошуковий транскрипт замість нотаток",
+            "Голоси в груповій дискусії атрибутуються автоматично",
+            "Нульове збереження — записи не виходять за межі сесії",
+          ],
+          quote: "Я перестав пропускати слова під час писання. Транскрипт фіксує все.",
+          author: "Аспірант, лінгвістика",
+        },
+        {
+          label: "Журналісти",
+          headline: "Цитати з джерел — дослівні та правильно атрибутовані.",
+          points: [
+            "Готові цитати для вставки — без переслуховування",
+            "Підписи спікерів збережуться навіть у шумних телефонних записах",
+            "Аудіо видаляється після обробки — жодних ризиків зберігання",
+          ],
+          quote: "Я можу процитувати 90-хвилинне інтерв'ю за хвилини, не за години.",
+          author: "Розслідувач, національне видання",
+        },
+        {
+          label: "Команди",
+          headline: "Спільний простір. Кожен дзвінок, кожен голос — зафіксований.",
+          points: [
+            "Спільна бібліотека транскриптів для всієї команди",
+            "Повнотекстовий пошук по всіх командних дзвінках за спікером чи темою",
+            "Білінг по користувачах, один рахунок — без мінімальних місць",
+          ],
+          quote: "Ми перестали питати «а що ми вирішили з тим питанням?»",
+          author: "Head of Product, стартап 12 людей",
+        },
+      ],
+    },
+    faq: {
+      eyebrow: "FAQ",
+      title: "Часті запитання.",
+      items: [
+        {
+          q: "Чи зберігається моє аудіо?",
+          a: "Ні. Аудіо обробляється в пам'яті на GPU-сервері та видаляється в межах того самого запиту. Ми не маємо сховища записів — це принциповий вибір. Також не використовуємо твоє аудіо для навчання моделей.",
+        },
+        {
+          q: "Які мови підтримуються?",
+          a: "Польська, англійська, українська та російська — з високою точністю. Модель — Whisper large-v3-turbo з додатковим проходом AI-корекції, що вчить твою доменну лексику. Мова визначається автоматично для кожного запису.",
+        },
+        {
+          q: "Наскільки точна транскрипція?",
+          a: "Дуже точна для чіткого аудіо — порівняно з професійними сервісами. Точність залежить від якості звуку, акцентів і перекриттів спікерів. Шар AI-корекції додатково покращує власні назви, абревіатури та доменні терміни.",
+        },
+        {
+          q: "Як скасувати підписку?",
+          a: "З застосунку: Налаштування → Підписка → Скасувати. Набирає чинності наприкінці поточного розрахункового періоду. Без питань, без комісії за скасування.",
+        },
+      ],
     },
     mock: {
       url: "skriptly.io/app/c/k3p2-1a",

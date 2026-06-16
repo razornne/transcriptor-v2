@@ -16,7 +16,7 @@ export function Features({ t }: { t: Copy }) {
               className={"feature-card reveal" + (f.accent ? " accent" : "")}
               style={{ transitionDelay: `${(i % 3) * 60}ms` }}
             >
-              <span className="ico">{f.tag}</span>
+              <span className="ico" aria-hidden="true">{f.tag}</span>
               <h3>{f.h}</h3>
               <p>{f.p}</p>
             </article>

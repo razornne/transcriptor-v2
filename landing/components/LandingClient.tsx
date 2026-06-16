@@ -9,7 +9,9 @@ import { Social } from "./Social";
 import { HowItWorks } from "./HowItWorks";
 import { Features } from "./Features";
 import { Breakout } from "./Breakout";
+import { UseCases } from "./UseCases";
 import { Pricing } from "./Pricing";
+import { FAQ } from "./FAQ";
 import { FinalCTA } from "./FinalCTA";
 import { Footer } from "./Footer";
 
@@ -45,7 +47,9 @@ export function LandingClient() {
       <HowItWorks t={t} />
       <Features t={t} />
       <Breakout t={t} />
+      <UseCases t={t} />
       <Pricing t={t} />
+      <FAQ t={t} />
       <FinalCTA t={t} />
       <Footer t={t} lang={lang} setLang={changeLang} />
     </>
