@@ -1,71 +1,67 @@
 import type { Copy } from "@/lib/content";
 
-// Каждая иллюстрация — кусочек реального UI продукта, не иконка.
 function StepArt({ idx }: { idx: number }) {
   if (idx === 0) {
     return (
-      <div className="step-art" style={{ padding: 18, display: "grid", alignContent: "center", justifyItems: "center", gap: 10 }}>
-        <div
-          style={{
-            fontFamily: "var(--mono)", fontSize: 12, color: "var(--muted)",
-            background: "var(--card-bg)", padding: "6px 10px",
-            borderRadius: 8, border: "1px solid var(--hairline)",
-          }}
-        >https://skriptly.io/app</div>
-        <div
-          style={{
-            width: "82%", height: 8, borderRadius: 4,
-            background: "linear-gradient(to right, var(--cta) 60%, var(--hairline) 60%)",
-          }}
-        />
-        <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--faint)", letterSpacing: ".08em" }}>
-          LOADING APP · 0.4S
+      <div className="step-art" style={{ padding: 20, display: "grid", alignContent: "center", justifyItems: "center", gap: 10 }}>
+        <div style={{
+          fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--graphite)",
+          background: "var(--paper)", padding: "6px 12px",
+          borderRadius: 8, border: "1px solid var(--hairline)",
+          letterSpacing: "0.02em",
+        }}>
+          skriptly.io/app
+        </div>
+        <div style={{
+          width: "80%", height: 6, borderRadius: 3,
+          background: `linear-gradient(to right, var(--accent) 60%, var(--hairline) 60%)`,
+        }} />
+        <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--graphite)", letterSpacing: ".1em", textTransform: "uppercase" }}>
+          Loading · 0.4s
         </div>
       </div>
     );
   }
   if (idx === 1) {
+    const bars = [10, 18, 24, 14, 28, 20, 12, 24, 16, 28, 18, 10];
     return (
-      <div className="step-art" style={{ padding: 18, display: "grid", alignContent: "center", justifyItems: "center", gap: 12 }}>
-        <div
-          style={{
-            width: 56, height: 56, borderRadius: "50%",
-            background: "var(--cta)", color: "white",
-            display: "grid", placeItems: "center",
-            boxShadow: "0 0 0 8px rgba(63,101,221,0.18), 0 0 0 18px rgba(63,101,221,0.08)",
-            fontFamily: "var(--mono)", fontWeight: 600, fontSize: 22,
-          }}
-        >●</div>
-        <div style={{ display: "flex", gap: 3, alignItems: "end", height: 28 }}>
-          {[10, 18, 24, 14, 26, 20, 12, 22, 16, 28, 18, 10].map((h, i) => (
-            <span key={i} style={{ width: 4, height: h, borderRadius: 2, background: "var(--ink-2)" }} />
+      <div className="step-art" style={{ padding: 20, display: "grid", alignContent: "center", justifyItems: "center", gap: 14 }}>
+        <div style={{
+          width: 52, height: 52, borderRadius: "50%",
+          background: "var(--accent)", color: "white",
+          display: "grid", placeItems: "center",
+          boxShadow: "0 0 0 8px var(--ring)",
+          fontFamily: "var(--mono)", fontWeight: 600, fontSize: 20,
+        }}>●</div>
+        <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 28 }}>
+          {bars.map((h, i) => (
+            <span key={i} style={{ width: 4, height: h, borderRadius: 2, background: "var(--hairline)" }} />
           ))}
         </div>
-        <div style={{ fontFamily: "var(--mono)", fontSize: 10.5, color: "var(--faint)", letterSpacing: ".08em" }}>
-          MIC · TAB AUDIO
+        <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--graphite)", letterSpacing: ".1em", textTransform: "uppercase" }}>
+          Mic · Tab audio
         </div>
       </div>
     );
   }
   return (
-    <div className="step-art" style={{ padding: 18, display: "grid", alignContent: "center", gap: 10 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "20px 1fr", gap: 8, alignItems: "start" }}>
-        <span style={{ width: 16, height: 16, borderRadius: "50%", background: "var(--speaker-1)", display: "inline-block", marginTop: 2 }} />
-        <div style={{ height: 6, borderRadius: 3, background: "var(--ink-2)", width: "85%" }} />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "20px 1fr", gap: 8, alignItems: "start" }}>
-        <span style={{ width: 16, height: 16, borderRadius: "50%", background: "var(--speaker-2)", display: "inline-block", marginTop: 2 }} />
-        <div style={{ display: "grid", gap: 4 }}>
-          <div style={{ height: 6, borderRadius: 3, background: "var(--ink-2)", width: "92%" }} />
-          <div style={{ height: 6, borderRadius: 3, background: "var(--ink-2)", width: "70%" }} />
+    <div className="step-art" style={{ padding: 20, display: "grid", alignContent: "center", gap: 10 }}>
+      {[
+        { color: "var(--spk-1)", widths: ["82%"] },
+        { color: "var(--spk-2)", widths: ["92%", "70%"] },
+      ].map((spk, si) => (
+        <div key={si} style={{ display: "grid", gridTemplateColumns: "18px 1fr", gap: 8, alignItems: "start" }}>
+          <span style={{ width: 14, height: 14, borderRadius: "50%", background: spk.color, display: "inline-block", marginTop: 3 }} />
+          <div style={{ display: "grid", gap: 5 }}>
+            {spk.widths.map((w, wi) => (
+              <div key={wi} style={{ height: 6, borderRadius: 3, background: "var(--hairline)", width: w }} />
+            ))}
+          </div>
         </div>
+      ))}
+      <div style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 10, color: "var(--accent)", letterSpacing: ".08em", textTransform: "uppercase" }}>
+        ✓ Summary ready · Markdown ↓
       </div>
-      <div
-        style={{
-          marginTop: 4, fontFamily: "var(--mono)", fontSize: 10.5,
-          color: "var(--cta)", letterSpacing: ".08em",
-        }}
-      >✓ SUMMARY READY · MARKDOWN ↓</div>
     </div>
   );
 }

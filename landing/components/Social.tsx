@@ -1,30 +1,38 @@
 import type { Copy } from "@/lib/content";
 
+const STATS_EN = [
+  { label: "Languages", value: "PL · EN · UA · RU", live: false },
+  { label: "Retention", value: "0 seconds", live: false },
+  { label: "Processing", value: "GPU-hosted", live: true },
+  { label: "Install", value: "None required", live: false },
+  { label: "Export", value: "Markdown / .txt", live: false },
+  { label: "Speaker ID", value: "Automatic", live: false },
+];
+
+const STATS_UA = [
+  { label: "Мови", value: "PL · EN · UA · RU", live: false },
+  { label: "Збереження", value: "0 секунд", live: false },
+  { label: "Обробка", value: "GPU-сервер", live: true },
+  { label: "Встановлення", value: "Не потрібне", live: false },
+  { label: "Експорт", value: "Markdown / .txt", live: false },
+  { label: "Спікери", value: "Автоматично", live: false },
+];
+
 export function Social({ t }: { t: Copy }) {
-  const dots = ["#C8513B", "#4F7A4A", "#3F65DD", "#B89357", "#7C5BAF"];
+  // Use UA stats when the copy language looks Ukrainian
+  const stats = t.hero.eyebrow.includes("сервер") ? STATS_UA : STATS_EN;
   return (
-    <section className="social">
-      <div className="wrap social-inner reveal">
-        <blockquote>
-          <span className="q">{t.social.quote}</span>
-          <cite>{t.social.cite}</cite>
-        </blockquote>
-        <div style={{ display: "flex", gap: 18, alignItems: "center", color: "var(--muted)", fontSize: 13 }}>
-          <span className="eyebrow">{t.social.firstUsers}</span>
-          <span style={{ display: "inline-flex" }}>
-            {dots.map((c, i) => (
-              <span
-                key={i}
-                style={{
-                  width: 32, height: 32, borderRadius: "50%",
-                  background: c, border: "2px solid var(--ground)",
-                  marginLeft: i === 0 ? 0 : -10,
-                }}
-              />
-            ))}
-          </span>
+    <div className="trust-bar">
+      <div className="wrap">
+        <div className="trust-inner">
+          {stats.map((s, i) => (
+            <div className="trust-stat" key={i}>
+              {s.live && <span className="trust-live" aria-hidden="true" />}
+              <span>{s.label} <strong>{s.value}</strong></span>
+            </div>
+          ))}
         </div>
       </div>
-    </section>
+    </div>
   );
 }

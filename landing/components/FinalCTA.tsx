@@ -4,9 +4,19 @@ export function FinalCTA({ t }: { t: Copy }) {
   return (
     <section className="final" id="start">
       <div className="wrap reveal">
-        <h2 className="display xxxl">
+        <h2 className="final-headline">
           {t.final.title.map((ln, i) => (
-            <span key={i} style={{ display: "block" }}>{ln}</span>
+            <span
+              key={i}
+              style={{ display: "block" }}
+              className={
+                i === t.final.title.length - 1
+                  ? "display xxxl editorial"
+                  : "display xxxl"
+              }
+            >
+              {ln}
+            </span>
           ))}
         </h2>
         <div className="ctas">
