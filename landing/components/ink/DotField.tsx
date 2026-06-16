@@ -100,7 +100,11 @@ function cloud(x: number, y: number, t: number): number {
 
 const DotFieldInner = forwardRef<
   DotFieldHandle,
-  { anchorRef: React.RefObject<HTMLDivElement | null>; mode?: DotMode; processing?: boolean }
+  {
+    anchorRef?: React.RefObject<HTMLDivElement | null>;
+    mode?: DotMode;
+    processing?: boolean;
+  }
 >(function DotFieldInner({ anchorRef, mode = "live", processing = false }, ref) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wavesRef = useRef<Wave[]>([]);
@@ -162,8 +166,6 @@ const DotFieldInner = forwardRef<
     };
 
     function rebuild() {
-      const anchor = anchorRef.current;
-      if (!anchor) return;
       const wr = wrap!.getBoundingClientRect();   // = вьюпорт (fixed inset:0)
       vw = wr.width; vh = wr.height;
       const dpr = window.devicePixelRatio || 1;
@@ -171,17 +173,20 @@ const DotFieldInner = forwardRef<
       canvas!.height = Math.max(1, Math.round(vh * dpr));
       ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      // anchor (заголовок + карточка) в координатах вьюпорта
-      const cr = anchor.getBoundingClientRect();
-      const cx = (cr.left + cr.right) / 2;
-      const cy = (cr.top + cr.bottom) / 2;
-      const halfW = cr.width / 2, halfH = cr.height / 2;
+      const anchor = anchorRef?.current ?? null;
+      const ambient = !anchor;  // ambient mode: no anchor → dots fill entire viewport
+
+      let cx: number, cy: number, halfW: number, halfH: number;
+      if (ambient) {
+        cx = vw / 2; cy = vh / 2;
+        halfW = vw / 2; halfH = vh / 2;
+      } else {
+        const cr = anchor!.getBoundingClientRect();
+        cx = (cr.left + cr.right) / 2;
+        cy = (cr.top + cr.bottom) / 2;
+        halfW = cr.width / 2; halfH = cr.height / 2;
+      }
       centerX = cx; centerY = cy;
-      // эллипс safety-маски — ТЕСНЫЙ органичный край вокруг контента
-      // (аддитивный отступ, не множитель — иначе высокий stage раздувает
-      // эллипс на полэкрана и облако вырождается в тонкие поля по краям).
-      // Углы карточки добивает rectMask ниже, так что эллипс может не
-      // охватывать прямоугольник целиком.
       const rx = halfW + 56;
       const ry = halfH + 44;
 
@@ -191,16 +196,20 @@ const DotFieldInner = forwardRef<
       dots = [];
       for (let y = spacing / 2; y < vh; y += spacing) {
         for (let x = spacing / 2; x < vw; x += spacing) {
-          // эллиптическая маска: 0 внутри (er<0.80), плавно до 1 (er>1.15)
-          const ex = (x - cx) / rx, ey = (y - cy) / ry;
-          const er = Math.hypot(ex, ey);
-          const ellipse = smoothstep(0.85, 1.0, er);
-          // жёсткая rounded-rect очистка строго по anchor — гарантия, что
-          // карточка и буквы заголовка чисты (0 внутри, 1 за 22px снаружи)
-          const dRect = sdfRoundRect(x, y, cx, cy, halfW, halfH, CARD_RADIUS);
-          const rectMask = smoothstep(0, 22, dRect);
-          const mask = Math.min(ellipse, rectMask);
-          if (mask < 0.01) continue;            // под контентом — точки нет
+          let mask: number;
+          if (ambient) {
+            // ambient mode: все точки видны, без маскирования
+            mask = 1;
+          } else {
+            // anchored mode: эллиптическая + rounded-rect маска вокруг контента
+            const ex = (x - cx) / rx, ey = (y - cy) / ry;
+            const er = Math.hypot(ex, ey);
+            const ellipse = smoothstep(0.85, 1.0, er);
+            const dRect = sdfRoundRect(x, y, cx, cy, halfW, halfH, CARD_RADIUS);
+            const rectMask = smoothstep(0, 22, dRect);
+            mask = Math.min(ellipse, rectMask);
+          }
+          if (mask < 0.01) continue;
           dots.push({ x, y, mask, dc: Math.hypot(x - cx, y - cy) });
         }
       }
@@ -327,7 +336,7 @@ const DotFieldInner = forwardRef<
 
     const ro = new ResizeObserver(rebuild);
     ro.observe(wrap);
-    if (anchorRef.current) ro.observe(anchorRef.current);
+    if (anchorRef?.current) ro.observe(anchorRef.current);
 
     const mo = new MutationObserver(() => render(performance.now()));
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
