@@ -1,27 +1,31 @@
 "use client";
 import type { Copy } from "@/lib/content";
-import { useParallax } from "@/lib/hooks";
 import { AppMock } from "./AppMock";
 
 export function Hero({ t, headlineLines }: { t: Copy; headlineLines: string[] }) {
-  // Параллакс light-blobs за курсором (направления + амплитуды).
-  useParallax(".hero-light .lite", [22, -26, 34]);
-
   return (
     <section className="hero" id="top">
-      <div className="hero-light" aria-hidden="true">
-        <span className="lite lite-1" />
-        <span className="lite lite-2" />
-        <span className="lite lite-3" />
-      </div>
       <div className="wrap">
         <div className="hero-shell">
           <div className="hero-inner">
             <div className="hero-copy">
-              <span className="eyebrow hero-entrance">{t.hero.eyebrow}</span>
-              <h1 className="display xxxl hero-headline hero-entrance">
+              <span className="eyebrow hero-entrance">
+                <span className="rec-dot live" aria-hidden="true" />
+                {t.hero.eyebrow}
+              </span>
+              <h1 className="hero-headline hero-entrance">
                 {headlineLines.map((ln, i) => (
-                  <span key={i} style={{ display: "block" }}>{ln}</span>
+                  <span
+                    key={i}
+                    style={{ display: "block" }}
+                    className={
+                      i === headlineLines.length - 1
+                        ? "display xxxl editorial"
+                        : "display xxxl"
+                    }
+                  >
+                    {ln}
+                  </span>
                 ))}
               </h1>
               <p className="lede hero-sub hero-entrance">{t.hero.sub}</p>
@@ -37,9 +41,7 @@ export function Hero({ t, headlineLines }: { t: Copy; headlineLines: string[] })
             </div>
 
             <div className="hero-visual hero-entrance" style={{ position: "relative" }}>
-              <div className="mock-frame glass">
-                <AppMock mock={t.mock} animate />
-              </div>
+              <AppMock mock={t.mock} animate />
               <div className="mock-chip">
                 <span className="ico">∑</span>
                 <span>{t.mock.chip}</span>
