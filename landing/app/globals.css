@@ -1109,5 +1109,6 @@ section.s { padding: clamp(64px, 6.5vw, 96px) 0; }
   .faq-body { transition: none; }
   .faq-icon { transition: none; }
   .uc-panel { animation: none; }
+  .uc-quote-card { transition: none; transform: none !important; }
   .trust-live { animation: none; }
 }

@@ -1,9 +1,46 @@
-# Skriptly — Current Design (v1 `/app`)
+# Skriptly — Current Design
 
-> Полное описание текущего production-интерфейса Skriptly: дизайн, все функции,
-> UI/UX. Источник правды — `templates/index.html` (single-file, ~5400 строк,
-> CSS+JS inline). Этот документ — спутник к `docs/DESIGN_V2.md` (целевой
-> редизайн). Дата: 2026-05-30.
+> Дата последнего обновления: 2026-06-16 (Sprint 12 — лендинг пересобран).
+> Описывает оба production-интерфейса: лендинг (`/`) и Studio (`/app`).
+> Они разделяют единую систему дизайн-токенов Ink & Halftone.
+> `docs/DESIGN_V2.md` — архивирован (заменён текущим дизайном).
+
+---
+
+## 0. Дизайн-система: Ink & Halftone (общая для лендинга и Studio)
+
+С Sprint 12 (2026-06-16) лендинг (`/`) и приложение (`/app`) работают на **единых
+дизайн-токенах**, определённых в `landing/app/globals.css`.
+
+### Shared CSS-токены (`:root`)
+| Токен | Light | Dark | Назначение |
+|---|---|---|---|
+| `--paper` | `#F6F4EE` | `#100F0C` | фон страницы |
+| `--surface` | `#FCFBF8` | `#181613` | карточки, поверхности |
+| `--ink` | `#14120E` | `#F2EFE7` | основной текст |
+| `--graphite` | `#6B6557` | `#A29B8B` | вторичный текст |
+| `--hairline` | `#E4DFD2` | `#2A2722` | рамки, разделители |
+| `--accent` | `#2740E6` (Klein blue) | `#5B6CFF` | CTA, акцент |
+| `--signal` | `#D9482B` (cinnabar) | `#F0593A` | REC dot, danger |
+| `--on-accent` | `#F6F4EE` | `#0E0D0A` | текст на акцентном фоне |
+| `--ring` | `rgba(39,64,230,.16)` | `rgba(91,108,255,.22)` | фокус-кольцо |
+| `--spk-1..4` | accent/terracotta/violet/teal | (dark variants) | цвета спикеров |
+
+### Shared типо-токены
+| Токен | Значение | Использование |
+|---|---|---|
+| `--display` | Bricolage Grotesque | заголовки (hero, секции) |
+| `--editorial` | Instrument Serif italic | редакционные акценты (последняя строка hero/cta) |
+| `--ui` | Manrope | body, кнопки, UI |
+| `--mono` | JetBrains Mono | таймстемпы, статусы, tech-лейблы |
+
+### Где живут стили
+- **Лендинг (`/`):** `landing/app/globals.css` — все секции под bare CSS-классами
+  (`.trust-bar`, `.feature-card`, `.inapp-mock`, `.uc-*`, `.faq-*`, `.final`, `.foot`)
+- **Studio (`/app`):** `landing/app/app/ink.css` — все стили под `.i-*` namespace.
+  Импортирует те же `:root` переменные из `globals.css`.
+
+---
 
 ---
 
@@ -267,4 +304,4 @@ search, `?` shortcuts, Esc закрыть оверлеи. (Глобальный 
 - Транскрипт — строки, не chat-bubbles; визуально менее «премиум».
 - Settings — функционально полный, но не такой структурный как в мокапах v2.
 
-→ Всё это адресуется в `docs/DESIGN_V2.md`.
+→ Всё это адресовано в Ink & Halftone Studio (`/app`), которое является production-версией с 2026-06-14. `docs/DESIGN_V2.md` архивирован.

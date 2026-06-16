@@ -1,10 +1,11 @@
-# /v2 Parity Roadmap — Ink & Halftone до 100% паритета с /app
+# /v2 Parity Roadmap — ✅ HISTORICAL (Cutover complete 2026-06-14)
 
-> Автор: архитектурная сессия 2026-06-12 (оркестратор). Исполнитель: Sonnet,
-> по одному спринту за сессию. Канонический бэклог редизайна. Связан с MYK-14.
-> Перед стартом спринта: прочитать CLAUDE.md (секции «Studio v2 → Ink»,
-> Workflow, gotchas) + этот файл. НЕ трогать templates/index.html и modal_app.py
-> без явного указания.
+> **Статус: Завершено.** Все спринты 1–7 выполнены. Cutover 2026-06-14 переключил
+> `/app` с `templates/index.html` (legacy) на Ink & Halftone Studio (`landing/app/app/`).
+> Sprint 12 (2026-06-16): лендинг (`/`) полностью пересобран под Ink & Halftone дизайн
+> — общие токены `--paper/--ink/--accent` + Bricolage/Instrument Serif editorial pair.
+> Этот файл сохранён как архивный бэклог для истории решений. **Не использовать как
+> активный план.** Связан с MYK-14 (закрыт).
 
 ---
 

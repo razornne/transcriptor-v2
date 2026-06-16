@@ -36,6 +36,45 @@ export const viewport: Viewport = {
   ],
 };
 
+const faqJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: [
+    {
+      "@type": "Question",
+      name: "Is my audio stored anywhere?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "No. Audio is processed in-memory on our GPU server and deleted within the same request. We have no recording storage — by design. We also don't use your audio for model training.",
+      },
+    },
+    {
+      "@type": "Question",
+      name: "Which languages are supported?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "Polish, English, Ukrainian, and Russian — all at strong accuracy. The model is Whisper large-v3-turbo with an additional AI correction pass that learns your domain terminology. Language is auto-detected per recording.",
+      },
+    },
+    {
+      "@type": "Question",
+      name: "How accurate is the transcription?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "Very accurate for clear audio — comparable to professional transcription services. Accuracy depends on audio quality, accents, and speaker overlap. The AI correction layer further improves proper nouns, abbreviations, and domain terms specific to you.",
+      },
+    },
+    {
+      "@type": "Question",
+      name: "How do I cancel my subscription?",
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: "From the app: Settings → Subscription → Cancel. Cancellation takes effect at the end of the current billing period. No questions asked, no cancellation fee.",
+      },
+    },
+  ],
+};
+
 // Inline скрипт применяет сохранённую тему ДО первого рендера,
 // чтобы не было flash-of-wrong-theme.
 // Also captures ?ref=CODE into localStorage so the referral survives
@@ -71,6 +110,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&family=Instrument+Serif:ital@0;1&family=Onest:wght@300;400;500;600;700;800;900&family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
         />
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
+        />
       </head>
       <body>
         {children}
