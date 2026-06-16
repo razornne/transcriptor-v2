@@ -1,111 +1,109 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Logo } from "@/components/Logo";
 
 export const metadata: Metadata = {
   title: "Terms of Service — Skriptly",
-  description: "Terms of Service for Skriptly transcription service.",
+  description: "Terms governing your use of Skriptly, the cloud transcription service.",
 };
 
 export default function TermsPage() {
   return (
-    <main style={{
-      minHeight: "100vh",
-      background: "var(--ground, #EDE8E0)",
-      color: "var(--ink, #1A1814)",
-      fontFamily: "var(--sans, sans-serif)",
-      padding: "clamp(40px, 8vw, 96px) clamp(20px, 6vw, 80px)",
-    }}>
-      <div style={{ maxWidth: 720, margin: "0 auto" }}>
-        <Link href="/" style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          fontSize: 14, color: "var(--muted, #6A6358)",
-          textDecoration: "none", marginBottom: 40,
-        }}>
-          ← Back to Skriptly
-        </Link>
+    <div className="legal-page">
+      <header className="legal-header">
+        <a href="/" aria-label="Back to Skriptly home"><Logo /></a>
+        <a href="/" className="legal-back">← Back to home</a>
+      </header>
 
-        <h1 style={{
-          fontFamily: "var(--display, sans-serif)",
-          fontSize: "clamp(28px, 5vw, 42px)",
-          fontWeight: 700, marginBottom: 8, lineHeight: 1.1,
-        }}>
-          Terms of Service
-        </h1>
-        <p style={{ color: "var(--muted, #6A6358)", fontSize: 14, marginBottom: 48 }}>
-          Last updated: May 2025
-        </p>
+      <main className="legal-content">
+        <span className="eyebrow">Legal</span>
+        <h1 className="display xxl">Terms of Service</h1>
+        <p className="legal-date">Last updated: June 2026</p>
 
-        <DocSection title="1. Acceptance of Terms">
-          <p>By accessing or using Skriptly (&quot;the Service&quot;), you agree to be bound by these Terms of Service. If you do not agree, please do not use the Service.</p>
-        </DocSection>
+        <section>
+          <h2>1. Acceptance</h2>
+          <p>By creating an account or using Skriptly you agree to these Terms. If you do not agree, do not use the service.</p>
+        </section>
 
-        <DocSection title="2. Description of Service">
-          <p>Skriptly is a cloud-based transcription service that converts audio recordings into text with automatic speaker identification. The Service uses third-party AI infrastructure (Modal, OpenAI-compatible models, Google Gemini) to process audio.</p>
-        </DocSection>
+        <section>
+          <h2>2. The service</h2>
+          <p>Skriptly provides cloud-based audio transcription with speaker diarisation, AI-assisted correction, and related features. We process audio files you provide and return text transcripts. Audio is processed in-memory and discarded immediately — we do not store your recordings.</p>
+        </section>
 
-        <DocSection title="3. User Accounts">
-          <p>You must create an account to use the Service. You may sign in using Google OAuth or email magic link, provided by Supabase Auth. You are responsible for keeping your account credentials secure.</p>
-        </DocSection>
+        <section>
+          <h2>3. Your account</h2>
+          <p>You must provide a valid email address. You are responsible for keeping your account secure and for all activity under your account. Notify us immediately of any unauthorised access at <a href="mailto:hello@skriptly.io">hello@skriptly.io</a>.</p>
+        </section>
 
-        <DocSection title="4. Audio Data">
-          <p>Audio files you upload are processed in-memory and are not permanently stored on our servers. Transcription results are stored in your personal account history and are accessible only to you. You may delete your transcripts at any time.</p>
-        </DocSection>
-
-        <DocSection title="5. Acceptable Use">
-          <p>You agree not to use the Service to:</p>
+        <section>
+          <h2>4. Acceptable use</h2>
+          <p>You may not use Skriptly to:</p>
           <ul>
-            <li>Record or transcribe conversations without the consent of all participants</li>
-            <li>Process, store, or transmit unlawful, harmful, or abusive content</li>
-            <li>Attempt to reverse-engineer, copy, or resell the Service</li>
-            <li>Circumvent usage limits or subscription restrictions</li>
+            <li>Record or transcribe conversations without the consent of all participants where required by law</li>
+            <li>Process content that violates applicable law (including content involving minors)</li>
+            <li>Attempt to reverse-engineer, scrape, or abuse the API</li>
+            <li>Resell or redistribute the service without a written agreement</li>
           </ul>
-        </DocSection>
+          <p>You are solely responsible for obtaining any necessary consents before recording calls.</p>
+        </section>
 
-        <DocSection title="6. Subscription and Billing">
-          <p>Skriptly offers free and paid subscription plans. Paid subscriptions are billed via Stripe. You may cancel at any time through the account settings. Refunds are handled on a case-by-case basis — contact support if you believe you were incorrectly charged.</p>
-        </DocSection>
+        <section>
+          <h2>5. Subscription and billing</h2>
+          <p>Paid plans are billed monthly or annually via Stripe. Annual plans offer approximately 20% discount. Prices are in USD. Taxes may apply depending on your location.</p>
+          <p>Unused minutes do not roll over between billing periods. If you exceed your plan limit, recording is blocked until the next period or you upgrade.</p>
+        </section>
 
-        <DocSection title="7. Service Availability">
-          <p>We strive to maintain high availability but do not guarantee uninterrupted service. We may modify, suspend, or discontinue features with reasonable notice.</p>
-        </DocSection>
+        <section>
+          <h2>6. Cancellation and refunds</h2>
+          <p>You can cancel your subscription at any time from <strong>Settings → Subscription → Cancel</strong>. Cancellation takes effect at the end of the current billing period — you retain access until then. We do not offer pro-rata refunds for partial periods except where required by law.</p>
+        </section>
 
-        <DocSection title="8. Intellectual Property">
-          <p>The transcripts generated from your audio are your content. You retain all rights to your audio files and transcriptions. Skriptly does not claim ownership of your data.</p>
-        </DocSection>
+        <section>
+          <h2>7. Accuracy</h2>
+          <p>Transcription accuracy depends on audio quality, accents, background noise, and language. Skriptly is a tool, not a legal record. Do not rely solely on Skriptly transcripts for legal, medical, or safety-critical purposes without independent verification.</p>
+        </section>
 
-        <DocSection title="9. Disclaimer of Warranties">
-          <p>The Service is provided &quot;as is&quot; without warranties of any kind. Transcription accuracy depends on audio quality, language, and accents — we do not guarantee 100% accuracy.</p>
-        </DocSection>
+        <section>
+          <h2>8. Intellectual property</h2>
+          <p>Your audio and transcripts remain your property. By using the service you grant us a limited licence to process your content solely to provide the service. We claim no ownership over your content.</p>
+          <p>The Skriptly software, brand, and website are our intellectual property. You may not copy, modify, or distribute them without permission.</p>
+        </section>
 
-        <DocSection title="10. Limitation of Liability">
-          <p>To the fullest extent permitted by law, Skriptly shall not be liable for indirect, incidental, or consequential damages arising from your use of the Service.</p>
-        </DocSection>
+        <section>
+          <h2>9. Limitation of liability</h2>
+          <p>To the maximum extent permitted by law, Skriptly is provided &quot;as is&quot; without warranty. We are not liable for indirect, consequential, or incidental damages, loss of data, or business interruption. Our total liability for any claim is limited to the amount you paid us in the three months preceding the claim.</p>
+        </section>
 
-        <DocSection title="11. Changes to Terms">
-          <p>We may update these Terms from time to time. Continued use of the Service after changes constitutes acceptance of the updated Terms.</p>
-        </DocSection>
+        <section>
+          <h2>10. Service availability</h2>
+          <p>We aim for high availability but do not guarantee uninterrupted service. We may modify or discontinue features with reasonable notice. We will notify you of any discontinuation of the core service with at least 30 days notice.</p>
+        </section>
 
-        <DocSection title="12. Contact">
-          <p>For questions about these Terms, contact us at <a href="mailto:hello@skriptly.io" style={{ color: "var(--cta, #3F65DD)" }}>hello@skriptly.io</a>.</p>
-        </DocSection>
-      </div>
-    </main>
-  );
-}
+        <section>
+          <h2>11. Termination</h2>
+          <p>We may suspend or terminate accounts that violate these Terms. You may delete your account at any time from <strong>Settings → Danger zone</strong>. Upon termination, your transcripts will be deleted within 30 days.</p>
+        </section>
 
-function DocSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section style={{ marginBottom: 36 }}>
-      <h2 style={{
-        fontSize: 18, fontWeight: 600, marginBottom: 10,
-        fontFamily: "var(--display, sans-serif)",
-      }}>{title}</h2>
-      <div style={{
-        fontSize: 15, lineHeight: 1.7,
-        color: "var(--ink-2, #2C2922)",
-      }}>
-        {children}
-      </div>
-    </section>
+        <section>
+          <h2>12. Changes to these terms</h2>
+          <p>We may update these Terms as the product evolves. We will notify you of material changes via email. Continued use after notification constitutes acceptance.</p>
+        </section>
+
+        <section>
+          <h2>13. Governing law</h2>
+          <p>These Terms are governed by the laws of Ukraine. Disputes will be resolved in Ukrainian courts, except where prohibited by local consumer protection law.</p>
+        </section>
+
+        <section>
+          <h2>14. Contact</h2>
+          <p>Questions about these Terms: <a href="mailto:hello@skriptly.io">hello@skriptly.io</a></p>
+        </section>
+      </main>
+
+      <footer className="legal-footer">
+        <span>© 2026 Skriptly</span>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/">Back to home</a>
+      </footer>
+    </div>
   );
 }

@@ -25,7 +25,7 @@ export function FAQ({ t }: { t: Copy }) {
                 <span className="faq-icon" aria-hidden="true">+</span>
               </button>
               <div className="faq-body">
-                <div className="faq-a-inner">{item.a}</div>
+                <div className="faq-a-inner"><p>{item.a}</p></div>
               </div>
             </div>
           ))}

@@ -40,12 +40,8 @@ export function Hero({ t, headlineLines }: { t: Copy; headlineLines: string[] })
               </div>
             </div>
 
-            <div className="hero-visual hero-entrance" style={{ position: "relative" }}>
+            <div className="hero-visual hero-entrance">
               <AppMock mock={t.mock} animate />
-              <div className="mock-chip">
-                <span className="ico">∑</span>
-                <span>{t.mock.chip}</span>
-              </div>
             </div>
           </div>
         </div>

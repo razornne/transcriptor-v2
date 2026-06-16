@@ -537,29 +537,6 @@ button { font: inherit; cursor: pointer; }
 .mock-summary ul { margin: 0; padding-left: 18px; }
 .mock-summary li { font-size: 13.5px; color: var(--graphite); margin: 4px 0; }
 
-.mock-chip {
-  position: absolute;
-  right: -18px; bottom: 56px;
-  padding: 10px 14px;
-  border-radius: var(--r-md);
-  font-size: 12.5px; font-weight: 500;
-  color: var(--ink);
-  display: flex; align-items: center; gap: 10px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  box-shadow: 0 4px 16px -4px rgba(0,0,0,0.12);
-  z-index: 3;
-}
-@media (max-width: 640px) {
-  .mock-chip { right: 8px; bottom: 8px; padding: 8px 10px; font-size: 11.5px; }
-  .mock-chip .ico { width: 22px; height: 22px; font-size: 11px; }
-}
-.mock-chip .ico {
-  width: 28px; height: 28px; border-radius: var(--r-sm);
-  background: var(--ink); color: var(--paper);
-  display: inline-flex; align-items: center; justify-content: center;
-  font-family: var(--mono); font-size: 13px; flex: 0 0 auto;
-}
 
 /* ─── AppMock — flat Ink ResultView card ─── */
 .m-card {
@@ -831,7 +808,7 @@ section.s { padding: clamp(64px, 6.5vw, 96px) 0; }
 .pricing-card {
   padding: clamp(22px, 2.2vw, 28px);
   border-radius: var(--r-lg);
-  display: grid; gap: 16px;
+  display: flex; flex-direction: column; gap: 16px;
   position: relative; overflow: visible;
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -869,7 +846,7 @@ section.s { padding: clamp(64px, 6.5vw, 96px) 0; }
 }
 .pricing-card .price .per { color: var(--graphite); font-size: 13px; }
 .pricing-card .price .strike { font-family: var(--mono); font-size: 12px; color: var(--graphite); text-decoration: line-through; margin-left: 4px; }
-.pricing-card ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+.pricing-card ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; flex: 1; }
 .pricing-card li { font-size: 14px; color: var(--graphite); display: grid; grid-template-columns: 18px 1fr; gap: 8px; align-items: start; }
 .pricing-card li .check { font-family: var(--mono); color: var(--accent); font-size: 12px; margin-top: 2px; }
 .pricing-card .fine { font-family: var(--mono); font-size: 11px; color: var(--graphite); letter-spacing: 0.04em; }
@@ -935,15 +912,21 @@ section.s { padding: clamp(64px, 6.5vw, 96px) 0; }
 .trust-bar {
   border-top: 1px solid var(--hairline);
   border-bottom: 1px solid var(--hairline);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.trust-inner { display: flex; flex-wrap: wrap; align-items: stretch; }
+.trust-bar::-webkit-scrollbar { display: none; }
+.trust-inner {
+  display: flex; flex-wrap: nowrap; align-items: stretch;
+  min-width: min-content;
+}
 .trust-stat {
+  flex: 1 0 auto;
   font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em;
   text-transform: uppercase; color: var(--graphite);
-  padding: 12px 24px; border-right: 1px solid var(--hairline);
-  white-space: nowrap; display: flex; align-items: center; gap: 7px;
+  padding: 14px 22px; border-right: 1px solid var(--hairline);
+  white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 7px;
 }
-.trust-stat:first-child { padding-left: 0; }
 .trust-stat:last-child { border-right: none; }
 .trust-stat strong { color: var(--ink); font-weight: 500; }
 .trust-live { width: 6px; height: 6px; border-radius: 50%; background: var(--signal); animation: blink 1.4s steps(2, end) infinite; }
@@ -1099,10 +1082,11 @@ section.s { padding: clamp(64px, 6.5vw, 96px) 0; }
   user-select: none;
 }
 .faq-item.open .faq-icon { transform: rotate(45deg); border-color: var(--ink); color: var(--ink); }
-.faq-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 260ms ease; }
+.faq-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 260ms ease; overflow: hidden; }
 .faq-item.open .faq-body { grid-template-rows: 1fr; }
-.faq-a-inner {
-  overflow: hidden; padding-bottom: 18px;
+.faq-a-inner { overflow: hidden; min-height: 0; }
+.faq-a-inner p {
+  margin: 0; padding-bottom: 20px;
   font-size: 14.5px; color: var(--graphite); line-height: 1.65; max-width: 72ch;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1111,4 +1095,89 @@ section.s { padding: clamp(64px, 6.5vw, 96px) 0; }
   .uc-panel { animation: none; }
   .uc-quote-card { transition: none; transform: none !important; }
   .trust-live { animation: none; }
+}
+
+/* ── Legal pages (Privacy / Terms) ─────────────────────────── */
+.legal-page {
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+}
+.legal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 48px;
+  border-bottom: 1px solid var(--hairline);
+}
+.legal-back {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--graphite);
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+.legal-back:hover { color: var(--ink); }
+.legal-content {
+  max-width: 740px;
+  margin: 0 auto;
+  padding: 64px 48px 120px;
+}
+.legal-content h1 {
+  margin: 8px 0 4px;
+}
+.legal-date {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--graphite);
+  margin: 0 0 56px;
+}
+.legal-content section {
+  margin-bottom: 36px;
+}
+.legal-content h2 {
+  font-family: var(--ui);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--graphite);
+  margin: 0 0 10px;
+}
+.legal-content p {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+.legal-content ul, .legal-content ol {
+  padding-left: 20px;
+  margin: 8px 0 12px;
+}
+.legal-content li {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.legal-content strong { color: var(--ink); }
+.legal-content a { color: var(--accent); text-decoration: none; }
+.legal-content a:hover { text-decoration: underline; }
+.legal-footer {
+  margin-top: 64px;
+  padding-top: 24px;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+@media (max-width: 640px) {
+  .legal-header { padding: 20px 24px; }
+  .legal-content { padding: 48px 24px 80px; }
 }

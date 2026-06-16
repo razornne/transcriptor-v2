@@ -94,7 +94,6 @@ export type Copy = {
     lines: Array<{ spk: 1 | 2; name: string; time: string; text: string; live?: boolean }>;
     summary: string[];
     summaryLabel: string;
-    chip: string;
   };
 };
 
@@ -106,7 +105,7 @@ const PLANS_EN: PricingPlan[] = [
     name: "Free",
     monthly: 0, annual: 0, per: "/forever",
     tagline: "For trying it out",
-    features: ["60 minutes / month", "Polish · EN · UA · RU", "Inline editing", "Markdown export"],
+    features: ["60 minutes / month", "100+ languages", "Inline editing", "Markdown export"],
     cta: "Start free",
     ctaKind: "ghost",
   },
@@ -141,7 +140,7 @@ const PLANS_UA: PricingPlan[] = [
     name: "Free",
     monthly: 0, annual: 0, per: "/назавжди",
     tagline: "Спробувати",
-    features: ["60 хвилин / місяць", "Польська · EN · UA · RU", "Редагування транскрипту", "Експорт у Markdown"],
+    features: ["60 хвилин / місяць", "100+ мов", "Редагування транскрипту", "Експорт у Markdown"],
     cta: "Спробувати безкоштовно",
     ctaKind: "ghost",
   },
@@ -176,11 +175,11 @@ export const COPY: Record<Lang, Copy> = {
     nav: { features: "Features", pricing: "Pricing", openApp: "Open app" },
     hero: {
       eyebrow: "Skriptly · v1.0 · GPU-hosted",
-      sub: "Strong accuracy in Polish, English, Ukrainian and Russian. Speakers separated automatically. Audio processed and deleted — we never store it.",
+      sub: "Strong accuracy across 100+ languages. Speakers separated automatically. Audio processed and deleted — we never store it.",
       ctaPrimary: "Start free",
       ctaSecondary: "See how it works",
       meta: [
-        ["Languages",  "PL · EN · UA · RU"],
+        ["Languages",  "100+ languages"],
         ["Retention",  "0 seconds"],
       ],
     },
@@ -192,21 +191,21 @@ export const COPY: Record<Lang, Copy> = {
     how: {
       eyebrow: "How it works",
       title: "Three steps. No download.",
-      sub: "Open a tab. Allow the mic. Get the transcript while the call is still happening.",
+      sub: "Open a tab. Allow the mic. Get the transcript right after the call.",
       steps: [
         { n: "01", h: "Open Skriptly",      p: "Go to skriptly.io/app in any modern browser. No installer, no extension, no Electron." },
         { n: "02", h: "Start recording",    p: "Allow mic access, pick the call tab to share audio. Speakers are detected automatically." },
-        { n: "03", h: "Get your transcript",p: "Text appears live. When the call ends you get a summary, action items, and a Markdown export." },
+        { n: "03", h: "Get your transcript",p: "Stop the recording — your transcript, summary, and action items are ready in under a minute." },
       ],
     },
     features: {
       eyebrow: "What's inside",
       title: "Everything a transcript should be.",
-      sub: "Built for individual professionals who don't want to babysit a recording. Multilingual from day one — Polish, English, Ukrainian, Russian.",
+      sub: "Built for individual professionals who don't want to babysit a recording. Multilingual from day one — 100+ languages, auto-detected.",
       items: [
-        { tag: "ML", h: "Polish · EN · UA · RU",  p: "Strong accuracy across all four. Whisper large-v3 + AI correction that learns your domain terms.", accent: true },
+        { tag: "ML", h: "100+ languages",        p: "Whisper large-v3 supports over a hundred languages. AI correction layer learns your domain terms.", accent: true },
         { tag: "SS", h: "Speaker separation",    p: "pyannote diarization. Knows who said what — even on a phone call with overlap." },
-        { tag: "LV", h: "Live transcript",       p: "Text appears while the call is still going. No 20-minute wait for processing." },
+        { tag: "⚡", h: "Fast turnaround",       p: "Stop the recording, get your transcript in under a minute. No waiting room, no manual steps." },
         { tag: "SM", h: "Summary + action items",p: "Auto-generated at the end. Edit them, ship them — they're plain Markdown." },
         { tag: "FS", h: "Full-text search",      p: "Find anything across every past call. Filter by speaker, language, or date." },
         { tag: "0",  h: "Zero retention",        p: "Audio is processed and deleted in the same request. We never store it. Not for training. Not at all." },
@@ -323,7 +322,7 @@ export const COPY: Record<Lang, Copy> = {
         },
         {
           q: "Which languages are supported?",
-          a: "Polish, English, Ukrainian, and Russian — all at strong accuracy. The model is Whisper large-v3-turbo with an additional AI correction pass that learns your domain terminology. Language is auto-detected per recording.",
+          a: "Whisper large-v3-turbo supports 100+ languages. Polish, English, Ukrainian, and Russian are all at strong accuracy with an AI correction pass that learns your domain terminology. Language is auto-detected per recording.",
         },
         {
           q: "How accurate is the transcription?",
@@ -337,7 +336,7 @@ export const COPY: Record<Lang, Copy> = {
     },
     mock: {
       url: "skriptly.io/app/c/k3p2-1a",
-      eyebrow: "Live transcript",
+      eyebrow: "TRANSCRIPT",
       rec: "14:32",
       langPill: "EN",
       lines: [
@@ -351,7 +350,6 @@ export const COPY: Record<Lang, Copy> = {
         "Lead with the read-instead-of-listen framing on the landing page.",
       ],
       summaryLabel: "Auto-summary · 3 points",
-      chip: "Summary ready in 8s",
     },
   },
 
@@ -359,11 +357,11 @@ export const COPY: Record<Lang, Copy> = {
     nav: { features: "Можливості", pricing: "Тарифи", openApp: "Відкрити застосунок" },
     hero: {
       eyebrow: "Skriptly · v1.0 · GPU-сервер",
-      sub: "Висока точність польською, англійською, українською та російською. Спікери розділяються автоматично. Аудіо обробляється та видаляється — ми його не зберігаємо.",
+      sub: "Висока точність у 100+ мовах. Спікери розділяються автоматично. Аудіо обробляється та видаляється — ми його не зберігаємо.",
       ctaPrimary: "Спробувати безкоштовно",
       ctaSecondary: "Як це працює",
       meta: [
-        ["Мови",         "PL · EN · UA · RU"],
+        ["Мови",         "100+ мов"],
         ["Збереження",   "0 секунд"],
       ],
     },
@@ -375,21 +373,21 @@ export const COPY: Record<Lang, Copy> = {
     how: {
       eyebrow: "Як це працює",
       title: "Три кроки. Без встановлення.",
-      sub: "Відкрий вкладку. Дозволь мікрофон. Отримай транскрипт ще під час дзвінка.",
+      sub: "Відкрий вкладку. Дозволь мікрофон. Отримай транскрипт одразу після дзвінка.",
       steps: [
         { n: "01", h: "Відкрий Skriptly",   p: "Заходь на skriptly.io/app у будь-якому сучасному браузері. Ні інсталятора, ні розширення." },
         { n: "02", h: "Почни запис",        p: "Дозволь мікрофон і обери вкладку дзвінка для аудіо. Спікери визначаються автоматично." },
-        { n: "03", h: "Отримай транскрипт", p: "Текст з’являється наживо. Після дзвінка — підсумок, тудушки та експорт у Markdown." },
+        { n: "03", h: "Отримай транскрипт", p: "Зупини запис — транскрипт, підсумок і тудушки готові менш ніж за хвилину." },
       ],
     },
     features: {
       eyebrow: "Що всередині",
       title: "Все, чим має бути транскрипт.",
-      sub: "Для тих, хто не хоче няньчити запис. Багатомовний від початку — польська, англійська, українська, російська.",
+      sub: "Для тих, хто не хоче няньчити запис. Багатомовний від початку — 100+ мов, автовизначення.",
       items: [
-        { tag: "ML", h: "Польська · EN · UA · RU", p: "Висока точність усіма чотирма. Whisper large-v3 + AI-корекція, що вчить твої терміни.", accent: true },
+        { tag: "ML", h: "100+ мов",                p: "Whisper large-v3 підтримує понад сотню мов. AI-корекція вчить твої доменні терміни.", accent: true },
         { tag: "SS", h: "Розділення спікерів",     p: "pyannote-діаризація. Знає, хто що сказав — навіть у телефонному дзвінку з накладаннями." },
-        { tag: "LV", h: "Транскрипт наживо",       p: "Текст з’являється просто під час дзвінка. Не треба чекати 20 хвилин на обробку." },
+        { tag: "⚡", h: "Швидкий результат",       p: "Зупини запис — транскрипт готовий менш ніж за хвилину. Без черги, без ручних кроків." },
         { tag: "SM", h: "Підсумок + дії",          p: "Генерується автоматично. Редагуй, надсилай — це звичайний Markdown." },
         { tag: "FS", h: "Повнотекстовий пошук",    p: "Знайди що завгодно у всіх минулих дзвінках. Фільтри за спікером, мовою, датою." },
         { tag: "0",  h: "Нульове збереження",      p: "Аудіо обробляється і видаляється в межах одного запиту. Не зберігаємо. Не для тренування. Зовсім." },
@@ -506,7 +504,7 @@ export const COPY: Record<Lang, Copy> = {
         },
         {
           q: "Які мови підтримуються?",
-          a: "Польська, англійська, українська та російська — з високою точністю. Модель — Whisper large-v3-turbo з додатковим проходом AI-корекції, що вчить твою доменну лексику. Мова визначається автоматично для кожного запису.",
+          a: "Whisper large-v3-turbo підтримує 100+ мов. Польська, англійська, українська та російська — з високою точністю, плюс AI-корекція, що вчить твою доменну лексику. Мова визначається автоматично для кожного запису.",
         },
         {
           q: "Наскільки точна транскрипція?",
@@ -520,7 +518,7 @@ export const COPY: Record<Lang, Copy> = {
     },
     mock: {
       url: "skriptly.io/app/c/k3p2-1a",
-      eyebrow: "Транскрипт наживо",
+      eyebrow: "ТРАНСКРИПТ",
       rec: "14:32",
       langPill: "UA",
       lines: [
@@ -534,7 +532,6 @@ export const COPY: Record<Lang, Copy> = {
         "На лендингу — фрейм «читай замість слухай».",
       ],
       summaryLabel: "Авто-підсумок · 3 пункти",
-      chip: "Підсумок за 8 с",
     },
   },
 };
