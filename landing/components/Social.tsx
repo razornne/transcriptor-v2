@@ -1,7 +1,7 @@
 import type { Copy } from "@/lib/content";
 
 const STATS_EN = [
-  { label: "Languages", value: "PL · EN · UA · RU", live: false },
+  { label: "Languages", value: "100+ languages", live: false },
   { label: "Retention", value: "0 seconds", live: false },
   { label: "Processing", value: "GPU-hosted", live: true },
   { label: "Install", value: "None required", live: false },
@@ -10,7 +10,7 @@ const STATS_EN = [
 ];
 
 const STATS_UA = [
-  { label: "Мови", value: "PL · EN · UA · RU", live: false },
+  { label: "Мови", value: "100+ мов", live: false },
   { label: "Збереження", value: "0 секунд", live: false },
   { label: "Обробка", value: "GPU-сервер", live: true },
   { label: "Встановлення", value: "Не потрібне", live: false },
