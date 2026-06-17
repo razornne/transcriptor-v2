@@ -5,12 +5,12 @@ import { Analytics } from "@vercel/analytics/react";
 export const metadata: Metadata = {
   title: "Skriptly — Every call, word for word.",
   description:
-    "Best-in-class Ukrainian and English transcription. Speakers separated automatically. Audio processed and deleted — never stored.",
+    "Accurate Ukrainian and English transcription with automatic speaker separation. Audio is processed and deleted — never stored.",
   metadataBase: new URL("https://skriptly.io"),
   openGraph: {
     title: "Skriptly — Every call, word for word.",
     description:
-      "Best-in-class Ukrainian and English transcription. Audio is processed and deleted — never stored.",
+      "Accurate Ukrainian and English transcription with automatic speaker separation. Audio is processed and deleted — never stored.",
     url: "https://skriptly.io",
     siteName: "Skriptly",
     type: "website",
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Skriptly — Every call, word for word.",
     description:
-      "Best-in-class Ukrainian and English transcription. Audio is processed and deleted — never stored.",
+      "Accurate Ukrainian and English transcription with automatic speaker separation. Audio is processed and deleted — never stored.",
   },
 };
 
