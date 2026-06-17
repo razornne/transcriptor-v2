@@ -610,7 +610,14 @@ class Transcriptor:
             ]
 
             # --- Merge --- (часть стадии diarization: разнос слов по спикерам)
-            merged = merge(segments, speaker_turns)
+            # Когда юзер задал точное num_speakers, уменьшаем порог сглаживания
+            # (1.0s → 0.4s): короткие реплики (<1s) миноритарного спикера не
+            # поглощаются соседними блоками. Без этого "Так", "Добре", "Окей"
+            # (<0.8s) исчезают в Speaker 1 при несбалансированной диаризации
+            # (напр. смешанный моно-поток system audio). 0.4s выше типичного
+            # pyannote-шума (0.05-0.2s), но ниже реальных коротких реплик.
+            smooth_th = 0.4 if num_speakers else None
+            merged = merge(segments, speaker_turns, smooth_threshold=smooth_th)
             # На случай если merger пропустил numpy типы — финальная нормализация
             for m in merged:
                 m["start"]   = float(m["start"])

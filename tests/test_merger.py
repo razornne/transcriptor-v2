@@ -168,6 +168,39 @@ def test_boundary_first_word_not_glued_to_previous():
     assert out[1]["speaker"] == "B" and out[1]["text"].startswith("не")
 
 
+def test_smooth_threshold_preserves_minority_speaker():
+    """num_speakers режим: 0.4s порог сохраняет короткие реплики миноритарного
+    спикера ("Так", 0.5s), которые default 1.0s порог поглотил бы в Speaker 1.
+    Воспроизводит регресс 'Оренда екрану': обе реплики 0.5s должны выжить."""
+    segments = [
+        {"start":  0.0, "end":  5.0, "text": "розкажу як завантажити документ"},
+        {"start":  5.1, "end":  5.6, "text": "Так"},          # SP2, 0.5s — выживает при 0.4
+        {"start":  5.7, "end": 10.0, "text": "відкриваємо реєстр"},
+        {"start": 10.1, "end": 10.6, "text": "Зрозуміло"},    # SP2, 0.5s — выживает при 0.4
+        {"start": 10.7, "end": 15.0, "text": "натискаємо кнопку"},
+    ]
+    turns = [
+        {"start":  0.0, "end":  5.05, "speaker": "SPEAKER_00"},
+        {"start":  5.05, "end":  5.65, "speaker": "SPEAKER_01"},
+        {"start":  5.65, "end": 10.05, "speaker": "SPEAKER_00"},
+        {"start": 10.05, "end": 10.65, "speaker": "SPEAKER_01"},
+        {"start": 10.65, "end": 15.0, "speaker": "SPEAKER_00"},
+    ]
+    # Default (1.0s) — поглощает 0.5s SPEAKER_01 в SPEAKER_00
+    out_default = merge(segments, turns)
+    speakers_default = [s["speaker"] for s in out_default]
+    assert all(sp == "SPEAKER_00" for sp in speakers_default), (
+        f"default should collapse minority: {speakers_default}"
+    )
+
+    # num_speakers mode (0.4s) — сохраняет SPEAKER_01
+    out_explicit = merge(segments, turns, smooth_threshold=0.4)
+    speakers_explicit = [s["speaker"] for s in out_explicit]
+    assert "SPEAKER_01" in speakers_explicit, (
+        f"0.4s threshold should preserve SPEAKER_01 interjections: {speakers_explicit}"
+    )
+
+
 def test_empty_inputs():
     assert merge([], []) == []
     out = merge([{"start": 0, "end": 1, "text": "x"}], [])

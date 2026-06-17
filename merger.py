@@ -253,14 +253,16 @@ def _split_by_speaker(transcript_segments: list[dict], speaker_turns: list[dict]
     return result
 
 
-def _smooth(labeled: list[dict]) -> list[dict]:
+def _smooth(labeled: list[dict], threshold: float | None = None) -> list[dict]:
     """Короткий сегмент, зажатый между двумя одинаковыми спикерами,
     переназначается на их спикера. Итеративно: после первого прохода
     могут открыться новые ABA-паттерны.
 
-    Управляется SMOOTH_THRESHOLD_S (env). 0 = выключено.
+    threshold: если передан — используется вместо SMOOTH_THRESHOLD_S.
+    0 = выключено.
     """
-    if SMOOTH_THRESHOLD_S <= 0 or len(labeled) < 3:
+    t = SMOOTH_THRESHOLD_S if threshold is None else threshold
+    if t <= 0 or len(labeled) < 3:
         return labeled
 
     for _pass in range(SMOOTH_PASSES):
@@ -268,7 +270,7 @@ def _smooth(labeled: list[dict]) -> list[dict]:
         for i in range(1, len(labeled) - 1):
             cur      = labeled[i]
             duration = cur["end"] - cur["start"]
-            if duration >= SMOOTH_THRESHOLD_S:
+            if duration >= t:
                 continue
             prev_sp = labeled[i - 1]["speaker"]
             next_sp = labeled[i + 1]["speaker"]
@@ -294,10 +296,18 @@ def _merge_consecutive(labeled: list[dict]) -> list[dict]:
     return merged
 
 
-def merge(transcript_segments: list[dict], speaker_turns: list[dict]) -> list[dict]:
+def merge(
+    transcript_segments: list[dict],
+    speaker_turns: list[dict],
+    smooth_threshold: float | None = None,
+) -> list[dict]:
     """transcript_segments: [{start, end, text, words?}] от Whisper
        speaker_turns:       [{start, end, speaker}] от pyannote
        → [{speaker, start, end, text}]
+
+    smooth_threshold: override SMOOTH_THRESHOLD_S (e.g. 0.4 when caller
+    knows the exact num_speakers and wants to preserve brief minority-speaker
+    interjections that the default 1.0s threshold would absorb).
 
     Если в сегментах есть `words` — режем пословно. Иначе — сегментный уровень.
     """
@@ -310,7 +320,7 @@ def merge(transcript_segments: list[dict], speaker_turns: list[dict]) -> list[di
     else:
         labeled = _assign_initial(transcript_segments, speaker_turns)
 
-    labeled = _smooth(labeled)
+    labeled = _smooth(labeled, threshold=smooth_threshold)
     merged = _merge_consecutive(labeled)
 
     # Анти-петля (после склейки соседей одного спикера — петля из нескольких
