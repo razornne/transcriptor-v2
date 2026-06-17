@@ -1027,16 +1027,24 @@ class Transcriptor:
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{GEMINI_CORRECTION_MODEL}:generateContent"
         )
+        # Cyrillic ≈ 1.5 chars/token → output ≈ len(lines_in)/1.5 tokens.
+        # Old formula (× 2) assumed ASCII (4 chars/token) and overshot 3×, causing
+        # 30k-token requests on medium transcripts → Gemini at ~100 tok/s →
+        # exceeded the 180s timeout → silent fallback to Qwen (3.5min total).
+        # thinkingBudget=0: correction is a character-substitution task, not
+        # reasoning — adaptive thinking only adds latency, no quality benefit.
+        max_out = min(16000, max(2000, len(lines_in)))
         body = {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": min(32000, max(2000, len(lines_in) * 2)),
+                "maxOutputTokens": max_out,
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
 
         try:
-            resp = requests.post(endpoint, params={"key": api_key}, json=body, timeout=180)
+            resp = requests.post(endpoint, params={"key": api_key}, json=body, timeout=240)
         except requests.RequestException as e:
             print(f"[modal] gemini request error: {e}", flush=True)
             return None
