@@ -268,7 +268,7 @@
 
 .i-sb {
   position: absolute; top: 0; left: 0; bottom: 0; z-index: 9;
-  width: 268px;
+  width: 300px;
   background: var(--i-surface); border-right: 1px solid var(--i-hairline);
   transform: translateX(-102%);
   transition: transform .26s cubic-bezier(.2, .7, .2, 1), background-color 0.35s ease;

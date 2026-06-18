@@ -37,6 +37,11 @@ function fmtDur(e: HistoryEntry): string {
     : `${Math.max(1, Math.round(s / 60))}m`;
 }
 
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
 function groupOf(iso: string): string {
   const d = new Date(iso), now = new Date();
   const day = 86400000;
@@ -75,7 +80,7 @@ export function InkSidebar({
 }) {
   const [q, setQ] = useState("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [closedProjects, setClosedProjects] = useState<Set<string>>(new Set());
+  const [openedProjects, setOpenedProjects] = useState<Set<string>>(new Set());
   const [moveDropEntry, setMoveDropEntry] = useState<string | null>(null);
   const [newProjOpen, setNewProjOpen] = useState(false);
   const [newProjName, setNewProjName] = useState("");
@@ -186,7 +191,7 @@ export function InkSidebar({
   };
 
   const toggleProject = (id: string) => {
-    setClosedProjects((prev) => {
+    setOpenedProjects((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
@@ -201,7 +206,7 @@ export function InkSidebar({
         onClick={() => { onSelect(e.id); onClose(); }}
       >
         <span className="i-item-title">{e.title || s.untitled}</span>
-        <span className="dur">{fmtDur(e)}</span>
+        <span className="dur">{fmtDur(e)} · {fmtDate(e.date)}</span>
       </button>
 
       {/* Move-to folder dropdown — only for real entries when projects exist */}
@@ -299,7 +304,7 @@ export function InkSidebar({
                 const projEntries = proj.entryIds
                   .map((id) => entryById.get(id))
                   .filter((e): e is HistoryEntry => !!e);
-                const isOpen = !closedProjects.has(proj.id);
+                const isOpen = openedProjects.has(proj.id);
                 return (
                   <div key={proj.id} className="i-proj">
                     <div className="i-proj-head">
