@@ -14,7 +14,6 @@ import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
   transcribe, generateTitle, fetchProfile, fetchWorkspace, cancelJob, savePresets, saveTeamPresets,
-  renameSpeaker as apiRenameSpeaker,
   CancelledError, type CancelToken, type Profile, type JobProgress, type Preset, type WorkspaceInfo,
   type PipelineSteps,
   type Project, loadProjects, saveProjects,
@@ -339,21 +338,6 @@ export default function InkApp() {
     void patchEntry(id, db).catch((err) => console.error("[history] patch failed:", err));
   }, []);
 
-  // Global speaker rename — optimistic local update across ALL blocks of that
-  // speaker (display derives from speakerNames map), persisted via dedicated
-  // /api/entries/<id>/rename-speaker endpoint (raw label kept in segments).
-  const renameSpeaker = useCallback((entryId: string, rawLabel: string, newName: string) => {
-    const trimmed = newName.trim();
-    setEntries((prev) => prev.map((e) => {
-      if (e.id !== entryId) return e;
-      const names = { ...e.speakerNames };
-      if (trimmed) names[rawLabel] = trimmed; else delete names[rawLabel];
-      return { ...e, speakerNames: names };
-    }));
-    if (entryId === "demo") return;   // demo isn't persisted
-    void apiRenameSpeaker(entryId, rawLabel, trimmed)
-      .catch((err) => console.error("[rename-speaker] failed:", err));
-  }, []);
 
   const passLimitGate = useCallback((): boolean => {
     const left = minutesLeft(profile);
@@ -690,7 +674,6 @@ export default function InkApp() {
                   activeTab={activeTab}
                   onTabChange={setActiveTab}
                   onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
-                  onRenameSpeaker={(rawLabel, newName) => renameSpeaker(activeEntry.id, rawLabel, newName)}
                   onPresetsChange={handlePresetsChange}
                   onTeamPresetsChange={handleTeamPresetsChange}
                   onUpgrade={() => { setSettingsSection("subscription"); setSettingsOpen(true); }}

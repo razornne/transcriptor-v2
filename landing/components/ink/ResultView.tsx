@@ -305,7 +305,7 @@ function PresetDropdown({
 export function ResultView({
   entry, plan, presets, teamPresets, notionConnected,
   activeTab, onTabChange,
-  onPatch, onRenameSpeaker, onPresetsChange, onTeamPresetsChange,
+  onPatch, onPresetsChange, onTeamPresetsChange,
   onUpgrade,
 }: {
   entry: HistoryEntry;
@@ -316,7 +316,6 @@ export function ResultView({
   activeTab: Tab;
   onTabChange: (t: Tab) => void;
   onPatch: (fields: Partial<HistoryEntry>, db: Record<string, unknown>) => void;
-  onRenameSpeaker: (rawLabel: string, newName: string) => void;
   onPresetsChange: (updated: Preset[]) => void;
   onTeamPresetsChange: (updated: Preset[]) => void;
   onUpgrade?: () => void;
@@ -421,10 +420,11 @@ export function ResultView({
   const onCancelEdit = useCallback(() => setEditingSpk(null), []);
   const onRename = useCallback((label: string, value: string) => {
     setEditingSpk(null);
-    // Optimistic local update + persist via /api/entries/<id>/rename-speaker.
-    // Applies to every block of this speaker (display derives from the map).
-    onRenameSpeaker(label, value.trim());
-  }, [onRenameSpeaker]);
+    const trimmed = value.trim();
+    const names = { ...entry.speakerNames };
+    if (trimmed) names[label] = trimmed; else delete names[label];
+    onPatch({ speakerNames: names }, { speaker_names: names });
+  }, [entry.speakerNames, onPatch]);
 
   // Segment text edit handlers
   const onStartTextEdit = useCallback((idx: number) => {
