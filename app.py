@@ -1932,18 +1932,40 @@ def _segments_to_notion_blocks(segments, speaker_names):
     return blocks
 
 
+def _rich_text(text: str) -> list:
+    """Inline markdown (bold/italic) → Notion rich_text array."""
+    parts = []
+    pattern = re.compile(r'\*\*(.+?)\*\*|\*(.+?)\*')
+    last = 0
+    src = text[:2000]
+    for m in pattern.finditer(src):
+        if m.start() > last:
+            parts.append({"type": "text", "text": {"content": src[last:m.start()]}})
+        if m.group(1) is not None:
+            parts.append({"type": "text", "text": {"content": m.group(1)},
+                          "annotations": {"bold": True}})
+        else:
+            parts.append({"type": "text", "text": {"content": m.group(2)},
+                          "annotations": {"italic": True}})
+        last = m.end()
+    if last < len(src):
+        parts.append({"type": "text", "text": {"content": src[last:]}})
+    return parts or [{"type": "text", "text": {"content": src}}]
+
+
 def _markdown_to_notion_blocks(md: str):
-    """Cheap markdown → Notion blocks. Handles headings, bullets, paragraphs.
-    Not perfect; the AI templates we generate are simple enough that this
-    is fine for MVP."""
+    """markdown → Notion blocks. Headings, bullets, to_do checkboxes, dividers, inline bold/italic."""
     if not md:
         return []
     blocks = []
     for raw_line in md.splitlines():
         line = raw_line.rstrip()
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped:
             continue
-        if line.startswith("### "):
+        if stripped in ("---", "***", "___"):
+            blocks.append({"object": "block", "type": "divider", "divider": {}})
+        elif line.startswith("### "):
             blocks.append({"object": "block", "type": "heading_3",
                            "heading_3": {"rich_text": [{"type":"text","text":{"content": line[4:]}}]}})
         elif line.startswith("## "):
@@ -1954,16 +1976,22 @@ def _markdown_to_notion_blocks(md: str):
                            "heading_1": {"rich_text": [{"type":"text","text":{"content": line[2:]}}]}})
         elif line.lstrip().startswith(("- ", "* ", "• ")):
             content = line.lstrip()[2:].strip()
-            blocks.append({"object": "block", "type": "bulleted_list_item",
-                           "bulleted_list_item": {"rich_text": [{"type":"text","text":{"content": content}}]}})
+            if content.startswith("[ ] ") or content == "[ ]":
+                blocks.append({"object": "block", "type": "to_do",
+                               "to_do": {"rich_text": _rich_text(content[4:].strip()), "checked": False}})
+            elif content.lower().startswith("[x] ") or content.lower() == "[x]":
+                blocks.append({"object": "block", "type": "to_do",
+                               "to_do": {"rich_text": _rich_text(content[4:].strip()), "checked": True}})
+            else:
+                blocks.append({"object": "block", "type": "bulleted_list_item",
+                               "bulleted_list_item": {"rich_text": _rich_text(content)}})
         elif line.lstrip().startswith(tuple(f"{i}. " for i in range(1, 10))):
             content = line.lstrip().split(". ", 1)[1] if ". " in line else line
             blocks.append({"object": "block", "type": "numbered_list_item",
-                           "numbered_list_item": {"rich_text": [{"type":"text","text":{"content": content}}]}})
+                           "numbered_list_item": {"rich_text": _rich_text(content)}})
         else:
-            # Strip markdown emphasis (basic)
             blocks.append({"object": "block", "type": "paragraph",
-                           "paragraph": {"rich_text": [{"type":"text","text":{"content": line[:1900]}}]}})
+                           "paragraph": {"rich_text": _rich_text(line)}})
     return blocks
 
 
@@ -2030,6 +2058,17 @@ def notion_send():
         except Exception:
             pass
 
+    def _drop_first_heading(md: str) -> str:
+        """Strip the very first h1/h2 line — caller adds its own section header."""
+        lines = md.splitlines()
+        for i, ln in enumerate(lines):
+            s = ln.strip()
+            if s.startswith("## ") or s.startswith("# "):
+                return "\n".join(lines[:i] + lines[i + 1:]).lstrip("\n")
+            elif s:
+                break
+        return md
+
     # Build page content: title + summary + actions + transcript
     children = []
     if summary:
@@ -2039,7 +2078,8 @@ def notion_send():
     if actions:
         children.append({"object": "block", "type": "heading_2",
                          "heading_2": {"rich_text": [{"type":"text","text":{"content":"Action items"}}]}})
-        children += _markdown_to_notion_blocks(actions)
+        # AI template always opens with ## Action items (translated) — drop it to avoid duplication
+        children += _markdown_to_notion_blocks(_drop_first_heading(actions))
     if segments:
         children.append({"object": "block", "type": "heading_2",
                          "heading_2": {"rich_text": [{"type":"text","text":{"content":"Transcript"}}]}})
