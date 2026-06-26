@@ -138,6 +138,8 @@ Supabase Postgres
 - **`006_signup_notified.sql`** — `user_profiles.signup_notified_at TIMESTAMPTZ` — флаг чтобы Telegram-ping на новый signup стрелял ровно один раз (профиль создаётся Supabase-триггером, не нашим кодом — без флага никакой "create new profile" branch не срабатывает).
 - **`007_privacy_mode.sql`** — `user_profiles.privacy_mode BOOLEAN` — toggle для Max/Team чтобы транскрипция и AI шли через self-hosted модели (никакого Gemini).
 - **`008_vocabulary_pairs.sql`** — расширяет формат элемента `user_profiles.vocabulary` опциональным полем `wrong` (исходная ошибочная форма). Хранит пару `wrong→right` из Gemini-правок → подаётся Gemini correction как "known corrections" на будущих транскрипциях. DDL не нужен (JSONB), только обновление COMMENT.
+- **`009_custom_presets.sql`** — `user_profiles.presets JSONB` + `workspaces.presets JSONB` — кастомные пресеты генерации (личные + командные). Структура: `{id, name, prompt, scope, created_by, updated_at}`. Лимит 20, prompt ≤2000 символов.
+- **`010_speaker_names.sql`** — `transcripts.speaker_names JSONB DEFAULT '{}'` — карта `raw-лейбл → отображаемое имя` (например `{"SPEAKER_00": "Alice"}`). Используется endpoint `/api/entries/<id>/rename-speaker`. Пустая карта = дефолтные "Speaker N" лейблы.
 - Миграции выполняются **вручную через Supabase SQL Editor** — нет миграционного фреймворка. После добавления новой — обновить эту секцию + сам файл должен начинаться с комментария "Run in Supabase SQL Editor".
 
 ### Frontend — приложение

@@ -239,6 +239,7 @@ export default function InkApp() {
 
   const [cooking, setCooking] = useState(false);
   const [pipeline, setPipeline] = useState<PipelineSteps | null>(null);
+  const [chunkProgress, setChunkProgress] = useState<{ done: number; total: number } | null>(null);
   const [recording, setRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const [status, setStatus] = useState("");
@@ -402,10 +403,14 @@ export default function InkApp() {
       if (pr.pipeline_steps) setPipeline(pr.pipeline_steps);
       if (pr.chunks_total) {
         if ((pr.chunks_done || 0) > lastChunks) { lastChunks = pr.chunks_done || 0; dotsRef.current?.wave(1); }
+        setChunkProgress({ done: pr.chunks_done || 0, total: pr.chunks_total });
         setStatus(`chunk ${pr.chunks_done || 0}/${pr.chunks_total} · transcribing…`);
-      } else if (pr.stage && pr.stage !== lastStage) {
-        lastStage = pr.stage; dotsRef.current?.wave(1);
-        setStatus(STAGE_LABELS[pr.stage] || "");
+      } else {
+        setChunkProgress(null);
+        if (pr.stage && pr.stage !== lastStage) {
+          lastStage = pr.stage; dotsRef.current?.wave(1);
+          setStatus(STAGE_LABELS[pr.stage] || "");
+        }
       }
     };
 
@@ -438,7 +443,7 @@ export default function InkApp() {
         phCapture("transcription_failed", { error: String(e), duration_sec: durationSec });
       }
     } finally {
-      cancelRef.current = null; setCooking(false); setPipeline(null);
+      cancelRef.current = null; setCooking(false); setPipeline(null); setChunkProgress(null);
     }
   }, [cooking, language, speakers, context, finishWithSegments]);
 
@@ -704,6 +709,7 @@ export default function InkApp() {
                 <InputCard
                   cooking={cooking}
                   pipeline={pipeline}
+                  chunkProgress={chunkProgress}
                   recording={recording}
                   recSeconds={recSeconds}
                   language={language}
@@ -721,7 +727,8 @@ export default function InkApp() {
 
                 <div className="i-status-row">
                   <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">
-                    {status}
+                    {/* Suppress chunk text when the StepTimeline already shows it inline */}
+                    {chunkProgress && pipeline ? "" : status}
                   </p>
                   {cooking && (
                     <button type="button" className="i-cancel" onClick={onCancel}>[Cancel]</button>

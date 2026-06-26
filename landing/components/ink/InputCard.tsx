@@ -31,7 +31,11 @@ const STEP_LABELS: Record<string, string> = {
 // Ultra-minimal vertical stage list. Running step pulses in cinnabar and ticks a
 // live seconds counter (server elapsed re-synced each poll, interpolated on the
 // client via rAF). Completed steps show their honest measured duration.
-function StepTimeline({ pipeline }: { pipeline: PipelineSteps }) {
+// chunkProgress is optional — only passed for long recordings (chunked pipeline).
+function StepTimeline({ pipeline, chunkProgress }: {
+  pipeline: PipelineSteps;
+  chunkProgress?: { done: number; total: number } | null;
+}) {
   const [, force] = useState(0);
   const syncRef = useRef<{ step: string; base: number; at: number } | null>(null);
 
@@ -78,7 +82,12 @@ function StepTimeline({ pipeline }: { pipeline: PipelineSteps }) {
             <span className="i-tl-label">{STEP_LABELS[key] || key}</span>
             <span className="i-tl-time">
               {status === "running"
-                ? formatDuration(liveElapsed(key))
+                ? <>
+                    {formatDuration(liveElapsed(key))}
+                    {key === "transcription" && chunkProgress
+                      ? <span className="i-tl-chunk"> · {chunkProgress.done}/{chunkProgress.total}</span>
+                      : null}
+                  </>
                 : status === "completed"
                   ? formatDuration(Math.round(st.duration_sec ?? 0))
                   : status === "failed"
@@ -93,7 +102,7 @@ function StepTimeline({ pipeline }: { pipeline: PipelineSteps }) {
 }
 
 export function InputCard({
-  cooking, pipeline, recording, recSeconds,
+  cooking, pipeline, chunkProgress, recording, recSeconds,
   language, onLanguage,
   speakers, onSpeakers,
   context, onContext,
@@ -102,6 +111,7 @@ export function InputCard({
 }: {
   cooking: boolean;
   pipeline?: PipelineSteps | null;
+  chunkProgress?: { done: number; total: number } | null;
   recording: boolean;
   recSeconds: number;
   language: string;
@@ -146,7 +156,7 @@ export function InputCard({
           </div>
         ) : cooking ? (
           hasPipeline ? (
-            <StepTimeline pipeline={pipeline!} />
+            <StepTimeline pipeline={pipeline!} chunkProgress={chunkProgress} />
           ) : (
             <div className="i-dropzone-rec">
               <span className="i-dropzone-hint-sub">Processing…</span>

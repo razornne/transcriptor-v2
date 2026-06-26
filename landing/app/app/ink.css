@@ -1778,7 +1778,8 @@
 
 /* running — пульсирующая киноварь + живой счётчик секунд */
 .i-tl-step.running .i-tl-label { color: var(--i-ink); font-weight: 500; }
-.i-tl-step.running .i-tl-time { color: var(--i-signal); }
+.i-tl-step.running .i-tl-time { color: var(--i-signal); min-width: 0; }
+.i-tl-chunk { opacity: .7; }
 .i-tl-step.running .i-tl-marker {
   background: var(--i-signal); box-shadow: none;
   animation: i-tl-pulse 1.3s ease-in-out infinite;

@@ -146,12 +146,98 @@ export async function pollJob(
   }
 }
 
+// Files above this threshold are uploaded to Supabase Storage first so that
+// the raw bytes never pass through Modal's ~250MB request body limit (ISS-11).
+const LARGE_FILE_THRESHOLD = 200 * 1024 * 1024; // 200 MB
+
+// Detect a reasonable file extension from a Blob's MIME type.
+function _blobExt(blob: Blob): string {
+  const type = blob.type || "";
+  const map: Record<string, string> = {
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
+    "video/x-msvideo": "avi",
+    "video/x-matroska": "mkv",
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/flac": "flac",
+    "audio/aac": "aac",
+  };
+  for (const [mime, ext] of Object.entries(map)) {
+    if (type.startsWith(mime)) return ext;
+  }
+  return "bin";
+}
+
+// Large-file path: upload to Supabase Storage, pass signed URL to backend.
+// Requires bucket 'audio-uploads' in Supabase Storage (create in dashboard:
+// Storage → New bucket, private).
+async function transcribeLarge(
+  blob: Blob,
+  o: { language: string; numSpeakers: string; durationSec: number; prompt?: string; quality?: "best" },
+  onProgress?: (p: JobProgress) => void,
+  cancel?: CancelToken,
+): Promise<Segment[]> {
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user?.id) throw new Error("Not authenticated — cannot upload large file.");
+
+  const ext = _blobExt(blob);
+  const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
+
+  // 1. Upload to Supabase Storage
+  const { error: uploadError } = await sb.storage
+    .from("audio-uploads")
+    .upload(path, blob, { contentType: blob.type || "application/octet-stream", upsert: false });
+  if (uploadError) throw new Error(`Storage upload failed: ${uploadError.message}`);
+
+  let storagePath = path; // keep for cleanup in finally
+  try {
+    // 2. Create signed URL (1 hour — generous for any processing time)
+    const { data: signedData, error: signError } = await sb.storage
+      .from("audio-uploads")
+      .createSignedUrl(path, 3600);
+    if (signError || !signedData?.signedUrl) {
+      throw new Error(`Failed to create signed URL: ${signError?.message ?? "unknown"}`);
+    }
+
+    // 3. Build FormData with storage_url instead of raw audio bytes
+    const fd = new FormData();
+    fd.append("storage_url", signedData.signedUrl);
+    if (o.language) fd.append("language", o.language);
+    if (o.numSpeakers) fd.append("num_speakers", o.numSpeakers);
+    if (o.durationSec) fd.append("duration_sec", String(Math.round(o.durationSec)));
+    if (o.prompt && o.prompt.trim()) fd.append("prompt", o.prompt.trim());
+    if (o.quality === "best") fd.append("quality", "best");
+
+    // 4. Submit job and poll as normal
+    const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd);
+    const maxWait = o.durationSec > 1800 ? 120 * 60 * 1000 : 22 * 60 * 1000;
+    const result = await pollJob(jobId, onProgress, maxWait, cancel);
+    return (result.segments as Segment[]) || [];
+  } finally {
+    // 5. Always clean up the storage file (best-effort)
+    try {
+      await sb.storage.from("audio-uploads").remove([storagePath]);
+    } catch { /* best-effort — file will expire naturally */ }
+  }
+}
+
 export async function transcribe(
   blob: Blob,
   o: { language: string; numSpeakers: string; durationSec: number; prompt?: string; quality?: "best" },
   onProgress?: (p: JobProgress) => void,
   cancel?: CancelToken,
 ): Promise<Segment[]> {
+  // Route large files through Supabase Storage to bypass Modal's body size limit
+  if (blob.size > LARGE_FILE_THRESHOLD) {
+    return transcribeLarge(blob, o, onProgress, cancel);
+  }
+
   const fd = new FormData();
   fd.append("audio", blob, "recording.webm");
   if (o.language) fd.append("language", o.language);

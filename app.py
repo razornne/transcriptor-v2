@@ -3405,9 +3405,11 @@ def transcribe_endpoint():
       → {"status": "done", "segments": [...]}                 (финал)
       → {"status": "error", "error": "..."}                   (ошибка)
     """
+    storage_url = request.form.get("storage_url", "").strip()
     audio_file = request.files.get("audio")
-    if not audio_file:
-        return jsonify({"error": "audio file required"}), 400
+
+    if not storage_url and not audio_file:
+        return jsonify({"error": "audio or storage_url required"}), 400
 
     language = request.form.get("language") or None
     if language and language not in ALLOWED_LANGUAGES:
@@ -3473,7 +3475,17 @@ def transcribe_endpoint():
                 print(f"[transcribe] terminating user's previous job {prev_job}", flush=True)
                 _terminate_modal_job(prev_job)
 
-        audio_bytes = audio_file.read()
+        # Storage-URL path: download bytes from Supabase Storage signed URL.
+        # Used for large files (>200MB) that exceed Modal's ~250MB request body limit.
+        if storage_url:
+            try:
+                dl = requests.get(storage_url, timeout=300, stream=False)
+                dl.raise_for_status()
+                audio_bytes = dl.content
+            except Exception as e:
+                return jsonify({"error": f"storage download failed: {e}"}), 502
+        else:
+            audio_bytes = audio_file.read()
         progress_key = uuid.uuid4().hex  # уникальный ключ для modal.Dict прогресса
         # Resolve Privacy Mode for this user — if on, Modal will skip Gemini
         # correction entirely (falls back to local Qwen on the same GPU)
@@ -3518,7 +3530,16 @@ def transcribe_endpoint():
     # ── Local path: пишем на диск, обрабатываем в фоновом потоке
     filename = datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".webm"
     webm_path = os.path.join(RECORDINGS_DIR, filename)
-    audio_file.save(webm_path)
+    if storage_url:
+        try:
+            dl = requests.get(storage_url, timeout=300, stream=False)
+            dl.raise_for_status()
+            with open(webm_path, "wb") as _f:
+                _f.write(dl.content)
+        except Exception as e:
+            return jsonify({"error": f"storage download failed: {e}"}), 502
+    else:
+        audio_file.save(webm_path)
 
     job_id = _create_local_job("transcribe")
 
