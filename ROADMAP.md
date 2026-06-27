@@ -8,6 +8,25 @@
 
 Прямо следующие задачи, активно обсуждаемые.
 
+### Lemon Squeezy — замена Stripe (MoR, без ФОП)
+**Зачем:** Lemon Squeezy — Merchant of Record: они принимают оплату, берут на себя VAT/налоги по всем странам. Можно принимать деньги без зарегистрированного ФОП/LLC. Stripe MoR не является — ответственность за налоги лежит на продавце.
+
+**Цена вопроса:** ~5% + $0.50 за транзакцию vs Stripe 2.9% + $0.30. При $15 Pro план: разница ~$0.30/транзакцию — несущественно на старте.
+
+**Что менять:**
+- `stripe-secrets` Modal Secret → `lemonsqueezy-secrets` (API key + webhook secret + variant IDs)
+- `app.py`: `/api/stripe/*` эндпоинты → `/api/billing/*` (checkout session creation, portal/customer URL, webhook)
+- Frontend: `createStripeCheckout` → `createCheckout`, `createStripePortal` → `createBillingPortal`
+- Stripe variant IDs (price IDs) → Lemon Squeezy variant IDs (Free/Pro/Max/Team × Monthly/Annual)
+- Webhook: Stripe `customer.subscription.*` events → LS `subscription_created/updated/cancelled`
+
+**Сложность:** ~1 день.
+
+### Stripe `subscription.updated` plan mapping (быстрый фикс)
+Пока не смигрировали на LS — webhook ставит `plan=pro` для любой активной подписки.
+Нужно читать `price_id` из `items.data[0]` и маппить на `pro/max/team`.
+**Сложность:** ~30 мин.
+
 ### Long recordings (3-4ч) — chunked pipeline ✅ ЗАДЕПЛОЕНО (Phase 4 upload — условно)
 **Зачем:** платящий клиент — 3-4ч воркшоп на польском. Монолит `transcribe_full`
 умирал на 20-мин таймауте; час аудио считался ~20 мин (медленно).
@@ -142,6 +161,78 @@ Summary/Actions табах, запоминается в localStorage) + поле
 
 После запуска с первыми ~20-30 юзерами.
 
+### RAG — семантический поиск по архиву транскриптов
+**Зачем:** "найди все встречи где говорили о найме" — трансформирует продукт из
+транскрибатора в "поисковик по твоей памяти". Также даёт контекст для Chat with transcript.
+
+**Что делать:**
+1. `pgvector` в Supabase — одна строка в SQL Editor: `CREATE EXTENSION IF NOT EXISTS vector;`
+2. Таблица `transcript_embeddings (id, transcript_id, chunk_index, content, embedding vector(768))`
+3. После каждой транскрипции → Gemini `text-embedding-004` API → разбить transcript на чанки ~500 токенов с 50-токенным overlap → embeddings → upsert в Supabase
+4. Поле поиска в sidebar: semantic search через `<=>` cosine distance + Supabase `pg_trgm` keyword fallback (hybrid)
+5. Результаты: список записей с релевантными отрывками → клик → открывает транскрипт
+
+**AI Engineer скиллы:** embeddings, chunking strategies (overlap, sentence-aware split), pgvector, hybrid semantic+keyword search, cosine similarity.
+
+**Синергия с Chat:** когда включаем `FEATURE_CHAT` — RAG даёт LLM релевантный контекст из архива.
+
+**Синергия с Recurring meetings:** серия встреч как RAG-источник для next meeting summary.
+
+**Сложность:** ~1 неделя (embedding pipeline + UI search).
+
+### Structured output через Pydantic (Gemini → JSON)
+**Зачем:** сейчас `/api/generate` возвращает raw markdown текст. Structured output даёт:
+- Отдельные поля `{summary, action_items[], key_quotes[], recommendations[]}` — не нужно парсить
+- `key_quotes` → новая вкладка "Highlights" в ResultView (цитаты, которые стоит запомнить)
+- Валидация через Pydantic: если Gemini вернул мусор — caught до сохранения
+
+**Как:** Gemini API поддерживает `response_mime_type: "application/json"` + `response_schema`. В `modal_app.py` `gemini_generate` → возвращает `dict` вместо `str`. Flask сохраняет в `ai_results` как раньше, но с nested структурой. Frontend парсит по ключам.
+
+**AI Engineer скиллы:** Gemini structured output, Pydantic validation, schema design.
+
+**Сложность:** ~1.5 дня (бэк + фронт изменения).
+
+### Eval harness — трекинг стоимости и качества
+**Зачем:** понимать сколько реально стоит каждый вызов и видеть деградации.
+
+**Что делать:**
+- Migration `011_llm_evals.sql` — таблица `llm_evals (id, user_id, transcript_id, template, latency_ms, input_tokens, output_tokens, cost_usd, model, created_at)`
+- В `flask_app`: после каждого `gemini_generate` poll → вытащить usage из Gemini response metadata → insert в `llm_evals`
+- Hallucination heuristic (lab tool): проверять имена/числа из summary против оригинального транскрипта через regex — не идеально но ловит грубые случаи
+- Internal `/app/evals` страница (admin only) с графиками cost/day, latency p50/p95, model breakdown
+
+**AI Engineer скиллы:** observability, cost modeling, LLM eval patterns.
+
+**Сложность:** ~2 дня (migration + logging + dashboard).
+
+### Recurring meetings — серии созвонов
+**Зачем:** weekly standup, 1-on-1 с одним человеком, recurring client call — это серия.
+Связывать транскрипты в серию → AI видит контекст предыдущих встреч.
+
+**Как:**
+- Поле "Series" при сохранении (или автодетект по участникам + времени)
+- `transcripts.series_id UUID` → группировать в sidebar
+- При генерации Summary для записи в серии → в промпт подмешивается summary предыдущей встречи как "Previous meeting context"
+- UI: sidebar → раскрывается серия с хронологией
+
+**Зависит от:** RAG (предыдущие встречи как контекст).
+
+**Сложность:** ~2-3 дня.
+
+### Google Docs export
+**Зачем:** у Notion 10-15% рынка, Google Docs есть у всех. B2B-аудитория живёт в Google Workspace.
+
+**Как:** Google Docs API (OAuth 2.0, аналогично Notion) → создать документ с форматированием. `google-api-python-client` в `web_image`.
+
+**Сложность:** ~1 день.
+
+---
+
+> **Почему нет LangChain:** прямые Gemini REST-вызовы проще, быстрее дебажятся и дешевле
+> в Modal image (~50МБ зависимостей). Streaming → `Gemini stream=True` нативно.
+> Memory для чата → Gemini `messages` API без абстракций. Когда стоит брать LangChain:
+> мультимодельный оркестратор с условной логикой между моделями — у нас такого нет.
+
 ### OSVC / ФОП / sole-proprietor оформление
 - Для Чехии — OSVC. Нужно регистрироваться когда доход появляется
 - До этого Stripe принимает платежи без проблем, налоги задним числом
@@ -233,7 +324,7 @@ Summary/Actions табах, запоминается в localStorage) + поле
 Юзеры могут писать свои промпт-шаблоны: «Investor pitch», «Therapy session», whatever. Сохраняются в workspace.
 
 ### RAG over прошлые транскрипты
-При генерации саммари LLM видит контекст похожих прошлых созвонов с тем же клиентом. Сильно улучшает осмысленность.
+→ **Поднято в Medium term** с полной детализацией (pgvector + Gemini Embeddings + hybrid search + Chat синергия).
 
 ### Whisper fine-tune на корректировках
 Когда у юзеров накопится 100+ inline-edit правок — собрать датасет, fine-tune. Через несколько месяцев — заметно лучше на их специфике.
