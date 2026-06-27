@@ -1,8 +1,90 @@
 "use client";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { HistoryEntry, Segment } from "@/lib/ink/db";
 import { generate, generateCustom, sendToNotion, UpgradeRequiredError, type Preset } from "@/lib/ink/api";
 import { UpgradeCard } from "./UpgradeCard";
+
+// ── Markdown renderer ────────────────────────────────────────────
+function inlineMd(text: string): ReactNode {
+  const re = /\*\*(.+?)\*\*|\*(.+?)\*/g;
+  const parts: ReactNode[] = [];
+  let last = 0, m: RegExpExecArray | null, k = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    if (m[1] !== undefined) parts.push(<strong key={k++}>{m[1]}</strong>);
+    else parts.push(<em key={k++}>{m[2]}</em>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return <>{parts}</>;
+}
+
+function renderMd(md: string): ReactNode {
+  const lines = md.split("\n");
+  const out: ReactNode[] = [];
+  let i = 0;
+
+  // Collect consecutive bullet/to-do lines (respects indentation for nesting)
+  function collectList(minIndent: number): ReactNode[] {
+    const items: ReactNode[] = [];
+    while (i < lines.length) {
+      const raw = lines[i];
+      const t = raw.trim();
+      if (!t) { i++; continue; }
+      const indent = raw.length - raw.trimStart().length;
+      if (indent < minIndent) break;
+      if (!/^[-*•]\s/.test(t)) break;
+      const content = t.replace(/^[-*•]\s*/, "");
+      i++;
+      // Peek: nested list?
+      let nested: ReactNode = null;
+      if (i < lines.length) {
+        const ni = lines[i].length - lines[i].trimStart().length;
+        if (ni > indent && lines[i].trim() && /^[-*•]\s/.test(lines[i].trim())) {
+          nested = <ul key={`n${i}`}>{collectList(ni)}</ul>;
+        }
+      }
+      if (content.startsWith("[ ] ") || content === "[ ]") {
+        const task = content.slice(4);
+        items.push(<li key={i} className="i-cb-row"><span className="i-cb" aria-hidden="true" /><span>{inlineMd(task)}{nested}</span></li>);
+      } else if (/^\[x\] /i.test(content) || /^\[x\]$/i.test(content)) {
+        items.push(<li key={i} className="i-cb-row"><span className="i-cb done" aria-hidden="true">✓</span><span>{inlineMd(content.slice(4))}{nested}</span></li>);
+      } else {
+        items.push(<li key={i}>{inlineMd(content)}{nested}</li>);
+      }
+    }
+    return items;
+  }
+
+  while (i < lines.length) {
+    const raw = lines[i];
+    const t = raw.trim();
+    if (!t) { i++; continue; }
+    if (t === "---" || t === "___" || t === "***") {
+      out.push(<hr key={i++} />);
+    } else if (raw.startsWith("### ")) {
+      out.push(<h3 key={i++}>{inlineMd(raw.slice(4))}</h3>);
+    } else if (raw.startsWith("## ")) {
+      out.push(<h2 key={i++}>{inlineMd(raw.slice(3))}</h2>);
+    } else if (raw.startsWith("# ")) {
+      out.push(<h2 key={i++}>{inlineMd(raw.slice(2))}</h2>);
+    } else if (/^[-*•]\s/.test(t)) {
+      const indent = raw.length - raw.trimStart().length;
+      out.push(<ul key={`ul${i}`}>{collectList(indent)}</ul>);
+    } else if (/^\d+\.\s/.test(t)) {
+      const items: ReactNode[] = [];
+      while (i < lines.length) {
+        const l = lines[i].trim();
+        if (!l || !/^\d+\.\s/.test(l)) break;
+        items.push(<li key={i++}>{inlineMd(l.replace(/^\d+\.\s/, ""))}</li>);
+      }
+      out.push(<ol key={`ol${i}`}>{items}</ol>);
+    } else {
+      out.push(<p key={i++}>{inlineMd(t)}</p>);
+    }
+  }
+  return <>{out}</>;
+}
 
 // Результат (OUTPUT): заголовок + segmented control Transcript/Summary/Actions/Notes/✦ Custom.
 // Спринт 3: вкладка «✦ Custom ▾» — дропдаун пресетів + модалка нового пресету.
@@ -640,7 +722,7 @@ export function ResultView({
               </div>
               {genError && <p className="i-error">{genError}</p>}
               {entry.aiResults[activeTab]
-                ? <div className="i-md">{entry.aiResults[activeTab]}</div>
+                ? <div className="i-md">{renderMd(entry.aiResults[activeTab])}</div>
                 : !genBusy && <p className="i-sub" style={{ margin: "14px 2px" }}>
                     {activeTab === "summary"
                       ? "A structured report of the conversation."
@@ -681,7 +763,7 @@ export function ResultView({
               {entry.aiResults.custom_label && (
                 <p className="i-custom-label">{entry.aiResults.custom_label}</p>
               )}
-              <div className="i-md">{entry.aiResults.custom}</div>
+              <div className="i-md">{renderMd(entry.aiResults.custom)}</div>
             </>
           ) : (
             <p className="i-sub" style={{ margin: "14px 2px" }}>
