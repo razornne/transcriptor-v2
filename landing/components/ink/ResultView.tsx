@@ -143,7 +143,7 @@ const SegmentRow = memo(function SegmentRow({
   idx: number; speaker: string; name: string; displayName: string; color: string;
   time: string; text: string; edited?: boolean;
   editingSpk: boolean; editingText: boolean;
-  onStartEdit: (label: string) => void;
+  onStartEdit: (idx: number) => void;
   onRename: (label: string, value: string) => void;
   onCancelEdit: () => void;
   onStartTextEdit: (idx: number) => void;
@@ -185,7 +185,7 @@ const SegmentRow = memo(function SegmentRow({
             onClick={(e) => {
               e.stopPropagation();
               e.preventDefault();
-              onStartEdit(speaker);
+              onStartEdit(idx);
             }}
           >
             {displayName}<span className="i-spk-hint"> ✎</span>
@@ -413,7 +413,7 @@ export function ResultView({
   const [focus, setFocus] = useState("");
 
   // Speaker rename
-  const [editingSpk, setEditingSpk] = useState<string | null>(null);
+  const [editingSpk, setEditingSpk] = useState<number | null>(null);
 
   // Inline segment text editing
   const [editingSegIdx, setEditingSegIdx] = useState<number | null>(null);
@@ -499,9 +499,9 @@ export function ResultView({
   };
 
   // Speaker rename handlers
-  const onStartEdit = useCallback((label: string) => {
+  const onStartEdit = useCallback((segIdx: number) => {
     setEditingSegIdx(null);
-    setEditingSpk(label);
+    setEditingSpk(segIdx);
   }, []);
   const onCancelEdit = useCallback(() => setEditingSpk(null), []);
   const onRename = useCallback((label: string, value: string) => {
@@ -686,7 +686,7 @@ export function ResultView({
               time={fmtTime(s.start)}
               text={s.text}
               edited={s.edited}
-              editingSpk={editingSpk === s.speaker}
+              editingSpk={editingSpk === k}
               editingText={editingSegIdx === k}
               onStartEdit={onStartEdit}
               onRename={onRename}
