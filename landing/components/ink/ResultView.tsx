@@ -62,6 +62,8 @@ function renderMd(md: string): ReactNode {
     if (!t) { i++; continue; }
     if (t === "---" || t === "___" || t === "***") {
       out.push(<hr key={i++} />);
+    } else if (raw.startsWith("#### ")) {
+      out.push(<h4 key={i++}>{inlineMd(raw.slice(5))}</h4>);
     } else if (raw.startsWith("### ")) {
       out.push(<h3 key={i++}>{inlineMd(raw.slice(4))}</h3>);
     } else if (raw.startsWith("## ")) {

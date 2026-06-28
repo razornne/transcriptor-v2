@@ -569,6 +569,7 @@
 .i-md > :last-child { margin-bottom: 0 !important; }
 .i-md h2 { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--i-graphite); margin: 18px 0 6px; }
 .i-md h3 { font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
+.i-md h4 { font-size: 12px; font-weight: 600; margin: 10px 0 3px; }
 .i-md hr { border: none; border-top: 1px solid var(--i-hairline); margin: 10px 0; }
 .i-md p  { margin: 0 0 8px; }
 .i-md ul, .i-md ol { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 3px; }
