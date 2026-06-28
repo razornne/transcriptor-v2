@@ -25,6 +25,14 @@ export type Preset = {
   updated_at?: string;
 };
 
+export type VocabTerm = {
+  term: string;
+  wrong?: string;
+  freq: number;
+  lang?: string;
+  last_seen?: string;
+};
+
 export type Profile = {
   plan: string;
   minutes_used: number;
@@ -39,6 +47,7 @@ export type Profile = {
   notion_workspace_name?: string | null;
   presets?: Preset[];
   team_presets?: Preset[];
+  vocabulary?: VocabTerm[];
 };
 
 // ── Projects (client-side, localStorage) ─────────────────────
@@ -320,6 +329,18 @@ export async function setPrivacyMode(enabled: boolean): Promise<void> {
   const data = await res.json().catch(() => ({})) as { error?: string };
   if (!res.ok) {
     if (res.status === 402) throw new UpgradeRequiredError("upgrade required");
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+}
+
+export async function saveVocabulary(vocabulary: VocabTerm[]): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/vocabulary`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vocabulary }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as { error?: string };
     throw new Error(data.error || `HTTP ${res.status}`);
   }
 }

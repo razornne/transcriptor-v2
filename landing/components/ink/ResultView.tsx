@@ -113,12 +113,16 @@ function fmtTime(s: number): string {
   return `${m}:${String(ss).padStart(2, "0")}`;
 }
 
+function stripDash(text: string): string {
+  return text.replace(/^—\s*/, "").trim();
+}
+
 export function transcriptText(segments: Segment[], names: Record<string, string>): string {
-  return segments.map((s) => `[${spkDisplay(s.speaker, names)}]: ${s.text}`).join("\n\n");
+  return segments.map((s) => `[${spkDisplay(s.speaker, names)}]: ${stripDash(s.text)}`).join("\n\n");
 }
 
 function txtText(segments: Segment[], names: Record<string, string>): string {
-  return segments.map((s) => `${spkDisplay(s.speaker, names)}: ${s.text}`).join("\n\n");
+  return segments.map((s) => `${spkDisplay(s.speaker, names)}: ${stripDash(s.text)}`).join("\n\n");
 }
 
 function NotionIcon() {
@@ -176,15 +180,15 @@ const SegmentRow = memo(function SegmentRow({
         ) : (
           <button
             type="button" className="i-spk" style={{ color }}
-            title="Rename speaker"
+            title="Click to rename"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
-              e.stopPropagation();   // изолирует клик от родительского контейнера фразы
-              e.preventDefault();    // отменяет дефолтное поведение
+              e.stopPropagation();
+              e.preventDefault();
               onStartEdit(speaker);
             }}
           >
-            {displayName}
+            {displayName}<span className="i-spk-hint"> ✎</span>
           </button>
         )}
         <span className="i-seg-time">{time}</span>
@@ -207,7 +211,7 @@ const SegmentRow = memo(function SegmentRow({
         />
       ) : (
         <div className="i-seg-text-wrap" onDoubleClick={() => onStartTextEdit(idx)}>
-          <p className="i-seg-text">{text}</p>
+          <p className="i-seg-text">{stripDash(text)}</p>
           <button
             type="button" className="i-seg-pencil"
             aria-label="Edit text" onClick={() => onStartTextEdit(idx)}

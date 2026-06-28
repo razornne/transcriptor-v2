@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import type { Profile, WorkspaceInfo } from "@/lib/ink/api";
+import type { Profile, WorkspaceInfo, VocabTerm } from "@/lib/ink/api";
 import {
-  setPrivacyMode, UpgradeRequiredError, StripeCustomerInvalidError,
+  setPrivacyMode, saveVocabulary, UpgradeRequiredError, StripeCustomerInvalidError,
   createWorkspace as apiCreateWorkspace,
   inviteMember as apiInviteMember,
   removeMember as apiRemoveMember,
@@ -336,6 +336,26 @@ export function SettingsModal({
 
   // Strict workspace validity: must have a real id
   const hasValidWorkspace = !!(workspace?.id);
+
+  // Vocabulary
+  const VOCAB_TOP = 10;
+  const [vocab, setVocab] = useState<VocabTerm[]>(() =>
+    [...(profile?.vocabulary || [])].sort((a, b) => b.freq - a.freq)
+  );
+  const [vocabInput, setVocabInput] = useState("");
+  const [showAllVocab, setShowAllVocab] = useState(false);
+
+  const vocabSave = async (next: VocabTerm[]) => {
+    setVocab(next);
+    try { await saveVocabulary(next); } catch { /* best-effort */ }
+  };
+  const vocabDelete = (term: string) => vocabSave(vocab.filter((v) => v.term !== term));
+  const vocabAdd = () => {
+    const t = vocabInput.trim();
+    if (!t || vocab.some((v) => v.term.toLowerCase() === t.toLowerCase())) return;
+    setVocabInput("");
+    vocabSave([{ term: t, freq: 10 }, ...vocab]);
+  };
 
   // Best Quality
   const [qualityError, setQualityError] = useState("");
@@ -904,6 +924,51 @@ export function SettingsModal({
                       onChange={(v) => void handlePrivMode(v)}
                       disabled={privSaving}
                     />
+                  </div>
+                </div>
+
+                <p className="i-msect-title" style={{ marginTop: 14 }}>
+                  {uiLang === "ua" ? "Словник термінів" : "Vocabulary"}
+                </p>
+                <div className="i-msect-card" style={{ padding: 0 }}>
+                  {vocab.length === 0 && (
+                    <p className="i-vocab-empty">
+                      {uiLang === "ua"
+                        ? "Терміни з'являться після перших транскрипцій — Gemini навчиться вашій лексиці."
+                        : "Terms appear after your first transcriptions — Gemini learns your vocabulary automatically."}
+                    </p>
+                  )}
+                  {vocab.length > 0 && (
+                    <div className="i-vocab-chips">
+                      {(showAllVocab ? vocab : vocab.slice(0, VOCAB_TOP)).map((v) => (
+                        <span key={v.term} className="i-vocab-chip">
+                          {v.term}
+                          <button
+                            type="button" className="i-vocab-del"
+                            onClick={() => vocabDelete(v.term)}
+                            aria-label={`Remove ${v.term}`}
+                          >×</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {vocab.length > VOCAB_TOP && (
+                    <button type="button" className="i-vocab-more" onClick={() => setShowAllVocab((v) => !v)}>
+                      {showAllVocab
+                        ? (uiLang === "ua" ? "Сховати" : "Show less")
+                        : (uiLang === "ua" ? `Показати всі (${vocab.length})` : `Show all (${vocab.length})`)}
+                    </button>
+                  )}
+                  <div className="i-vocab-add-row">
+                    <input
+                      className="i-field"
+                      placeholder={uiLang === "ua" ? "Додати термін…" : "Add a term…"}
+                      value={vocabInput}
+                      onChange={(e) => setVocabInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") vocabAdd(); }}
+                      maxLength={60}
+                    />
+                    <button type="button" className="i-cook" onClick={vocabAdd}>+</button>
                   </div>
                 </div>
 

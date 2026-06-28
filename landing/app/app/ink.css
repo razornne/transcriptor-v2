@@ -522,6 +522,8 @@
 .i-seg-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 3px; }
 .i-spk { font-family: var(--i-ui); font-size: 12.5px; font-weight: 600; letter-spacing: .01em; }
 .i-spk:hover { text-decoration: underline dotted; }
+.i-spk-hint { opacity: 0; font-size: 10px; font-weight: 400; transition: opacity .15s; }
+.i-spk:hover .i-spk-hint { opacity: 0.45; }
 /* Borderless inline rename — Manrope, faint accent wash for affordance (no frame) */
 .i-spk-edit {
   background: color-mix(in srgb, var(--i-accent) 8%, transparent);
@@ -535,6 +537,26 @@
 .i-seg-text { font-size: 14.5px; line-height: 1.6; color: var(--i-ink); margin: 0; }
 
 .i-ai-panel { padding-top: 12px; }
+
+/* ── Vocabulary chips ──────────────────────────────────────────── */
+.i-vocab-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; }
+.i-vocab-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--i-mono); font-size: 11px;
+  background: color-mix(in srgb, var(--i-accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--i-accent) 20%, transparent);
+  border-radius: 20px; padding: 3px 6px 3px 10px; color: var(--i-ink);
+}
+.i-vocab-del {
+  background: none; border: none; cursor: pointer; line-height: 1;
+  color: var(--i-graphite); font-size: 13px; padding: 0 2px;
+}
+.i-vocab-del:hover { color: var(--i-danger); }
+.i-vocab-add-row { display: flex; gap: 6px; padding: 0 12px 12px; }
+.i-vocab-add-row .i-field { flex: 1; }
+.i-vocab-empty { padding: 12px; font-size: 12.5px; color: var(--i-graphite); }
+.i-vocab-more { background: none; border: none; cursor: pointer; font-size: 11.5px; color: var(--i-accent); padding: 0 12px 10px; font-family: var(--i-ui); }
+.i-vocab-more:hover { text-decoration: underline; }
 .i-ai-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .i-seg-detail { display: flex; gap: 5px; }
 .i-md {

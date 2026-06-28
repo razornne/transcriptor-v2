@@ -525,7 +525,10 @@ class Transcriptor:
 
             pp.start("audio_split")
             subprocess.run(
-                ["ffmpeg", "-y", "-i", webm_path, "-ar", "16000", "-ac", "1", wav_path],
+                ["ffmpeg", "-y", "-i", webm_path,
+                 "-af", "highpass=f=80,lowpass=f=12000,anlmdn,loudnorm=I=-16:TP=-1.5:LRA=11,"
+                        "acompressor=threshold=-20dB:ratio=4:attack=5:release=50",
+                 "-ar", "16000", "-ac", "1", wav_path],
                 check=True, capture_output=True,
             )
             pp.done("audio_split")  # ffmpeg done — warmup + decode complete
@@ -657,6 +660,7 @@ class Transcriptor:
         self,
         wav_bytes: bytes,
         language: str | None,
+        num_speakers: int | None = None,
         prompt: str | None = None,
         quality: str = "fast",
         privacy_mode: bool = False,
@@ -671,7 +675,8 @@ class Transcriptor:
         ffmpeg один раз на весь файл и режет на куски. В отличие от
         transcribe_full:
           • не форсит num_speakers (в чанке может быть меньше спикеров) —
-            всегда bounds 1..6, глобальное число применяется при кластеризации;
+            если задан, используется как верхний предел (max_speakers) чтобы
+            не было over-segmentation; глобальное число применяется при кластеризации;
           • дополнительно возвращает centroid-эмбеддинги каждого ЛОКАЛЬНОГО
             спикера, чтобы оркестратор глобально сшил спикеров между чанками;
           • таймстемпы chunk-relative (оркестратор сам добавит offset).
@@ -745,14 +750,18 @@ class Transcriptor:
             if not segments:
                 return {"segments": [], "embeddings": {}, "vocab_additions": []}
 
-            # --- Pyannote (bounds 1..6, без форсинга num_speakers) ---
+            # --- Pyannote (1..num_speakers если задан, иначе 1..6) ---
+            # Не форсим точное число — в чанке может говорить меньше спикеров.
+            # num_speakers используется как верхний предел, чтобы pyannote не
+            # дробил голоса сверх нужного (over-segmentation).
             waveform, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
             waveform = waveform.T  # (channels, time)
             audio_input = {
                 "waveform": torch.from_numpy(np.ascontiguousarray(waveform)),
                 "sample_rate": sample_rate,
             }
-            result = self.pyannote(audio_input, min_speakers=1, max_speakers=6)
+            _max_spk = num_speakers if num_speakers else 6
+            result = self.pyannote(audio_input, min_speakers=1, max_speakers=_max_spk)
             annotation = result.speaker_diarization
             speaker_turns = [
                 {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
@@ -1435,7 +1444,10 @@ def transcribe_long(
         # 1. Декод полного аудио → 16k mono wav (на диск, не в RAM)
         pp.start("audio_split")
         subprocess.run(
-            ["ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "1", wav_path],
+            ["ffmpeg", "-y", "-i", src_path,
+             "-af", "highpass=f=80,lowpass=f=12000,anlmdn,loudnorm=I=-16:TP=-1.5:LRA=11,"
+                    "acompressor=threshold=-20dB:ratio=4:attack=5:release=50",
+             "-ar", "16000", "-ac", "1", wav_path],
             check=True, capture_output=True,
         )
         duration = float(sf.info(wav_path).duration)
@@ -1483,7 +1495,7 @@ def transcribe_long(
             except OSError:
                 pass
             call = Transcriptor().transcribe_chunk.spawn(
-                chunk_bytes, language, prompt, quality, privacy_mode, correction_hints,
+                chunk_bytes, language, num_speakers, prompt, quality, privacy_mode, correction_hints,
                 core_lead_s=start - ss,
                 core_len_s=end - start,
                 is_last_chunk=(i == n - 1),
