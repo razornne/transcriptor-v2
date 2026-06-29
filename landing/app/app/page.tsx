@@ -543,7 +543,6 @@ export default function InkApp() {
         if (e.key === "1") { setActiveTab("transcript"); return; }
         if (e.key === "2") { setActiveTab("summary"); return; }
         if (e.key === "3") { setActiveTab("actions"); return; }
-        if (e.key === "4") { setActiveTab("notes"); return; }
       }
     };
     document.addEventListener("keydown", handler);

@@ -412,6 +412,15 @@ PRESET_MAX_TEAM     = 50
 PRESET_NAME_MAX     = 100
 PRESET_PROMPT_MAX   = 2000
 
+import re as _re
+_CTRL_CHARS = _re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+def _sanitize_preset_prompt(raw: str) -> str:
+    """Strip null bytes and ASCII control chars; auto-add <<TRANSCRIPT_TEXT>> if absent."""
+    p = _CTRL_CHARS.sub("", raw).strip()[:PRESET_PROMPT_MAX]
+    if p and "<<TRANSCRIPT_TEXT>>" not in p:
+        p += "\n\n<<TRANSCRIPT_TEXT>>"
+    return p[:PRESET_PROMPT_MAX]
+
 # Anti-hallucination рамка для кастомных пресетов.
 # Текст транскрипта подставляется через <<TRANSCRIPT_TEXT>> (str.replace, не format —
 # фигурные скобки в юзерском промпте не должны ломать format-вызов).
@@ -1340,7 +1349,7 @@ def update_presets_endpoint():
             continue
         pid = (it.get("id") or "").strip()
         name = (it.get("name") or "").strip()[:PRESET_NAME_MAX]
-        prompt = (it.get("prompt") or "").strip()[:PRESET_PROMPT_MAX]
+        prompt = _sanitize_preset_prompt(it.get("prompt") or "")
         if not pid or not name or not prompt:
             continue
         if pid in seen_ids:
@@ -1396,7 +1405,7 @@ def update_workspace_presets_endpoint():
             continue
         pid = (it.get("id") or "").strip()
         name = (it.get("name") or "").strip()[:PRESET_NAME_MAX]
-        prompt = (it.get("prompt") or "").strip()[:PRESET_PROMPT_MAX]
+        prompt = _sanitize_preset_prompt(it.get("prompt") or "")
         if not pid or not name or not prompt:
             continue
         if pid in seen_ids:

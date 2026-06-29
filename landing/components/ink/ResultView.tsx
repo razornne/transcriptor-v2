@@ -93,7 +93,7 @@ function renderMd(md: string): ReactNode {
 // Спринт 4: Notes (4th tab, дебаунс 600ms), інлайн-редагування тексту сегмента,
 //           Notion export, .txt download, tab state lifted (activeTab/onTabChange від page.tsx).
 
-export type Tab = "transcript" | "summary" | "actions" | "notes" | "custom";
+export type Tab = "transcript" | "summary" | "actions" | "custom";
 
 // Matte "expensive ink" speaker palette — defined as CSS vars in ink.css so the
 // whole set is themeable in one place. Klein blue + muted copper/plum/teal.
@@ -249,10 +249,13 @@ function PresetModal({
 
   const submit = () => {
     const n = name.trim();
-    const p = prompt.trim();
+    // Strip null bytes and ASCII control chars (prevent injection)
+    let p = prompt.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
     if (!n) { setErr("Name is required."); return; }
-    if (!p) { setErr("Prompt is required."); return; }
-    if (p.length > 2000) { setErr("Prompt must be ≤ 2000 characters."); return; }
+    if (!p) { setErr("Please describe what the AI should do."); return; }
+    // Auto-append transcript placeholder if not present
+    if (!p.includes("<<TRANSCRIPT_TEXT>>")) p += "\n\n<<TRANSCRIPT_TEXT>>";
+    if (p.length > 2000) { setErr("Description must be ≤ 2000 characters."); return; }
     onSave({
       id: preset?.id || crypto.randomUUID(),
       name: n, prompt: p, scope,
@@ -280,20 +283,23 @@ function PresetModal({
           </div>
 
           <div>
-            <div className="i-pmodal-label">
-              Prompt
-              <span style={{ marginLeft: 6, fontFamily: "var(--i-mono)", fontSize: 10, color: "var(--i-graphite)" }}>
-                hint: use <code style={{ background: "var(--i-paper)", padding: "1px 4px", borderRadius: 3 }}>{"<<TRANSCRIPT_TEXT>>"}</code> to place transcript
-              </span>
+            <div className="i-pmodal-label">What should the AI do with this call?</div>
+            <div className="i-pmodal-chips">
+              {["Summarize for my manager", "Find all objections", "Extract decisions", "Write follow-up email"].map((ex) => (
+                <button key={ex} type="button" className="i-pill"
+                  onClick={() => setPrompt((p) => p.trim() ? p : ex)}>
+                  {ex}
+                </button>
+              ))}
             </div>
             <textarea
               className="i-pmodal-textarea"
               value={prompt}
-              maxLength={2000}
-              placeholder={"Analyze the customer objections.\n\n<<TRANSCRIPT_TEXT>>"}
+              maxLength={1800}
+              placeholder={"Describe what you want to analyze or extract from the conversation. The transcript will be included automatically."}
               onChange={(e) => setPrompt(e.target.value)}
             />
-            <div className="i-pmodal-count">{prompt.length} / 2000</div>
+            <div className="i-pmodal-count">{prompt.length} / 1800</div>
           </div>
 
           {isTeamAvailable && (
@@ -420,11 +426,6 @@ export function ResultView({
   // Inline segment text editing
   const [editingSegIdx, setEditingSegIdx] = useState<number | null>(null);
 
-  // Notes: local state + debounced save
-  const [localNotes, setLocalNotes] = useState(entry.notes || "");
-  const notesTimerRef = useRef<number>(0);
-  useEffect(() => { setLocalNotes(entry.notes || ""); }, [entry.id]);
-  useEffect(() => () => window.clearTimeout(notesTimerRef.current), []);
 
   // Notion send state
   const [notionSending, setNotionSending] = useState(false);
@@ -530,13 +531,31 @@ export function ResultView({
     onPatch({ segments: newSegs }, { segments: newSegs });
   }, [entry.segments, onPatch]);
 
-  // Notes debounced change
-  const onNotesChange = (text: string) => {
-    setLocalNotes(text);
-    window.clearTimeout(notesTimerRef.current);
-    notesTimerRef.current = window.setTimeout(() => {
-      onPatch({ notes: text }, { notes: text });
-    }, 600);
+  const runBoth = async () => {
+    if (genBusy) return;
+    setGenBusy("summary"); setGenError("");
+    const lang = entry.lang === "auto" ? "" : entry.lang;
+    let summaryText = "";
+    try {
+      summaryText = await generate(entry.segments, names, "summary", lang, detail, focus);
+      const ai = { ...entry.aiResults, summary: summaryText };
+      onPatch({ aiResults: ai }, { ai_results: ai });
+    } catch (e) {
+      if (e instanceof UpgradeRequiredError) { setGated(true); setGenBusy(null); return; }
+      setGenError(`generation failed: ${e instanceof Error ? e.message : e}`);
+      setGenBusy(null); return;
+    }
+    setGenBusy("actions");
+    try {
+      const actionsText = await generate(entry.segments, names, "actions", lang, detail, focus);
+      const ai = { ...entry.aiResults, summary: summaryText, actions: actionsText };
+      onPatch({ aiResults: ai }, { ai_results: ai });
+    } catch (e) {
+      if (e instanceof UpgradeRequiredError) setGated(true);
+      else setGenError(`generation failed: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setGenBusy(null);
+    }
   };
 
   // Notion send
@@ -563,8 +582,6 @@ export function ResultView({
   // Export helpers
   const exportText = activeTab === "transcript"
     ? transcriptText(entry.segments, names)
-    : activeTab === "notes"
-    ? localNotes
     : activeTab === "custom"
     ? (entry.aiResults.custom || "")
     : (entry.aiResults[activeTab] || "");
@@ -575,7 +592,6 @@ export function ResultView({
 
   const downloadMd = () => {
     const md = `# ${entry.title || "Transcript"}\n\n${transcriptText(entry.segments, names)}\n` +
-      (localNotes ? `\n---\n\n## Notes\n\n${localNotes}\n` : "") +
       (entry.aiResults.summary ? `\n---\n\n## Summary\n\n${entry.aiResults.summary}\n` : "") +
       (entry.aiResults.actions ? `\n---\n\n## Action items\n\n${entry.aiResults.actions}\n` : "") +
       (entry.aiResults.custom ? `\n---\n\n## ${entry.aiResults.custom_label || "Custom"}\n\n${entry.aiResults.custom}\n` : "");
@@ -619,12 +635,11 @@ export function ResultView({
 
       <div className="i-tabs">
         <div className="i-segctl" role="tablist">
-          {(["transcript", "summary", "actions", "notes"] as const).map((t) => (
+          {(["transcript", "summary", "actions"] as const).map((t) => (
             <button key={t} type="button" role="tab" aria-selected={activeTab === t}
               className={`i-tab${activeTab === t ? " on" : ""}`} onClick={() => onTabChange(t)}>
-              {t === "transcript" ? "Transcript" : t === "summary" ? "Summary" : t === "actions" ? "Action items" : "Notes"}
-              {t !== "transcript" && t !== "notes" && entry.aiResults[t] && <span className="i-tab-dot" />}
-              {t === "notes" && localNotes && <span className="i-tab-dot" />}
+              {t === "transcript" ? "Transcript" : t === "summary" ? "Summary" : "Action items"}
+              {t !== "transcript" && entry.aiResults[t] && <span className="i-tab-dot" />}
             </button>
           ))}
 
@@ -725,6 +740,11 @@ export function ResultView({
                   onClick={() => void runAI(activeTab as "summary" | "actions")}>
                   {genBusy === activeTab ? "Cooking…" : entry.aiResults[activeTab] ? "Regenerate" : "Generate"}
                 </button>
+                <button type="button" className="i-cook i-cook-ghost" disabled={genBusy !== null}
+                  title="Generate summary + action items"
+                  onClick={() => void runBoth()}>
+                  {genBusy && genBusy !== activeTab ? "Cooking…" : "Both ↓"}
+                </button>
               </div>
               {genError && <p className="i-error">{genError}</p>}
               {entry.aiResults[activeTab]
@@ -736,18 +756,6 @@ export function ResultView({
                   </p>}
             </>
           )}
-        </div>
-      )}
-
-      {/* ── Notes ── */}
-      {activeTab === "notes" && (
-        <div className="i-ai-panel">
-          <textarea
-            className="i-notes-area"
-            value={localNotes}
-            onChange={(e) => onNotesChange(e.target.value)}
-            placeholder="Add notes, timestamps, follow-ups… auto-saved."
-          />
         </div>
       )}
 
