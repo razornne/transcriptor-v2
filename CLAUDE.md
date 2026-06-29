@@ -83,7 +83,7 @@ Supabase Postgres
 3. Stop/Upload: blob отправляется на `/api/transcribe` с JWT + `quality` + `duration_sec` form fields
 4. Flask валидирует JWT, проверяет план, достаёт personal vocabulary, **prepend'ит топ-30 правых форм** в Whisper `initial_prompt` + строит `correction_hints` (пары wrong→right). **Роутинг по `duration_sec`**: >`LONG_AUDIO_THRESHOLD_S` (1800) → `transcribe_long.spawn(...)`, иначе `transcribe_full.spawn(...)`. Оба → `t_<modal_call_id>`
 5. Фронт polling'ует `/api/jobs/<job_id>` каждые 2с → `FunctionCall.from_id(id).get(timeout=0)`. Длинные — таймаут поллинга 60 мин + прогресс "chunk k/N"
-6. Внутри Transcriptor/orchestrator: ffmpeg → Whisper (turbo или large-v3) → pyannote → merger → **Gemini 2.5 Flash STT correction** (с boundary fix + vocab extraction + known-corrections hints) → re-merge consecutive same-speaker → return `{segments, vocab_additions}`. Для длинных — это происходит per-chunk параллельно, затем глобальный стич спикеров
+6. Внутри Transcriptor/orchestrator: **ffmpeg audio preprocessing** (highpass 80Hz + lowpass 12kHz + anlmdn шумоподавление + loudnorm + acompressor) → Whisper (turbo или large-v3) → pyannote → merger → **Gemini 2.5 Flash STT correction** (с boundary fix + vocab extraction + known-corrections hints) → re-merge consecutive same-speaker → return `{segments, vocab_additions}`. Для длинных — это происходит per-chunk параллельно, затем глобальный стич спикеров
 7. На done — segments + vocab_additions возвращаются. Flask добавляет minutes_used, **сохраняет vocab_additions** в `user_profiles.vocabulary` (с frequency tracking, LRU топ-100)
 8. Фронт рендерит, сохраняет в Supabase `public.transcripts` через **raw fetch** (Supabase JS PostgrestClient зависает в нашей среде)
 9. Параллельно `/api/title` генерирует заголовок через `run_llm.spawn(...)` (Qwen)
@@ -97,10 +97,10 @@ Supabase Postgres
   - `image` — GPU образ (CUDA 12.4 + faster-whisper + pyannote + transformers + bitsandbytes + requests). `requests` нужен для прямого HTTP в Gemini API из GPU контейнера (correction pass).
   - `web_image` — лёгкий CPU образ (Flask + flask-cors + pyjwt[crypto] + requests + stripe)
   - `Transcriptor` (cls, A10G) — `load_models()` грузит **две модели Whisper** (turbo + large-v3 для Max), pyannote, **wespeaker embedding model** (для сшивания чанков, cache на Volume), Qwen в `@modal.enter()`. Методы:
-    - `transcribe_full(audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode, correction_hints)` → `{"segments": [...], "vocab_additions": [...]}`. Монолит для коротких записей. Выбирает модель Whisper по `quality`. Pyannote `min_speakers=1, max_speakers=6` если `num_speakers` не задан. После merge — Gemini correction.
-    - `transcribe_chunk(wav_bytes, language, prompt, quality, privacy_mode, correction_hints)` — обрабатывает ОДИН чанк длинной записи (готовый 16k wav). Как transcribe_full, но дополнительно возвращает `embeddings` (до `EMB_PER_SPEAKER` L2-нормированных векторов на локального спикера, через `_speaker_centroids`) для глобального сшивания. Per-chunk не форсит num_speakers.
+    - `transcribe_full(audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode, correction_hints)` → `{"segments": [...], "vocab_additions": [...]}`. Монолит для коротких записей. **ffmpeg preprocessing**: highpass=f=80, lowpass=f=12000, anlmdn (шумоподавление), loudnorm, acompressor — перед передачей в Whisper. Выбирает модель Whisper по `quality`. Pyannote `min_speakers=1, max_speakers=6` если `num_speakers` не задан. После merge — Gemini correction.
+    - `transcribe_chunk(wav_bytes, language, num_speakers, prompt, quality, privacy_mode, correction_hints)` — обрабатывает ОДИН чанк длинной записи (готовый 16k wav). Принимает `num_speakers` — пробрасывается из Flask через `transcribe_long` в каждый чанк (раньше не передавался, спикер-каунт юзера игнорировался). Дополнительно возвращает `embeddings` (до `EMB_PER_SPEAKER` L2-нормированных векторов на локального спикера, через `_speaker_centroids`) для глобального сшивания.
     - `run_llm(prompt, max_tokens, temperature)` — title / chat / tags через Qwen 7B.
-  - `transcribe_long(audio_bytes, ...)` — **CPU оркестратор длинных записей** (`orchestrator_image`, timeout 7200с). ffmpeg silence-aware split (`_plan_chunk_boundaries`, `_parse_silences`) на `CHUNK_LEN_S`-чанки → `Transcriptor().transcribe_chunk.spawn(...)` параллельно → глобальная кластеризация спикеров (`sklearn AgglomerativeClustering`, cosine, `GLOBAL_SPK_THRESHOLD`) → стич с offset + релейбл local→global + re-merge. Контракт ответа = transcribe_full. Прогресс в modal.Dict ("chunk k/N").
+  - `transcribe_long(audio_bytes, ...)` — **CPU оркестратор длинных записей** (`orchestrator_image`, timeout 7200с). ffmpeg silence-aware split (`_plan_chunk_boundaries`, `_parse_silences`) на `CHUNK_LEN_S`-чанки → `Transcriptor().transcribe_chunk.spawn(..., num_speakers=num_speakers, ...)` параллельно (num_speakers теперь пробрасывается в каждый чанк) → глобальная кластеризация спикеров (numpy, cosine, `GLOBAL_SPK_THRESHOLD`) → стич с offset + релейбл local→global + re-merge. Контракт ответа = transcribe_full. Прогресс в modal.Dict ("chunk k/N").
   - `_correct_segments` стратегия: Gemini 2.5 Flash → Qwen fallback на ошибке. `_correct_segments_gemini` принимает `correction_hints` (пары wrong→right юзера) + собирает `vocab_additions` (теперь **list of dicts** `{wrong, right}` через `_extract_vocab_pairs`/difflib).
   - **Env-константы:** `CHUNK_LEN_S` (1200, базовая длина чанка), `MAX_PARALLEL_CHUNKS` (10, лимит GPU-волны — планировщик целится в ≤ этого числа чанков), `MAX_CHUNK_LEN_S` (1800, кап длины чанка), `GLOBAL_SPK_THRESHOLD` (0.68, cosine-порог сшивания спикеров при cannot-link кластеризации — ниже = больше спикеров), `EMB_PER_SPEAKER` (6, embedding'ов на локального спикера), `HALLUCINATION_SILENCE_S` (2.0, анти-галлюцинация Whisper), `WHISPER_MODEL`, `LOAD_BEST_QUALITY`, `EMBEDDING_MODEL`, `CORRECTION_MODEL`, `GEMINI_MODEL`.
   - `gemini_generate(prompt, max_output_tokens, temperature)` — CPU функция на `web_image` для summary/actions через Gemini 2.5 **Pro**. Промпт строится с `{detail_hint}`/`{focus_hint}` (детальность + фокус).
@@ -110,7 +110,8 @@ Supabase Postgres
   - `GET /api/health` — без auth
   - `POST /api/transcribe` (auth) — принимает `audio`, `language`, `num_speakers`, `prompt`, `quality`, **`duration_sec`**. Достаёт `user_profiles.vocabulary` → `_build_vocab_prompt` (топ-30 в Whisper prompt) + `_build_correction_hints` (топ-20 пар wrong→right). **Роутинг по `duration_sec > LONG_AUDIO_THRESHOLD_S`** → `transcribe_long` (long) или `transcribe_full` (short). → `{job_id: "t_<id>"}`. Сохраняет `_job_user`/`_job_language` для vocab save.
   - `POST /api/generate` (auth) — Summary / actions → `gemini_generate` (Pro). Принимает **`detail`** (short/medium/detailed) + **`focus`** → `_build_generate_extras` подставляет `{detail_hint}`/`{focus_hint}` в `GENERATE_TEMPLATES`.
-  - `POST /api/vocabulary` (auth) — **ручное управление словарём** (rename/delete/add из Insights дашборда). Принимает весь массив, валидирует/санитизирует/cap, сохраняет в `user_profiles.vocabulary` через service role.
+  - `POST /api/vocabulary` (auth) — **ручное управление словарём** (rename/delete/add из Insights дашборда И Settings modal). Принимает весь массив, валидирует/санитизирует/cap, сохраняет в `user_profiles.vocabulary` через service role.
+  - **Preset security helpers**: `_sanitize_preset_prompt(raw)` — strip ASCII control chars (null bytes, \x00-\x08 etc.) + auto-append `<<TRANSCRIPT_TEXT>>` если нет + обрезка до `PRESET_PROMPT_MAX`. Вызывается в обоих endpoint'ах `POST /api/presets` (личные) и `POST /api/workspace/presets` (командные). Python format-injection защищён отдельно: `CUSTOM_PRESET_HARD_RULES` использует `.replace("{user_prompt}", ...)` не `.format()`, так что `{evil}` в промпте безопасен.
   - `POST /api/chat` (auth) — Q&A по транскрипту → `{job_id: "c_<id>"}`
   - `GET /api/jobs/<job_id>` (auth) — `FunctionCall.from_id(...).get(timeout=0)`. На done транскрипции **трекит minutes_used + сохраняет vocab_additions** в профиль юзера.
   - `POST /api/title`, `/api/tags`, `/api/transcribe-chunk` (sync, Qwen)
@@ -161,7 +162,7 @@ Supabase Postgres
   **Ink & Halftone Studio (`/app`) — production:**
   - `app/app/{layout,page}.tsx` — root layout + главный экран (монтирует все ink-компоненты)
   - `app/app/ink.css` — все стили Studio под `.i-*` namespace
-  - `components/ink/` — DotField (canvas background), InkSidebar, InputCard (rec + upload), LoginScreen, ResultView (transcript + tabs), SettingsModal, UpgradeCard
+  - `components/ink/` — DotField (canvas background), InkSidebar, InputCard (rec + upload), LoginScreen, ResultView (transcript + tabs), SettingsModal (7 tabs incl. Vocabulary), UpgradeCard
   - `lib/ink/` — api.ts (Modal backend), audio.ts, config.ts, db.ts (Supabase CRUD), idb.ts (IndexedDB), keepalive.ts, settings.ts, supabase.ts
 
   **Общие настройки:**
@@ -289,19 +290,18 @@ runner; merger-тесты идут на голом Python, остальным н
 - IndexedDB autosave — `idbCreateSession / idbAppendChunk / idbDeleteSession`. Каждый chunk пишется. На load `idbGetOrphanedSessions()` находит незавершённые → confirm recovery
 
 ### Переименования и UI
-- **Speaker rename**: клик по `.speaker-name` → inline input → Enter сохраняет в `currentSpeakerNames[rawLabel]`. Имена идут в DB через update entry
+- **Speaker rename**: клик по `.speaker-name` → inline input → Enter сохраняет в `currentSpeakerNames[rawLabel]`. Имена идут в DB через update entry. **Hint-иконка ✎** появляется при hover на имя спикера — напоминает что можно нажать.
 - **Auto-title + progressive UI**: `autoSuggestTitle()` ставит placeholder из первых ~6 слов. `requestLLMTitle()` запускает LLM в фоне, рендерит `✨ thinking…` placeholder. Если юзер кликнул и переименовал руками — `currentTitleIsAuto=false`, LLM не перетирает
 - **Inline edit транскрипта** — двойной клик на текст или ✎ hover-кнопка → textarea (auto-sized). Enter save, Esc cancel, Shift+Enter newline. Помечает `seg.edited`
 
 ### Контент-секции (Tabs UI)
-- **Tab bar**: `Transcript | Summary | Actions`. Появляется когда `hasSegments`. Под капотом — три `tab-panel` div'а, видимость управляется `switchTab(name)`.
+- **Tab bar**: `Transcript | Summary | Actions`. Появляется когда `hasSegments`. Notes-таб **удалён** (2026-06-29). Под капотом — три `tab-panel` div'а, видимость управляется `switchTab(name)`.
 - **Transcript tab** — сам транскрипт + copy/download .md кнопки + recovery box + error box
 - **Summary tab** — generate button → результат от Gemini Pro (или upgrade prompt для Free). Loading spinner пока генерация.
 - **Actions tab** — то же что Summary, но шаблон "actions". Каждый таб имеет дот-индикатор `.tab-has-content` если результат уже есть.
 - `renderAIPanel(template)` — рендерит один панель (Summary или Actions). `runAI(template)` спавнит job, обновляет таб с loading state, парсит результат.
 - **Detail + Focus контролы** (`.ai-controls`, статичный HTML над `#summaryPanel`/`#actionsPanel`, не перерисовывается `renderAIPanel`): сегмент-контрол Short/Medium/Detailed (`aiDetailPref`, глобальный пресет в localStorage `transcriptor_settings.aiDetail`) + поле Focus (`#summaryFocus`/`#actionsFocus`). `runAI` шлёт `detail`+`focus` в `/api/generate`; бэк через `_build_generate_extras` подставляет `{detail_hint}`/`{focus_hint}` в `GENERATE_TEMPLATES`. Regenerate перечитывает текущие значения.
 - `currentAIResults` хранит результаты обоих templates в памяти. При загрузке из истории — восстанавливается.
-- **Notes section** — отдельной секцией под табами (не в табе). Видима когда `isRecording || hasSegments`. Debounce 600ms на save.
 
 ### Insights дашборд (`#dashboardModal`)
 Оверлей "Insights" (кнопка-график `#sidebarInsightsBtn` в sidebar-user рядом с шестерёнкой). `renderDashboard()` считает всё **клиентски** из `_historyCache` (segments→длительность `max(segment.end)`, lang, created_at) + профиля (`currentMinutesUsed/Limit`) + `currentVocabulary` (топ-термины, `vocabulary` добавлен в `/api/profile`). Метрики: записей всего, всего часов, за месяц, использование лимита, активность 14 дней, языки, топ-термины. Графики — чистый CSS (`.dash-*`), без библиотек. Миграция не нужна. **v1 в `/app`; план — перенести в v2 Studio (`/v2/insights`) и сделать красивее.**
@@ -365,6 +365,9 @@ runner; merger-тесты идут на голом Python, остальным н
 - **`add_local_python_source("merger")` / `("app")`** — Modal должен знать о локальных модулях чтобы упаковать. Без этого `from merger import merge` и `from app import app` упадут.
 
 ### Frontend
+- **Speaker rename — editingSpk хранит индекс сегмента, не speaker label.** Если хранить label, все строки одного спикера одновременно рендерят `<input>`, каждый из них получает фокус и сразу теряет через `onBlur → onRename → setEditingSpk(null)`. Нажатие выглядит как "ничего не происходит". Хранить `number | null` (segIdx) — только одна конкретная строка становится полем.
+- **Preset prompt injection защита двойная:** (1) frontend `submit()` стрипит control chars + auto-append placeholder; (2) backend `_sanitize_preset_prompt()` делает то же самое. Python format-injection уже блокирован — `CUSTOM_PRESET_HARD_RULES` использует `str.replace("{user_prompt}", ...)`, не `.format()`, поэтому `{evil}` в промпте не интерполируется.
+- **`####` в Gemini-ответах** — Gemini 2.5 Pro генерирует h4 (`####`) для подзаголовков summary. `renderMd` в ResultView должен обрабатывать h4, иначе выводится raw "####". Добавить кейс `raw.startsWith("#### ")` ПЕРЕД `### `.
 - **API_BASE на проде = абсолютный Modal URL, обходит Vercel.** На `skriptly.io/app` фронт грузится через Vercel-proxy → Modal, но XHR-запросы к `/api/*` идут НАПРЯМУЮ на `razornne--transcriptor-v2-flask-app.modal.run` (см. `const API_BASE` в templates/index.html). Причина: Vercel Edge Network имеет body-size ~4MB на проксированных запросах, аудио легко превышает → 502 `ROUTER_EXTERNAL_TARGET_ERROR`. Cross-origin работает потому что Flask настроен `CORS(..., origins="*")`. На `localhost` API_BASE остаётся пустым (same-origin для dev).
 
 - **Supabase JS PostgrestClient зависает на `.then()` в нашей среде.** Auth работает, но `sb.from('transcripts').select()` никогда не резолвится. Поэтому raw fetch к `/rest/v1`. Если будут вопросы "почему не SDK" — это причина. Может починится в будущей версии Supabase JS.
@@ -387,6 +390,7 @@ runner; merger-тесты идут на голом Python, остальным н
 - **При autodetect фронт прислал пустую строку — бэк сам детектит язык.** `_detect_transcript_language()` в app.py считает кириллицу vs латиницу + украинские специфичные буквы (`іїєґ`) → возвращает `uk`/`ru`/`en`. Используется в `/api/title`, `/api/chat`, `/api/generate`. Без этого Qwen2.5 регулярно сваливался в английский, даже когда транскрипт был украинский. Тэги (`/api/tags`) ВСЕГДА на английском намеренно — для надёжной фильтрации across languages.
 
 ### Whisper / Diarization
+- **ffmpeg audio preprocessing** перед Whisper: `highpass=f=80, lowpass=f=12000, anlmdn (шумоподавление), loudnorm, acompressor`. Порог lowpass — **12kHz**, не 8kHz: 8kHz срезает согласные, нужные для распознавания английских терминов ("pitch deck" → "page-теку", "IRR" → "АРР" — регрессия обнаружена при реальном использовании). Применяется в `transcribe_full` и при нарезке чанков в `transcribe_long` (каждый чанк уже обработан).
 - **Word-level alignment в merger** — режет Whisper-сегменты в местах смены спикера. Требует `word_timestamps=True` в whisper.transcribe.
 - **Гибридный split в merger** (2026-05): короткий Whisper-сегмент (≤2s) → majority-vote (70% threshold). Длинный → word-level split. Решает проблему когда pyannote дробит одну реплику на ABAB ping-pong.
 - **SPEAKER_UNKNOWN forward-fill** — pyannote иногда не атрибутирует первое слово сегмента. Merger делает forward/backward-fill.
@@ -550,12 +554,13 @@ Admin-only инструмент для side-by-side сравнения LLM на 
 Не "юзер правит → словарь" — наш умнее: **Gemini правит → словарь пар wrong→right**, который дальше работает на ДВУХ уровнях: Whisper (распознать сразу) + Gemini hint (починить увереннее). Детерминированную find/replace замену НЕ делаем (риск ложных правок).
 
 ### Ручное управление словарём (реализовано)
-В Insights дашборде блок "TOP RECOGNIZED TERMS" — **редактируемые чипы**: hover →
-✎ (rename inline) / × (delete); поле "+ Add a term" внизу (ручной термин, freq=10
-→ в топ Whisper prompt). Свёрнуто до 18, кнопка "Show all (N)". Изменения
-оптимистичны + персист через **`POST /api/vocabulary`** (заменяет весь массив,
-service role). `currentVocabulary` приходит из `/api/profile`. Это закрыло
-«ручное поле мои термины» из роадмапа.
+Доступно в **двух местах**:
+
+1. **Settings → Vocabulary tab** (основное место, 2026-06-29): редактируемые чипы, hover → ✎ rename inline / × delete, поле "+ Add a term" (freq=10 → в топ Whisper prompt). Изменения оптимистичны + персист через `POST /api/vocabulary` (service role).
+
+2. **Insights дашборд** (`#dashboardModal`): блок "TOP RECOGNIZED TERMS" — то же самое. Свёрнуто до 18 чипов, кнопка "Show all (N)".
+
+`currentVocabulary` приходит из `/api/profile`. Это закрыло «ручное поле мои термины» из роадмапа.
 
 ### Gotchas
 
@@ -682,7 +687,7 @@ landing/
 │   ├── InkSidebar.tsx ← левый сайдбар: история записей (Supabase), search
 │   ├── InputCard.tsx  ← карточка управления: запись / upload / processing
 │   ├── LoginScreen.tsx← экран логина (Supabase Auth overlay)
-│   ├── ResultView.tsx ← транскрипт + табы (Transcript / Summary / Actions / Notes)
+│   ├── ResultView.tsx ← транскрипт + табы (Transcript / Summary / Actions / Custom)
 │   ├── SettingsModal.tsx ← модалка настроек (7 табов — см. ниже)
 │   └── UpgradeCard.tsx← апгрейд-промпт при достижении лимита / AI-гейте
 └── lib/ink/
@@ -702,6 +707,7 @@ landing/
 |-----|------------|
 | Account | email, план, использование минут (прогресс-бар) |
 | Subscription | карточки планов Free/Pro/Max + Privacy Mode toggle. Upgrade → `createStripeCheckout()`. Downgrade/manage → `createStripePortal()` (Customer Portal). |
+| Vocabulary | **Редактируемые чипы терминов** из `currentVocabulary`. Hover → ✎ rename inline / × delete; поле "+ Add a term" (freq=10). Сохраняется через `POST /api/vocabulary`. Данные приходят из `/api/profile`. |
 | Workspace | создать / посмотреть команду, инвайты, покинуть. Create кнопка активна при любом непустом имени; без Team-плана → upsell-баннер + подсветка Team-карточки. |
 | Integrations | Notion OAuth (connect / disconnect / change default page) |
 | Invite friends | реф-ссылка, бонусные минуты (+60 обоим) |
@@ -736,7 +742,7 @@ mouse.x += mouse.vx; mouse.y += mouse.vy;
 
 Cloud sinusoid t-multipliers увеличены ~35% — точки «дышат» заметно даже без движения мыши.
 
-### CSS ключевые классы (ink.css Sprint 8)
+### CSS ключевые классы (ink.css)
 
 | Класс | Описание |
 |-------|----------|
@@ -747,6 +753,10 @@ Cloud sinusoid t-multipliers увеличены ~35% — точки «дышат
 | `.i-team-upsell-banner` | Баннер «Workspace requires Team plan» со slide-in |
 | `.i-danger-del-btn` | Кнопка «Видалити акаунт» в Danger zone |
 | `.i-danger-del-btn.confirming` | Состояние подтверждения (красный, scale-pulse) |
+| `.i-cook.i-cook-ghost` | Ghost-кнопка (обводка, нет fill) — «Both ↓» в AI-панели |
+| `.i-pmodal-chips` | Flex-wrap ряд чипов-примеров в модалке создания пресета |
+| `.i-spk-hint` | Иконка ✎ подсказки hover на имени спикера |
+| `.i-md h4` | `font-size: 12px; font-weight: 600` — Gemini генерирует `####` подзаголовки |
 
 Все новые анимации имеют `@media (prefers-reduced-motion)` overrides.
 
@@ -766,6 +776,20 @@ Cloud sinusoid t-multipliers увеличены ~35% — точки «дышат
 - **Fix 3 — Modal sizing**: 880×580px desktop, responsive mobile collapse.
 - **Fix 4 — Delete account**: Самостоятельное удаление аккаунта (GDPR) с двойным подтверждением.
 - **Fix 5 — DotField physics**: Spring/velocity для курсора, MOUSE_R 150→185, MOUSE_DISP 4→6, cloud +35% скорость.
+
+### Sprint 9 changelog (2026-06-29)
+
+- **Audio preprocessing**: ffmpeg filter chain перед Whisper — `highpass=f=80, lowpass=f=12000, anlmdn, loudnorm, acompressor`. Lowpass 12kHz (было 8kHz — регрессия на английских согласных: "pitch deck" → "page-теку", "IRR" → "АРР"). Работает в `transcribe_full` и `transcribe_long` (передаётся в каждый чанк через WAV).
+- **num_speakers fix в чанках**: `transcribe_long` теперь пробрасывает `num_speakers` юзера в каждый `transcribe_chunk.spawn()`. Раньше спикер-каунт игнорировался для длинных записей.
+- **Speaker rename fix**: `editingSpk` теперь хранит индекс сегмента (`number | null`) вместо speaker label. Старая логика (по label) давала race: все строки одного спикера одновременно рендерили `<input>`, каждый терял фокус через blur → onRename → reset, нажатие ни к чему не приводило.
+- **Speaker rename ✎ hint**: `.i-spk-hint` иконка появляется при hover на имени спикера.
+- **Em dash removed**: `stripDash()` в ResultView убирает ведущее `—` из реплик транскрипта.
+- **Notes tab removed**: вкладка Notes (локальные заметки) удалена из ResultView. Tab type: `"transcript" | "summary" | "actions" | "custom"`. Keyboard shortcut `4` → notes удалён из page.tsx.
+- **"Both ↓" button**: кнопка-гоуст рядом с Generate в AI-панели. `runBoth()` генерирует Summary, дожидается, затем Actions. Второй patch передаёт обе части явно (stale closure guard: `{ ...entry.aiResults, summary: summaryText, actions: actionsText }`).
+- **Casual preset UX**: модалка создания пресета — label "What should the AI do with this call?", чипы-примеры (Summarize for my manager / Find all objections / Extract decisions / Write follow-up email), `<<TRANSCRIPT_TEXT>>` добавляется автоматически если нет.
+- **Preset security**: frontend strip control chars + auto-append placeholder в `submit()`; backend `_sanitize_preset_prompt()` в `app.py` (strip \x00-\x1F + auto-append + обрезка до PRESET_PROMPT_MAX). Python format-injection невозможен — `CUSTOM_PRESET_HARD_RULES` использует `.replace()` не `.format()`.
+- **h4 markdown**: `renderMd` в ResultView теперь обрабатывает `####` (Gemini генерирует подзаголовки h4). CSS: `.i-md h4 { font-size:12px; font-weight:600 }`.
+- **Vocabulary section in Settings**: вкладка Vocabulary добавлена в SettingsModal (редактируемые чипы терминов, + Add, × delete). Раньше был только в Insights дашборде.
 
 
 ---
@@ -794,6 +818,14 @@ git push origin main  # Vercel сразу собирает и катит на sk
 **После добавления новой миграции:** выполнить SQL вручную в Supabase SQL Editor (project `bmonakhktbaliwgobrxv`). Текущие миграции:
 - `migrations/001_workspace.sql` — workspaces + workspace_members + transcripts.visibility
 - `migrations/002_vocabulary.sql` — user_profiles.vocabulary JSONB
+- `migrations/003_referrals.sql` — referral_code + referred_by + bonus_minutes
+- `migrations/004_team_billing.sql` — workspaces.plan/stripe/seats/billing
+- `migrations/005_notion.sql` — user_profiles Notion OAuth credentials
+- `migrations/006_signup_notified.sql` — signup_notified_at TIMESTAMPTZ
+- `migrations/007_privacy_mode.sql` — user_profiles.privacy_mode BOOLEAN
+- `migrations/008_vocabulary_pairs.sql` — vocabulary item format: adds `wrong` field
+- `migrations/009_custom_presets.sql` — user_profiles.presets + workspaces.presets JSONB
+- `migrations/010_speaker_names.sql` — transcripts.speaker_names JSONB
 
 Миграции **не идемпотентны через какой-то фреймворк** — каждая написана с `IF NOT EXISTS` чтобы безопасно перезапустить, но фиксить руками тоже окей.
 
