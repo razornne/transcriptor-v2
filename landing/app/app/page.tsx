@@ -10,6 +10,7 @@ import { ResultView, transcriptText, type Tab } from "@/components/ink/ResultVie
 import { UpgradeCard } from "@/components/ink/UpgradeCard";
 import { SettingsModal } from "@/components/ink/SettingsModal";
 import { startRecording, probeDuration, type Recorder } from "@/lib/ink/audio";
+import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
@@ -445,7 +446,21 @@ export default function InkApp() {
     setStatus("reading file…");
     phCapture("file_uploaded", { type: f.type, size_mb: +(f.size / 1048576).toFixed(2) });
     const dur = await probeDuration(f);
-    void cookBlob(f, dur);
+
+    let toUpload: Blob = f;
+    if (shouldExtractAudio(f)) {
+      setStatusKind("info"); setStatus("compressing audio…");
+      try {
+        toUpload = await extractAudioTrack(f, (ratio) => setStatus(`compressing audio… ${Math.round(ratio * 100)}%`));
+        phCapture("audio_extracted", {
+          original_mb: +(f.size / 1048576).toFixed(2),
+          compressed_mb: +(toUpload.size / 1048576).toFixed(2),
+        });
+      } catch {
+        toUpload = f; // extraction failed — fall back to uploading the original
+      }
+    }
+    void cookBlob(toUpload, dur);
   }, [passLimitGate, cookBlob]);
 
   const onRecToggle = useCallback(async () => {
