@@ -115,6 +115,15 @@ function fmtTime(s: number): string {
   return `${m}:${String(ss).padStart(2, "0")}`;
 }
 
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  return d.toLocaleDateString("en-GB", {
+    day: "numeric", month: "short",
+    year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
+}
+
 function stripDash(text: string): string {
   return text.replace(/^—\s*/, "").trim();
 }
@@ -631,6 +640,8 @@ export function ResultView({
         <span>{entry.segments.length ? fmtTime(Math.max(...entry.segments.map((s) => s.end))) : "0:00"}</span>
         <span>·</span>
         <span>{entry.lang}</span>
+        <span>·</span>
+        <span>{fmtDate(entry.date)}</span>
       </div>
 
       <div className="i-tabs">

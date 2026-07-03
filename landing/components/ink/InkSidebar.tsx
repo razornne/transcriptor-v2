@@ -204,6 +204,7 @@ export function InkSidebar({
         type="button"
         className="i-item-main"
         onClick={() => { onSelect(e.id); onClose(); }}
+        title={e.title || s.untitled}
       >
         <span className="i-item-title">{e.title || s.untitled}</span>
         <span className="dur">{fmtDur(e)} · {fmtDate(e.date)}</span>
