@@ -149,7 +149,9 @@ def soniox_rt(path: Path, lang: str, speedup: float = 4.0) -> dict:
     async def run() -> dict:
         final: list[dict] = []
         sent_at = {"end": None}
-        async with websockets.connect("wss://stt-rt.soniox.com/transcribe-websocket", max_size=None) as ws:
+        # ping_interval=None: Soniox не отвечает на WS-пинги — клиент рвал сессию по таймауту
+        async with websockets.connect("wss://stt-rt.soniox.com/transcribe-websocket", max_size=None,
+                                      ping_interval=None) as ws:
             await ws.send(json.dumps({
                 "api_key": soniox_key(), "model": "stt-rt-v5",
                 "audio_format": "pcm_s16le", "sample_rate": 16000, "num_channels": 1,
