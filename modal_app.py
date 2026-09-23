@@ -135,6 +135,8 @@ notion_secret = modal.Secret.from_name("notion-secrets", required_keys=[
 admin_secret = modal.Secret.from_name("admin-secrets", required_keys=[
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_CHAT_ID",
 ])
+# OpenAI — саммари/action items (GPT-6 Luna, fallback на Gemini).
+openai_secret = modal.Secret.from_name("openai-secrets", required_keys=["OPENAI_API_KEY"])
 # Cloudflare R2 (S3 API) — архив аудио всех записей для работы над ошибками.
 r2_secret = modal.Secret.from_name("r2-secrets", required_keys=[
     "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET",
@@ -2122,6 +2124,50 @@ def gemini_generate(prompt: str, max_output_tokens: int = 32768, temperature: fl
         print(f"[gemini_generate] still truncated at 65536 tokens ({len(text)} chars)", flush=True)
 
     return text
+
+
+@app.function(
+    image=web_image,
+    secrets=[openai_secret],
+    timeout=900,                # OpenAI (до 600с) + возможный fallback на Gemini
+    scaledown_window=60,
+    min_containers=0,
+)
+def openai_generate(prompt: str, model: str = "gpt-6-luna", max_output_tokens: int = 32768) -> str:
+    """Саммари/action items через OpenAI Responses API. Любая ошибка OpenAI →
+    тот же промпт в gemini_generate, чтобы юзер получил результат, а не ошибку.
+
+    GPT-6 Luna выбрана по сравнению на реальном 54-мин звонке (tests/compare_summaries.py):
+    точнее Gemini 2.5 Pro по участникам и конкретике, в ~12 раз дешевле.
+    temperature не передаём — reasoning-модели её не принимают.
+    """
+    import os
+    import requests
+
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/responses", timeout=600,
+            headers={"Authorization": f"Bearer {os.environ['OPENAI_API_KEY'].strip()}"},
+            json={"model": model, "input": prompt, "max_output_tokens": max_output_tokens},
+        )
+        if not r.ok:
+            raise RuntimeError(f"{model} {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        text = "".join(
+            c.get("text", "")
+            for item in data.get("output", []) if item.get("type") == "message"
+            for c in item.get("content", []) if c.get("type") == "output_text"
+        ).strip()
+        if data.get("status") == "incomplete":
+            print(f"[openai_generate] incomplete: {data.get('incomplete_details')}", flush=True)
+        if not text:
+            raise RuntimeError(f"{model}: empty output (status={data.get('status')})")
+        u = data.get("usage") or {}
+        print(f"[openai_generate] {model} in={u.get('input_tokens')} out={u.get('output_tokens')}", flush=True)
+        return text
+    except Exception as e:
+        print(f"[openai_generate] {e} — falling back to Gemini", flush=True)
+        return gemini_generate.remote(prompt)
 
 
 # ── Flask web endpoint ───────────────────────────────────────────

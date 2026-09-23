@@ -3375,13 +3375,12 @@ def generate_endpoint():
 
     prompt = GENERATE_TEMPLATES[template_name].format(text=text, lang_hint=lang_hint, **extras)
 
-    # Gemini-путь для summary/actions: внешний LLM, отдельная Modal функция.
+    # summary/actions: GPT-6 Luna (openai_generate, сам падает обратно на Gemini при ошибке)
     if use_gemini:
         try:
-            gemini_fn = _modal.Function.from_name("transcriptor-v2", "gemini_generate")
-            call = gemini_fn.spawn(prompt, max_output_tokens=8000, temperature=0.3)
+            call = _modal.Function.from_name("transcriptor-v2", "openai_generate").spawn(prompt)
         except Exception as e:
-            return jsonify({"error": f"gemini spawn failed: {e}"}), 502
+            return jsonify({"error": f"generate spawn failed: {e}"}), 502
         return jsonify({"job_id": JOB_PREFIX_GENERATE + call.object_id, "status": "queued"})
 
     # Modal path с Qwen: для шаблонов вне GEMINI_TEMPLATES (сейчас не используется,
