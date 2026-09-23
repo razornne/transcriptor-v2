@@ -689,9 +689,11 @@ def _r2():
     if _r2_client is None:
         import boto3
         from botocore.config import Config
+        # R2_ENDPOINT only for jurisdiction buckets (EU: https://<acc>.eu.r2.cloudflarestorage.com)
         _r2_client = boto3.client(
             "s3",
-            endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+            endpoint_url=os.environ.get("R2_ENDPOINT")
+            or f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
             aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
             aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
             region_name="auto",

@@ -147,7 +147,7 @@ Supabase Postgres
 ### Архив записей (работа над ошибками)
 - Каждая транскрипция (запись и upload, **кроме Privacy Mode**) → копия аудио в R2 `recordings/{user_id}/{recording_id}.{ext}` + строка в `public.recordings`. Делает `/api/transcribe` фоновым потоком (`_archive_recording`) после spawn; результат джобы (`segments`/`error`) дописывает `/api/jobs/<id>` (`_archive_job_result`, PATCH по `job_id`). Всё best-effort — сбой архива не ломает транскрипцию.
 - Фронт шлёт `recording_id` (из `startRecording`, для upload — новый uuid) и `source` (`record`/`upload`) в FormData.
-- Секрет `r2-secrets` (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET) на `flask_app`. Хранение 90 дней: lifecycle-правило бакета в дашборде Cloudflare + `recordings.expires_at`.
+- Секрет `r2-secrets` (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET; опционально R2_ENDPOINT — только для бакета с юрисдикцией EU) на `flask_app`. Хранение 90 дней: lifecycle-правило бакета в дашборде Cloudflare + `recordings.expires_at`.
 - **`/app/review`** — админка (ADMIN_EMAILS): список записей с флагами проблем, плеер с раздельным прослушиванием каналов (L=микрофон, R=звонок) через ChannelSplitter, телеметрия + журнал событий, сырой транскрипт (клик → перемотка). Аудио проксируется через `/api/admin/recordings/<id>/audio` — CORS на бакете не нужен.
 - Миграции выполняются **вручную через Supabase SQL Editor** — нет миграционного фреймворка. После добавления новой — обновить эту секцию + сам файл должен начинаться с комментария "Run in Supabase SQL Editor".
 
