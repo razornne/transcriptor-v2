@@ -637,14 +637,15 @@ class Transcriptor:
 
             # --- LLM correction ---
             pp.start("ai_formatting")
-            merged, vocab_additions = self._correct_segments(
+            merged, vocab_additions, corrections = self._correct_segments(
                 merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints,
                 speakers_fixed=(mode == "dual"),
             )
             merged = _merge_same_speaker(merged)  # boundary-fix мог сделать соседей одного спикера
             pp.done("ai_formatting")
 
-            return {"segments": merged, "vocab_additions": vocab_additions, "channel_mode": mode}
+            return {"segments": merged, "vocab_additions": vocab_additions, "channel_mode": mode,
+                    "corrections": corrections}
 
         finally:
             for p in [src_path, *wavs]:
@@ -842,7 +843,7 @@ class Transcriptor:
                 m["speaker"] = str(m["speaker"])
 
             # --- LLM correction (per-chunk; ~20мин транскрипт влезает в 1 Gemini-вызов) ---
-            merged, vocab_additions = self._correct_segments(
+            merged, vocab_additions, corrections = self._correct_segments(
                 merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints,
                 speakers_fixed=call_wav_bytes is not None,
             )
@@ -850,6 +851,7 @@ class Transcriptor:
                 "segments": _merge_same_speaker(merged),
                 "embeddings": embeddings,
                 "vocab_additions": vocab_additions,
+                "corrections": corrections,  # chunk-relative start
             }
         finally:
             for p in paths:
@@ -902,7 +904,25 @@ class Transcriptor:
     def _correct_segments(self, segments: list[dict], language: str | None,
                           privacy_mode: bool = False,
                           correction_hints: str = "",
-                          speakers_fixed: bool = False) -> tuple[list[dict], list[dict]]:
+                          speakers_fixed: bool = False) -> tuple[list[dict], list[dict], list[dict]]:
+        """_correct_segments_impl + список правок (было → стало) для архива —
+        по нему видно, где коррекция испортила смысл. Кол-во и порядок
+        сегментов коррекция не меняет, поэтому сравнение попарное."""
+        corrected, vocab = self._correct_segments_impl(
+            segments, language, privacy_mode=privacy_mode,
+            correction_hints=correction_hints, speakers_fixed=speakers_fixed)
+        changes = [
+            {"start": float(b["start"]), "speaker_before": a["speaker"], "speaker_after": b["speaker"],
+             "before": a["text"], "after": b["text"]}
+            for a, b in zip(segments, corrected)
+            if a["text"] != b["text"] or a["speaker"] != b["speaker"]
+        ]
+        return corrected, vocab, changes
+
+    def _correct_segments_impl(self, segments: list[dict], language: str | None,
+                               privacy_mode: bool = False,
+                               correction_hints: str = "",
+                               speakers_fixed: bool = False) -> tuple[list[dict], list[dict]]:
         """Главный correction pass.
 
         privacy_mode=True skips the Gemini call entirely — falls back to
@@ -1735,7 +1755,15 @@ def transcribe_long(
                 chunks_failed=len(failed_chunks))
         print(f"[long] done: {len(final)} segments, {len(order)} speakers, "
               f"vocab+{len(vocab)}, failed_chunks={failed_chunks or 'none'}", flush=True)
-        return {"segments": final, "vocab_additions": vocab, "channel_mode": mode}
+        corrections: list[dict] = []
+        for i, (start, res) in enumerate(results):
+            if not res:
+                continue
+            offset = pad_starts[i] if i < len(pad_starts) else start
+            for c in res.get("corrections") or []:
+                corrections.append({**c, "start": float(c["start"]) + offset})
+        return {"segments": final, "vocab_additions": vocab, "channel_mode": mode,
+                "corrections": corrections}
 
     finally:
         for p in [src_path, *wavs, *chunk_paths]:
@@ -2025,14 +2053,19 @@ GEMINI_ENDPOINT = (
 @app.function(
     image=web_image,            # тот же лёгкий CPU образ что и flask_app
     secrets=[hf_secret],        # GEMINI_API_KEY лежит в общем секрете
-    timeout=300,                # Gemini Pro на длинном контексте ~30-120с
+    timeout=600,                # до двух вызовов Gemini Pro (повтор при MAX_TOKENS)
     scaledown_window=60,
     min_containers=0,
 )
-def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: float = 0.3) -> str:
+def gemini_generate(prompt: str, max_output_tokens: int = 32768, temperature: float = 0.3) -> str:
     """Вызов Gemini 2.5 Pro REST API. Возвращает сгенерированный текст.
     Бросает RuntimeError с человекочитаемым сообщением при ошибке —
     оно проходит через Modal FunctionCall и доедет до фронта.
+
+    maxOutputTokens у 2.5 Pro включает "thinking"-токены, а кириллица стоит
+    ~1.5 символа на токен: длинное саммари на 8000 токенах обрывалось на
+    полуслове. Поэтому thinking ограничен бюджетом, а при MAX_TOKENS —
+    один повтор с максимальным лимитом модели.
     """
     import os
     import requests
@@ -2041,23 +2074,26 @@ def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: flo
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not configured")
 
-    body = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_output_tokens,
-        },
-    }
+    def call(limit: int) -> dict:
+        body = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": limit,
+                "thinkingConfig": {"thinkingBudget": 4096},
+            },
+        }
+        try:
+            return requests.post(GEMINI_ENDPOINT, params={"key": api_key}, json=body, timeout=280)
+        except requests.RequestException as e:
+            raise RuntimeError(f"gemini request failed: {e}") from e
 
-    try:
-        resp = requests.post(
-            GEMINI_ENDPOINT,
-            params={"key": api_key},
-            json=body,
-            timeout=240,
-        )
-    except requests.RequestException as e:
-        raise RuntimeError(f"gemini request failed: {e}") from e
+    resp = call(max(max_output_tokens, 32768))
+    if resp.status_code == 200:
+        cand0 = (resp.json().get("candidates") or [{}])[0]
+        if cand0.get("finishReason") == "MAX_TOKENS":
+            print("[gemini_generate] hit MAX_TOKENS — retrying with 65536", flush=True)
+            resp = call(65536)
 
     if resp.status_code != 200:
         # Gemini кладёт детали в JSON.error.message
@@ -2082,6 +2118,8 @@ def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: flo
 
     if not text:
         raise RuntimeError(f"gemini: empty response (finishReason={finish})")
+    if finish == "MAX_TOKENS":
+        print(f"[gemini_generate] still truncated at 65536 tokens ({len(text)} chars)", flush=True)
 
     return text
 

@@ -2101,3 +2101,12 @@
   .i-rv-spk { grid-column: 2; }
   .i-rv-segs li > span:last-child { grid-column: 1 / -1; }
 }
+.i-rv-fixes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+.i-rv-fixes li { display: grid; grid-template-columns: 52px 1fr; gap: 10px; }
+.i-rv-fixes button {
+  font-family: var(--i-mono); font-size: 11.5px; color: var(--i-accent);
+  background: none; border: 0; padding: 0; cursor: pointer; align-self: start;
+}
+.i-rv-fixes p { margin: 0 0 2px; line-height: 1.5; }
+.i-rv-before { color: var(--i-graphite); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--i-danger) 60%, transparent); }
+.i-rv-after { color: var(--i-ink); }

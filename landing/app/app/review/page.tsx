@@ -145,6 +145,7 @@ function Detail({ id }: { id: string }) {
         <p className="i-rv-muted">
           {fmtDate(rec.created_at)} · {rec.source} · {fmtDur(rec.duration_sec)} · {rec.language || "auto"} ·
           {" "}spk {rec.num_speakers ?? "auto"} · {rec.quality} · {((rec.size_bytes || 0) / 1048576).toFixed(1)} MB
+          {rec.channel_mode ? ` · channels: ${rec.channel_mode}` : ""}
         </p>
         <div className="i-rv-flags">
           {flagsOf(rec).map((f) => <span key={f.label} className={`i-rv-flag${f.bad ? " bad" : ""}`}>{f.label}</span>)}
@@ -175,6 +176,26 @@ function Detail({ id }: { id: string }) {
               ))}
             </ul>
           )}
+        </section>
+      )}
+
+      {rec.corrections && rec.corrections.length > 0 && (
+        <section>
+          <h3>AI correction changed {rec.corrections.length} lines</h3>
+          <ol className="i-rv-fixes">
+            {rec.corrections.map((c, i) => (
+              <li key={i}>
+                <button type="button" onClick={() => seek(c.start)}>{fmtDur(c.start)}</button>
+                <div>
+                  <p className="i-rv-before">{c.before}</p>
+                  <p className="i-rv-after">{c.after}</p>
+                  {c.speaker_before !== c.speaker_after && (
+                    <p className="i-rv-muted">speaker {c.speaker_before} → {c.speaker_after}</p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
         </section>
       )}
 

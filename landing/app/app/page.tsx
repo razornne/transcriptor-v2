@@ -14,7 +14,7 @@ import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
-  transcribe, generateTitle, fetchProfile, fetchWorkspace, cancelJob, savePresets, saveTeamPresets,
+  transcribe, generate, generateTitle, fetchProfile, fetchWorkspace, cancelJob, savePresets, saveTeamPresets,
   CancelledError, type CancelToken, type Profile, type JobProgress, type Preset, type WorkspaceInfo,
   type PipelineSteps,
   type Project, loadProjects, saveProjects,
@@ -199,6 +199,9 @@ export default function InkApp() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const entriesRef = useRef<HistoryEntry[]>([]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+  const [autoSummaryIds, setAutoSummaryIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sbOpen, setSbOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -360,6 +363,13 @@ export default function InkApp() {
   useEffect(() => { viewRef.current = view; }, [view]);
 
   const patchLocal = useCallback((id: string, fields: Partial<HistoryEntry>, db: Record<string, unknown>) => {
+    // AI results come from several async generators (manual, "Both", auto-summary):
+    // merge with the latest state so one finishing late doesn't erase another.
+    if (fields.aiResults) {
+      const ai = { ...(entriesRef.current.find((e) => e.id === id)?.aiResults || {}), ...fields.aiResults };
+      fields = { ...fields, aiResults: ai };
+      if ("ai_results" in db) db = { ...db, ai_results: ai };
+    }
     if (id === "demo") {
       setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...fields } : e)));
       return;
@@ -399,7 +409,23 @@ export default function InkApp() {
       setEntries((prev) => prev.map((e) => e.id === entry.id && e.titleIsAuto ? { ...e, title: t } : e));
       void patchEntry(entry.id, { title: t }).catch(() => {});
     });
-  }, [session, workspace, visibility]);
+
+    // Auto-summary right after the call (AI is a paid-plan feature)
+    if ((profile?.plan || "free") !== "free") {
+      setAutoSummaryIds((prev) => new Set(prev).add(entry.id));
+      void generate(segments, {}, "summary", lang === "auto" ? "" : lang, loadSettings().aiDetail)
+        .then((text) => {
+          if (!text || entriesRef.current.find((e) => e.id === entry.id)?.aiResults.summary) return;
+          patchLocal(entry.id, { aiResults: { summary: text } }, { ai_results: { summary: text } });
+          phCapture("summary_auto_generated");
+        })
+        .catch((err) => {
+          console.error("[auto-summary] failed:", err);
+          phCapture("summary_auto_failed", { error: String(err) });
+        })
+        .finally(() => setAutoSummaryIds((prev) => { const s = new Set(prev); s.delete(entry.id); return s; }));
+    }
+  }, [session, workspace, visibility, profile, patchLocal]);
 
   const cookBlob = useCallback(async (
     blob: Blob, durationSec: number, sessionId: string | null = null,
@@ -776,6 +802,7 @@ export default function InkApp() {
                   activeTab={activeTab}
                   onTabChange={setActiveTab}
                   onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
+                  autoSummaryPending={autoSummaryIds.has(activeEntry.id)}
                   onPresetsChange={handlePresetsChange}
                   onTeamPresetsChange={handleTeamPresetsChange}
                   onUpgrade={() => { setSettingsSection("subscription"); setSettingsOpen(true); }}

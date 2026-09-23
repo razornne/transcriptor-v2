@@ -138,6 +138,10 @@ export type ArchivedRecording = {
   capture: CaptureRow | null;
   segments?: Segment[] | null;
   vocab_additions?: { wrong: string; right: string }[] | null;
+  channel_mode?: string | null;
+  corrections?: {
+    start: number; speaker_before: string; speaker_after: string; before: string; after: string;
+  }[] | null;
 };
 
 async function adminJson<T>(path: string): Promise<T> {

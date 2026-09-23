@@ -409,7 +409,7 @@ export function ResultView({
   entry, plan, presets, teamPresets, notionConnected,
   activeTab, onTabChange,
   onPatch, onPresetsChange, onTeamPresetsChange,
-  onUpgrade,
+  onUpgrade, autoSummaryPending = false,
 }: {
   entry: HistoryEntry;
   plan: string;
@@ -422,6 +422,8 @@ export function ResultView({
   onPresetsChange: (updated: Preset[]) => void;
   onTeamPresetsChange: (updated: Preset[]) => void;
   onUpgrade?: () => void;
+  /** A summary is being generated automatically after the call. */
+  autoSummaryPending?: boolean;
 }) {
   const [genBusy, setGenBusy] = useState<Tab | null>(null);
   const [genError, setGenError] = useState("");
@@ -747,11 +749,13 @@ export function ResultView({
                 </div>
                 <input className="i-field" placeholder="Focus on… (optional)" value={focus}
                   onChange={(e) => setFocus(e.target.value)} style={{ flex: 1 }} />
-                <button type="button" className="i-cook" disabled={genBusy !== null}
+                <button type="button" className="i-cook"
+                  disabled={genBusy !== null || (activeTab === "summary" && autoSummaryPending)}
                   onClick={() => void runAI(activeTab as "summary" | "actions")}>
-                  {genBusy === activeTab ? "Cooking…" : entry.aiResults[activeTab] ? "Regenerate" : "Generate"}
+                  {genBusy === activeTab || (activeTab === "summary" && autoSummaryPending)
+                    ? "Cooking…" : entry.aiResults[activeTab] ? "Regenerate" : "Generate"}
                 </button>
-                <button type="button" className="i-cook i-cook-ghost" disabled={genBusy !== null}
+                <button type="button" className="i-cook i-cook-ghost" disabled={genBusy !== null || autoSummaryPending}
                   title="Generate summary + action items"
                   onClick={() => void runBoth()}>
                   {genBusy && genBusy !== activeTab ? "Cooking…" : "Both ↓"}
@@ -762,7 +766,9 @@ export function ResultView({
                 ? <div className="i-md">{renderMd(entry.aiResults[activeTab])}</div>
                 : !genBusy && <p className="i-sub" style={{ margin: "14px 2px" }}>
                     {activeTab === "summary"
-                      ? "A structured report of the conversation."
+                      ? autoSummaryPending
+                        ? "The summary is being written automatically — it will appear here in a minute."
+                        : "A structured report of the conversation."
                       : "Tasks and recommendations extracted from the call."}
                   </p>}
             </>

@@ -184,6 +184,7 @@ def _modal_job_status(job_id: str) -> dict:
                 "segments": result.get("segments") or [],
                 "vocab_additions": result.get("vocab_additions") or [],
                 "channel_mode": result.get("channel_mode"),
+                "corrections": result.get("corrections") or [],
             }
         return {"status": "done", "segments": result or []}
     if kind == "generate":
@@ -247,16 +248,17 @@ GENERATE_TEMPLATES = {
         "for someone who did not attend but needs to understand what happened "
         "deeply enough to act on it. This is NOT a TL;DR — it is a thorough "
         "analytical document.\n\n"
-        "{lang_hint} Preserve speaker names exactly as given in the transcript "
-        "(e.g. [Eli], [Speaker 1]). Write in clean markdown.\n\n"
+        "{lang_hint} Write in clean markdown.\n\n"
         "{focus_hint}"
+        "{speakers_block}"
         "==== HARD RULES ====\n"
         "1. Use ONLY information that is actually present in the transcript. "
         "Do not invent names, numbers, dates, companies, or facts. If something "
         "is unclear from the transcript, write 'unclear from context' rather "
         "than guessing.\n"
         "2. When you describe a participant's position, attribute it explicitly "
-        "(e.g. 'Speaker 2 emphasized that...', 'The client argued...').\n"
+        "using the participant names established in the Participants list "
+        "(e.g. 'Катя emphasized that...').\n"
         "3. Distinguish between three different things and never mix them:\n"
         "   - DECISIONS: things that were explicitly agreed to happen.\n"
         "   - IDEAS / PROPOSALS: things someone suggested but were not agreed.\n"
@@ -272,10 +274,10 @@ GENERATE_TEMPLATES = {
         "versa. 'ДІМ-9000' must stay 'ДІМ-9000', not 'DIMM-9000' or "
         "'DIM-9000'. 'UrbanStack' must stay 'UrbanStack', not 'УрбанСтек'.\n"
         "7. NEVER assign roles, titles, job positions, or seniority levels to "
-        "participants that are not explicitly stated in the transcript. "
-        "If a participant's role is unclear, refer to them by name only — "
+        "participants that are not explicitly stated in the transcript — "
         "do not call them 'manager', 'lead', 'CEO', 'керівник' etc. unless "
-        "the transcript uses that word.\n"
+        "the transcript uses that word. Describing what someone does IN THIS "
+        "conversation ('presents the offer', 'asks about pricing') is fine.\n"
         "8. Preserve specific numbers verbatim — starting/target salaries, "
         "percentages, counts, dates, deadlines. Do not approximate or round. "
         "If the transcript says '500, потім 700', the report must mention "
@@ -293,8 +295,12 @@ GENERATE_TEMPLATES = {
         "transcript (per the language instruction above). Never output a heading "
         "in a different language than the body. The English names below are only "
         "labels for you — render them in the transcript's language.\n\n"
+        "- **Participants** (always include, first): one line per speaker "
+        "label — the identified name with its evidence in a few words (e.g. "
+        "'Speaker 2 — Катя (addressed by name)'), or what they do in this "
+        "conversation if no name is known.\n"
         "- **Context** (always include): 1-3 sentences — what kind "
-        "of meeting, who participated, what was the purpose.\n"
+        "of meeting, what was the purpose.\n"
         "- **Main topics**: narrative paragraphs "
         "(not just bullets) covering what was actually discussed and what came "
         "out of each topic.\n"
@@ -337,8 +343,8 @@ GENERATE_TEMPLATES = {
     ),
     "actions": (
         "You are extracting actionable takeaways from a meeting transcript. "
-        "{lang_hint} Preserve speaker names exactly as given. Output is "
-        "markdown.\n\n"
+        "{lang_hint} Output is markdown.\n\n"
+        "{speakers_block}"
         "CRITICAL: Write the section headings (`## Action items`, "
         "`## Recommendations`) in the SAME language as the transcript — translate "
         "them. The English names here are only labels for you.\n\n"
@@ -353,7 +359,7 @@ GENERATE_TEMPLATES = {
         "   Format: `- [ ] {{task}} — @{{owner}} — by {{deadline}}`\n"
         "   Rules:\n"
         "   - Imperative phrasing ('Send the updated brief', not 'brief').\n"
-        "   - `@{{owner}}` = speaker name. Omit segment entirely if truly "
+        "   - `@{{owner}}` = participant name (see SPEAKERS). Omit segment entirely if truly "
         "unclear — never guess.\n"
         "   - `by {{deadline}}` only if a specific deadline was stated. "
         "Otherwise omit. Never invent dates.\n"
@@ -379,6 +385,7 @@ GENERATE_TEMPLATES = {
         "   Order by importance. Group thematically when there are many "
         "(use `### Theme` sub-headings).\n\n"
         "==== ADAPTIVE OUTPUT ====\n"
+        "- Output ONLY these sections — no participants list, no intro.\n"
         "- If the meeting produced explicit commitments AND insights → "
         "include both sections.\n"
         "- If only commitments → include only `## Action items`.\n"
@@ -520,7 +527,28 @@ def _build_generate_extras(detail: str, focus: str) -> dict:
             "invent — if the transcript does not cover the focus, note that briefly.\n\n"
         )
 
-    return {"detail_hint": detail_hints[detail], "focus_hint": focus_hint}
+    return {"detail_hint": detail_hints[detail], "focus_hint": focus_hint,
+            "speakers_block": SPEAKERS_BLOCK}
+
+
+# Метки спикеров — результат автоматической диаризации: "Speaker N" ничего не
+# говорит читателю, а на стыках реплик разметка бывает неточной (фраза разрезана
+# между двумя людьми). Модель сама выводит имена из контекста и атрибутирует
+# по смыслу. Заголовок Participants переводится вместе с остальными.
+SPEAKERS_BLOCK = (
+    "==== SPEAKERS ====\n"
+    "Speaker labels come from automatic voice separation. Generic labels like "
+    "'Speaker 1' are placeholders, not names; labels the user renamed are real names.\n"
+    "- Identify each participant: if the transcript reveals a name — they "
+    "introduce themselves or others address them by name — use that name. "
+    "Otherwise keep the label and describe them by what they do in THIS "
+    "conversation (e.g. 'presents the product', 'asks about prices').\n"
+    "- Refer to participants by the identified name (fall back to the label). "
+    "Never guess a name without evidence.\n"
+    "- Voice separation sometimes cuts one sentence between two speakers or "
+    "attaches the start of a reply to the previous person. When grammar and "
+    "meaning clearly show who said something, attribute it by meaning, not by label.\n\n"
+)
 
 
 def _format_segments_for_llm(segments: list[dict], speaker_names: dict[str, str] | None = None) -> str:
@@ -724,12 +752,22 @@ def _archive_recording(audio_bytes: bytes, content_type: str, *, recording_id: s
 
 
 def _archive_job_result(job_id: str, fields: dict):
-    """Best-effort: attach the raw pipeline result (or error) to the archived recording."""
+    """Best-effort: attach the raw pipeline result (or error) to the archived recording.
+
+    Columns from migration 013 (corrections, channel_mode) may not exist yet —
+    migrations are applied by hand — so on failure retry with the 012 columns only.
+    """
+    data = {**fields, "completed_at": datetime.utcnow().isoformat() + "Z"}
     try:
-        _sb_admin(f"recordings?job_id=eq.{job_id}", method="PATCH",
-                  data={**fields, "completed_at": datetime.utcnow().isoformat() + "Z"})
+        _sb_admin(f"recordings?job_id=eq.{job_id}", method="PATCH", data=data)
+        return
     except Exception as e:
         print(f"[archive] result patch for {job_id} failed: {e}", flush=True)
+    base = {k: v for k, v in data.items() if k not in ("corrections", "channel_mode")}
+    try:
+        _sb_admin(f"recordings?job_id=eq.{job_id}", method="PATCH", data=base)
+    except Exception as e:
+        print(f"[archive] fallback patch for {job_id} failed: {e}", flush=True)
 
 
 def _notify_admin(text: str):
@@ -1107,6 +1145,8 @@ def job_status_endpoint(job_id):
                 threading.Thread(target=_archive_job_result, daemon=True, args=(job_id, {
                     "segments": result.get("segments") or [],
                     "vocab_additions": result.get("vocab_additions") or [],
+                    "corrections": result.get("corrections") or [],
+                    "channel_mode": result.get("channel_mode"),
                 })).start()
             elif result.get("status") == "error":
                 threading.Thread(target=_archive_job_result, daemon=True,
