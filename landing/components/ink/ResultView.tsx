@@ -1,7 +1,7 @@
 "use client";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { HistoryEntry, Segment } from "@/lib/ink/db";
-import { generate, generateCustom, sendToNotion, UpgradeRequiredError, type Preset } from "@/lib/ink/api";
+import { generate, sendToNotion, UpgradeRequiredError } from "@/lib/ink/api";
 import { UpgradeCard } from "./UpgradeCard";
 
 // ── Markdown renderer ────────────────────────────────────────────
@@ -88,12 +88,11 @@ function renderMd(md: string): ReactNode {
   return <>{out}</>;
 }
 
-// Результат (OUTPUT): заголовок + segmented control Transcript/Summary/Actions/Notes/✦ Custom.
-// Спринт 3: вкладка «✦ Custom ▾» — дропдаун пресетів + модалка нового пресету.
+// Результат (OUTPUT): заголовок + segmented control Transcript/Summary/Actions.
 // Спринт 4: Notes (4th tab, дебаунс 600ms), інлайн-редагування тексту сегмента,
 //           Notion export, .txt download, tab state lifted (activeTab/onTabChange від page.tsx).
 
-export type Tab = "transcript" | "summary" | "actions" | "custom";
+export type Tab = "transcript" | "summary" | "actions";
 
 // Matte "expensive ink" speaker palette — defined as CSS vars in ink.css so the
 // whole set is themeable in one place. Klein blue + muted copper/plum/teal.
@@ -233,194 +232,19 @@ const SegmentRow = memo(function SegmentRow({
   );
 });
 
-// ── модалка нового/редактирования пресету ────────────────────────
-function PresetModal({
-  preset, isTeamAvailable, onSave, onCancel,
-}: {
-  preset?: Preset;
-  isTeamAvailable: boolean;
-  onSave: (p: Preset) => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(preset?.name || "");
-  const [prompt, setPrompt] = useState(preset?.prompt || "");
-  const [scope, setScope] = useState<"personal" | "team">(preset?.scope || "personal");
-  const [err, setErr] = useState("");
-  const nameRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { nameRef.current?.focus(); }, []);
-
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
-    document.addEventListener("keydown", h);
-    return () => document.removeEventListener("keydown", h);
-  }, [onCancel]);
-
-  const submit = () => {
-    const n = name.trim();
-    // Strip null bytes and ASCII control chars (prevent injection)
-    let p = prompt.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
-    if (!n) { setErr("Name is required."); return; }
-    if (!p) { setErr("Please describe what the AI should do."); return; }
-    // Auto-append transcript placeholder if not present
-    if (!p.includes("<<TRANSCRIPT_TEXT>>")) p += "\n\n<<TRANSCRIPT_TEXT>>";
-    if (p.length > 2000) { setErr("Description must be ≤ 2000 characters."); return; }
-    onSave({
-      id: preset?.id || crypto.randomUUID(),
-      name: n, prompt: p, scope,
-      created_by: preset?.created_by,
-      updated_at: new Date().toISOString(),
-    });
-  };
-
-  return (
-    <div className="i-modal-back" onClick={(e) => { if ((e.target as HTMLElement).classList.contains("i-modal-back")) onCancel(); }}>
-      <div className="i-pmodal" role="dialog" aria-modal="true" aria-label="New preset">
-        <div className="i-pmodal-title">{preset ? "Edit preset" : "New preset"}</div>
-        <div className="i-pmodal-body">
-          <div>
-            <div className="i-pmodal-label">Name</div>
-            <input
-              ref={nameRef}
-              className="i-field"
-              value={name}
-              maxLength={100}
-              placeholder="e.g. Sales call debrief"
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-            />
-          </div>
-
-          <div>
-            <div className="i-pmodal-label">What should the AI do with this call?</div>
-            <div className="i-pmodal-chips">
-              {["Summarize for my manager", "Find all objections", "Extract decisions", "Write follow-up email"].map((ex) => (
-                <button key={ex} type="button" className="i-pill"
-                  onClick={() => setPrompt((p) => p.trim() ? p : ex)}>
-                  {ex}
-                </button>
-              ))}
-            </div>
-            <textarea
-              className="i-pmodal-textarea"
-              value={prompt}
-              maxLength={1800}
-              placeholder={"Describe what you want to analyze or extract from the conversation. The transcript will be included automatically."}
-              onChange={(e) => setPrompt(e.target.value)}
-            />
-            <div className="i-pmodal-count">{prompt.length} / 1800</div>
-          </div>
-
-          {isTeamAvailable && (
-            <div>
-              <div className="i-pmodal-label">Scope</div>
-              <div className="i-pmodal-scope">
-                {(["personal", "team"] as const).map((s) => (
-                  <button key={s} type="button" className={`i-pill${scope === s ? " on" : ""}`} onClick={() => setScope(s)}>
-                    {s === "personal" ? "Personal" : "Team"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {err && <div className="i-error">{err}</div>}
-
-          <div className="i-pmodal-footer">
-            <button type="button" className="i-pill" onClick={onCancel}>Cancel</button>
-            <button type="button" className="i-cook" onClick={submit}>Save preset</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── дропдаун пресетів ─────────────────────────────────────────────
-function PresetDropdown({
-  presets, teamPresets, runningPresetId, canCreate,
-  onRun, onNewPreset, onClose,
-}: {
-  presets: Preset[];
-  teamPresets: Preset[];
-  runningPresetId: string | null;
-  canCreate: boolean;
-  onRun: (p: Preset) => void;
-  onNewPreset: () => void;
-  onClose: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const tid = setTimeout(() => document.addEventListener("mousedown", h), 0);
-    return () => { clearTimeout(tid); document.removeEventListener("mousedown", h); };
-  }, [onClose]);
-
-  const hasPersonal = presets.length > 0;
-  const hasTeam = teamPresets.length > 0;
-  const isEmpty = !hasPersonal && !hasTeam;
-
-  return (
-    <div ref={ref} className="i-pdrop">
-      {hasPersonal && (
-        <>
-          <div className="i-pdrop-sect">Mine</div>
-          {presets.map((p) => (
-            <button key={p.id} type="button"
-              className={`i-pdrop-item${runningPresetId === p.id ? " busy" : ""}`}
-              disabled={!!runningPresetId}
-              onClick={() => { onRun(p); onClose(); }}>
-              {p.name}
-              {runningPresetId === p.id && <span style={{ marginLeft: "auto", fontFamily: "var(--i-mono)", fontSize: 10, color: "var(--i-graphite)" }}>…</span>}
-            </button>
-          ))}
-        </>
-      )}
-      {hasTeam && (
-        <>
-          {hasPersonal && <div className="i-pdrop-sep" />}
-          <div className="i-pdrop-sect">Team</div>
-          {teamPresets.map((p) => (
-            <button key={p.id} type="button"
-              className={`i-pdrop-item${runningPresetId === p.id ? " busy" : ""}`}
-              disabled={!!runningPresetId}
-              onClick={() => { onRun(p); onClose(); }}>
-              {p.name}
-              <span className="scope">team</span>
-            </button>
-          ))}
-        </>
-      )}
-      {isEmpty && <div className="i-pdrop-empty">No presets yet</div>}
-      <div className="i-pdrop-sep" />
-      <button type="button" className="i-pdrop-new" onClick={() => { onNewPreset(); onClose(); }}>
-        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
-        {canCreate ? "New preset" : "New preset (Pro)"}
-      </button>
-    </div>
-  );
-}
-
 // ── ResultView ────────────────────────────────────────────────────
 export function ResultView({
-  entry, plan, presets, teamPresets, notionConnected,
+  entry, plan, notionConnected,
   activeTab, onTabChange,
-  onPatch, onPresetsChange, onTeamPresetsChange,
+  onPatch,
   onUpgrade, autoSummaryPending = false,
 }: {
   entry: HistoryEntry;
   plan: string;
-  presets: Preset[];
-  teamPresets: Preset[];
   notionConnected?: boolean;
   activeTab: Tab;
   onTabChange: (t: Tab) => void;
   onPatch: (fields: Partial<HistoryEntry>, db: Record<string, unknown>) => void;
-  onPresetsChange: (updated: Preset[]) => void;
-  onTeamPresetsChange: (updated: Preset[]) => void;
   onUpgrade?: () => void;
   /** A summary is being generated automatically after the call. */
   autoSummaryPending?: boolean;
@@ -443,15 +267,8 @@ export function ResultView({
   const [notionSent, setNotionSent] = useState(false);
   const [notionError, setNotionError] = useState("");
 
-  // Custom tab state
-  const [customDropOpen, setCustomDropOpen] = useState(false);
-  const [runningPresetId, setRunningPresetId] = useState<string | null>(null);
-  const [presetModalOpen, setPresetModalOpen] = useState(false);
-  const [editingPreset, setEditingPreset] = useState<Preset | undefined>(undefined);
-
   const [copied, setCopied] = useState(false);
 
-  const isTeamAvailable = plan === "team";
   const names = entry.speakerNames;
   const isAiGated = plan === "free" || gated;
 
@@ -472,44 +289,6 @@ export function ResultView({
     } finally {
       setGenBusy(null);
     }
-  };
-
-  const runCustom = async (preset: Preset) => {
-    if (runningPresetId) return;
-    setRunningPresetId(preset.id);
-    setGenError("");
-    onTabChange("custom");
-    try {
-      const text = await generateCustom(
-        entry.segments, names, preset.id,
-        entry.lang === "auto" ? "" : entry.lang,
-      );
-      const ai = { ...entry.aiResults, custom: text, custom_label: preset.name };
-      onPatch({ aiResults: ai }, { ai_results: ai });
-    } catch (e) {
-      if (e instanceof UpgradeRequiredError) setGated(true);
-      else setGenError(`custom generation failed: ${e instanceof Error ? e.message : e}`);
-    } finally {
-      setRunningPresetId(null);
-    }
-  };
-
-  const handleSavePreset = (preset: Preset) => {
-    setPresetModalOpen(false);
-    const isTeam = preset.scope === "team";
-    const list = isTeam ? [...teamPresets] : [...presets];
-    const idx = list.findIndex((p) => p.id === preset.id);
-    if (idx >= 0) list[idx] = preset; else list.unshift(preset);
-    if (isTeam) onTeamPresetsChange(list); else onPresetsChange(list);
-  };
-
-  const handleNewPreset = () => {
-    if (isAiGated) {
-      // Show UpgradeCard in panel body — just close dropdown, panel handles it
-      return;
-    }
-    setEditingPreset(undefined);
-    setPresetModalOpen(true);
   };
 
   // Speaker rename handlers
@@ -593,8 +372,6 @@ export function ResultView({
   // Export helpers
   const exportText = activeTab === "transcript"
     ? transcriptText(entry.segments, names)
-    : activeTab === "custom"
-    ? (entry.aiResults.custom || "")
     : (entry.aiResults[activeTab] || "");
 
   const copy = async () => {
@@ -604,8 +381,7 @@ export function ResultView({
   const downloadMd = () => {
     const md = `# ${entry.title || "Transcript"}\n\n${transcriptText(entry.segments, names)}\n` +
       (entry.aiResults.summary ? `\n---\n\n## Summary\n\n${entry.aiResults.summary}\n` : "") +
-      (entry.aiResults.actions ? `\n---\n\n## Action items\n\n${entry.aiResults.actions}\n` : "") +
-      (entry.aiResults.custom ? `\n---\n\n## ${entry.aiResults.custom_label || "Custom"}\n\n${entry.aiResults.custom}\n` : "");
+      (entry.aiResults.actions ? `\n---\n\n## Action items\n\n${entry.aiResults.actions}\n` : "");
     const slug = (entry.title || "transcript").replace(/[^\wЀ-ӿ -]+/g, "").slice(0, 60) || "transcript";
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
@@ -656,31 +432,6 @@ export function ResultView({
             </button>
           ))}
 
-          {/* ── Custom ▾ — always visible ── */}
-          <div className="i-custom-wrap">
-            <button
-              type="button" role="tab" aria-selected={activeTab === "custom"}
-              aria-haspopup="listbox"
-              className={`i-tab i-tab-custom${activeTab === "custom" ? " on" : ""}${!!runningPresetId ? " busy" : ""}`}
-              onClick={() => { setCustomDropOpen((v) => !v); if (activeTab !== "custom") onTabChange("custom"); }}
-            >
-              <span className="i-custom-star">✦</span>
-              Custom
-              {entry.aiResults.custom && activeTab !== "custom" && <span className="i-tab-dot" />}
-              <span className={`i-custom-arrow${customDropOpen ? " up" : ""}`}>▾</span>
-            </button>
-            {customDropOpen && (
-              <PresetDropdown
-                presets={presets}
-                teamPresets={teamPresets}
-                runningPresetId={runningPresetId}
-                canCreate={!isAiGated}
-                onRun={runCustom}
-                onNewPreset={handleNewPreset}
-                onClose={() => setCustomDropOpen(false)}
-              />
-            )}
-          </div>
         </div>
 
         {/* Right utility group — Notion / .txt / .md / Copy on ONE row, 32px each */}
@@ -776,44 +527,6 @@ export function ResultView({
         </div>
       )}
 
-      {/* ── Custom ── */}
-      {activeTab === "custom" && (
-        <div className="i-ai-panel">
-          {isAiGated ? (
-            <UpgradeCard
-              title="Custom presets are a Pro feature"
-              body="Create your own analysis templates with the Pro plan."
-              onUpgrade={onUpgrade}
-            />
-          ) : runningPresetId ? (
-            <p className="i-status" style={{ marginTop: 14 }}>
-              Running preset<span style={{ fontFamily: "var(--i-mono)" }}>…</span>
-            </p>
-          ) : entry.aiResults.custom ? (
-            <>
-              {entry.aiResults.custom_label && (
-                <p className="i-custom-label">{entry.aiResults.custom_label}</p>
-              )}
-              <div className="i-md">{renderMd(entry.aiResults.custom)}</div>
-            </>
-          ) : (
-            <p className="i-sub" style={{ margin: "14px 2px" }}>
-              Select a preset from the ✦ Custom menu above, or create one with + New preset.
-            </p>
-          )}
-          {genError && <p className="i-error" style={{ marginTop: 8 }}>{genError}</p>}
-        </div>
-      )}
-
-      {/* ── Preset creation modal ── */}
-      {presetModalOpen && (
-        <PresetModal
-          preset={editingPreset}
-          isTeamAvailable={isTeamAvailable}
-          onSave={handleSavePreset}
-          onCancel={() => setPresetModalOpen(false)}
-        />
-      )}
     </div>
   );
 }

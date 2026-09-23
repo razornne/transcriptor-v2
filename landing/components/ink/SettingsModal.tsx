@@ -40,13 +40,13 @@ const DICT = {
     billingErrFallback: "Could not open billing portal.",
     // Workspace — empty state
     wsEmptyTitle: "Create a workspace",
-    wsEmptyBody: "Share transcripts with teammates, build shared presets, and collaborate together.",
+    wsEmptyBody: "Share transcripts with teammates and collaborate together.",
     wsNamePlaceholder: "Workspace name",
     wsCreateBtn: "Create workspace",
     wsUpgradeCreate: "Upgrade to Team & Create",
     wsCreating: "Creating…",
     wsRedirecting: "Redirecting…",
-    wsUpgradeNote: "$14 / seat / mo · 600 min per seat · shared presets. Your workspace is created automatically right after checkout.",
+    wsUpgradeNote: "$14 / seat / mo · 600 min per seat · shared history. Your workspace is created automatically right after checkout.",
     // Workspace — manage
     wsTitle: "Workspace",
     wsInviteByEmail: "Invite by email",
@@ -108,13 +108,13 @@ const DICT = {
     billingErrFallback: "Не вдалося відкрити портал оплати.",
     // Workspace — empty state
     wsEmptyTitle: "Створіть командний простір",
-    wsEmptyBody: "Діліться транскриптами з колегами, створюйте спільні пресети та працюйте разом.",
+    wsEmptyBody: "Діліться транскриптами з колегами та працюйте разом.",
     wsNamePlaceholder: "Назва воркспейсу",
     wsCreateBtn: "Створити воркспейс",
     wsUpgradeCreate: "Оновити до Team і створити",
     wsCreating: "Створення…",
     wsRedirecting: "Перенаправлення…",
-    wsUpgradeNote: "$14 / місце / міс · 600 хв на місце · спільні пресети. Ваш воркспейс буде створено автоматично одразу після оплати.",
+    wsUpgradeNote: "$14 / місце / міс · 600 хв на місце · спільна історія. Ваш воркспейс буде створено автоматично одразу після оплати.",
     // Workspace — manage
     wsTitle: "Воркспейс",
     wsInviteByEmail: "Запросити за email",
@@ -168,7 +168,7 @@ const PLAN_DATA = [
   },
   {
     id: "pro", name: "Pro", price: "$15", period: "/mo", minutes: "600 min / mo",
-    features: ["Everything in Free", "AI summary & actions", "Custom presets"],
+    features: ["Everything in Free", "AI summary & actions", "Auto-summary after every call"],
   },
   {
     id: "max", name: "Max", price: "$29", period: "/mo", minutes: "1,800 min / mo",

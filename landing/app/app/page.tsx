@@ -14,8 +14,8 @@ import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
-  transcribe, generate, generateTitle, fetchProfile, fetchWorkspace, cancelJob, savePresets, saveTeamPresets,
-  CancelledError, type CancelToken, type Profile, type JobProgress, type Preset, type WorkspaceInfo,
+  transcribe, generate, generateTitle, fetchProfile, fetchWorkspace, cancelJob,
+  CancelledError, type CancelToken, type Profile, type JobProgress, type WorkspaceInfo,
   type PipelineSteps,
   type Project, loadProjects, saveProjects,
 } from "@/lib/ink/api";
@@ -158,7 +158,7 @@ function HotkeysOverlay({ onClose }: { onClose: () => void }) {
     { kbd: `${mod}+,`, desc: "Open settings" },
     { kbd: `${mod}+D`, desc: "Toggle light / dark theme" },
     { kbd: "R", desc: "Start / stop recording" },
-    { kbd: "1 / 2 / 3 / 4", desc: "Switch tab (Transcript / Summary / Actions / Notes)" },
+    { kbd: "1 / 2 / 3", desc: "Switch tab (Transcript / Summary / Actions)" },
     { kbd: "Esc", desc: "Close panels" },
     { kbd: "?", desc: "This overlay" },
   ];
@@ -264,8 +264,6 @@ export default function InkApp() {
   const [settings, setSettings] = useState<InkSettings>({
     quality: "fast", language: "", speakers: "", aiDetail: "medium",
   });
-  const [presets, setPresets] = useState<Preset[]>([]);
-  const [teamPresets, setTeamPresets] = useState<Preset[]>([]);
 
   const [cooking, setCooking] = useState(false);
   const [pipeline, setPipeline] = useState<PipelineSteps | null>(null);
@@ -313,7 +311,7 @@ export default function InkApp() {
 
   useEffect(() => {
     if (!session) {
-      setEntries([]); setProfile(null); setPresets([]); setTeamPresets([]);
+      setEntries([]); setProfile(null);
       setWorkspace(null);
       ph()?.reset?.();
       return;
@@ -321,8 +319,6 @@ export default function InkApp() {
     void fetchHistory().then(setEntries).catch(() => setEntries([]));
     void fetchProfile().then((p) => {
       setProfile(p);
-      if (p?.presets) setPresets(p.presets);
-      if (p?.team_presets) setTeamPresets(p.team_presets);
       // PostHog identify with plan info
       if (session.user) {
         ph()?.identify?.(session.user.id, {
@@ -692,19 +688,6 @@ export default function InkApp() {
     return () => document.removeEventListener("keydown", handler);
   }, []);
 
-  // ── Presets ──────────────────────────────────────────────────────
-  const handlePresetsChange = useCallback(async (updated: Preset[]) => {
-    setPresets(updated);
-    try { const canonical = await savePresets(updated); setPresets(canonical); }
-    catch (e) { console.error("[presets] save failed:", e); }
-  }, []);
-
-  const handleTeamPresetsChange = useCallback(async (updated: Preset[]) => {
-    setTeamPresets(updated);
-    try { const canonical = await saveTeamPresets(updated); setTeamPresets(canonical); }
-    catch (e) { console.error("[team-presets] save failed:", e); }
-  }, []);
-
   // ── Projects ─────────────────────────────────────────────────────
   const handleCreateProject = useCallback((name: string) => {
     const p: Project = { id: crypto.randomUUID(), name, entryIds: [], createdAt: new Date().toISOString() };
@@ -810,15 +793,11 @@ export default function InkApp() {
                   key={activeEntry.id}
                   entry={activeEntry}
                   plan={plan}
-                  presets={presets}
-                  teamPresets={teamPresets}
                   notionConnected={profile?.notion_connected}
                   activeTab={activeTab}
                   onTabChange={setActiveTab}
                   onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
                   autoSummaryPending={autoSummaryIds.has(activeEntry.id)}
-                  onPresetsChange={handlePresetsChange}
-                  onTeamPresetsChange={handleTeamPresetsChange}
                   onUpgrade={() => { setSettingsSection("subscription"); setSettingsOpen(true); }}
                 />
                 {status && (

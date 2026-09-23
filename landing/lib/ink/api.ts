@@ -4,7 +4,7 @@ import { sb } from "./supabase";
 import type { Segment } from "./db";
 
 // Тонкий клиент к Flask-бэку на Modal.
-// Спринт 3: Preset / Profile.privacy_mode / setPrivacyMode / savePresets / generateCustom.
+// Спринт 3: Profile.privacy_mode / setPrivacyMode.
 
 export class UpgradeRequiredError extends Error {
   constructor(msg: string) { super(msg); this.name = "UpgradeRequiredError"; }
@@ -15,15 +15,6 @@ export class CancelledError extends Error {
 }
 
 export type CancelToken = { cancelled: boolean; jobId: string | null };
-
-export type Preset = {
-  id: string;
-  name: string;
-  prompt: string;
-  scope: "personal" | "team";
-  created_by?: string;
-  updated_at?: string;
-};
 
 export type VocabTerm = {
   term: string;
@@ -45,8 +36,6 @@ export type Profile = {
   is_admin?: boolean;
   notion_connected?: boolean;
   notion_workspace_name?: string | null;
-  presets?: Preset[];
-  team_presets?: Preset[];
   vocabulary?: VocabTerm[];
 };
 
@@ -348,22 +337,6 @@ export async function generate(
   return ((result.result as string) || "").trim();
 }
 
-export async function generateCustom(
-  segments: Segment[],
-  speakerNames: Record<string, string>,
-  presetId: string,
-  language: string,
-): Promise<string> {
-  const jobId = await submitJob(`${API_BASE}/api/generate`, {
-    segments, speakerNames,
-    template: "custom",
-    preset_id: presetId,
-    language: language || null,
-  });
-  const result = await pollJob(jobId);
-  return ((result.result as string) || "").trim();
-}
-
 export async function generateTitle(text: string, language: string): Promise<string | null> {
   try {
     const res = await authFetch(`${API_BASE}/api/title`, {
@@ -415,18 +388,6 @@ export async function saveVocabulary(vocabulary: VocabTerm[]): Promise<void> {
   }
 }
 
-// Замена всего массива личных пресетов (mirror /api/vocabulary pattern)
-export async function savePresets(presets: Preset[]): Promise<Preset[]> {
-  const res = await authFetch(`${API_BASE}/api/presets`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ presets }),
-  });
-  const data = await res.json().catch(() => null) as { presets?: Preset[]; error?: string } | null;
-  if (!res.ok || !data) throw new Error(data?.error || `HTTP ${res.status}`);
-  return data.presets || [];
-}
-
 export async function sendToNotion(
   title: string,
   transcriptText: string,
@@ -440,18 +401,6 @@ export async function sendToNotion(
   });
   const data = await res.json().catch(() => null) as { error?: string } | null;
   if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-}
-
-// Замена всего массива командных пресетов (только для owner)
-export async function saveTeamPresets(presets: Preset[]): Promise<Preset[]> {
-  const res = await authFetch(`${API_BASE}/api/workspace/presets`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ presets }),
-  });
-  const data = await res.json().catch(() => null) as { presets?: Preset[]; error?: string } | null;
-  if (!res.ok || !data) throw new Error(data?.error || `HTTP ${res.status}`);
-  return data.presets || [];
 }
 
 // ── Workspace API ─────────────────────────────────────────────

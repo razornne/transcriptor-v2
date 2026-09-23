@@ -417,42 +417,6 @@ GENERATE_TEMPLATES = {
 # Остальные (если появятся в будущем) — через локальный Qwen.
 GEMINI_TEMPLATES = {"summary", "actions"}
 
-# ── Custom Presets ───────────────────────────────────────────────
-# Ограничения: по 50 пресетов на юзера/воркспейс, 100 символов имя, 2000 промпт.
-PRESET_MAX_PERSONAL = 50
-PRESET_MAX_TEAM     = 50
-PRESET_NAME_MAX     = 100
-PRESET_PROMPT_MAX   = 2000
-
-import re as _re
-_CTRL_CHARS = _re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
-def _sanitize_preset_prompt(raw: str) -> str:
-    """Strip null bytes and ASCII control chars; auto-add <<TRANSCRIPT_TEXT>> if absent."""
-    p = _CTRL_CHARS.sub("", raw).strip()[:PRESET_PROMPT_MAX]
-    if p and "<<TRANSCRIPT_TEXT>>" not in p:
-        p += "\n\n<<TRANSCRIPT_TEXT>>"
-    return p[:PRESET_PROMPT_MAX]
-
-# Anti-hallucination рамка для кастомных пресетов.
-# Текст транскрипта подставляется через <<TRANSCRIPT_TEXT>> (str.replace, не format —
-# фигурные скобки в юзерском промпте не должны ломать format-вызов).
-CUSTOM_PRESET_HARD_RULES = (
-    "You are an AI assistant processing a meeting transcript.\n\n"
-    "HARD RULES — follow without exception:\n"
-    "1. Work ONLY from the transcript below. Do NOT invent, assume, or add "
-    "information that is not explicitly stated.\n"
-    "2. If the transcript does not contain what the user asks for, say so "
-    "briefly. Do not fabricate content.\n"
-    "3. Keep names, technical terms, abbreviations, and numbers EXACTLY as "
-    "they appear in the transcript — never paraphrase or correct them.\n"
-    "4. Do not describe or comment on the transcript itself; produce the "
-    "requested output directly.\n\n"
-    "==== USER INSTRUCTIONS ====\n"
-    "{user_prompt}\n\n"
-    "==== TRANSCRIPT ====\n"
-    "<<TRANSCRIPT_TEXT>>"
-)
-
 # ── Privacy Mode: map-reduce промпты ────────────────────────────
 # gpt-oss-20b (privacy-путь) не тянет длинный контекст одним вызовом: eager
 # attention → O(n²) память → CUDA OOM на 3-4ч транскриптах (ISS-1). Flask
@@ -1380,8 +1344,6 @@ def profile_endpoint():
             "privacy_mode_available": plan in PRIVACY_MODE_ALLOWED_PLANS,
             "is_admin":              _is_admin(),
             "vocabulary":            profile.get("vocabulary") or [],  # для Insights дашборда
-            "presets":               profile.get("presets") or [],
-            "team_presets":          _get_workspace_presets(g.user_id),
         })
     except Exception as e:
         print(f"[profile] error: {e}")
@@ -1442,112 +1404,6 @@ def update_vocabulary_endpoint():
         print(f"[vocab] manual update failed: {e}")
         return jsonify({"error": f"save failed: {e}"}), 500
     return jsonify({"ok": True, "vocabulary": cleaned})
-
-
-# ── Personal Presets management ────────────────────────────────
-@app.route("/api/presets", methods=["POST"])
-def update_presets_endpoint():
-    """Replace the calling user's personal presets array.
-
-    Body: {presets: [{id, name, prompt, scope}, ...]}
-    Returns: {ok: true, presets: [...canonical...]}
-    """
-    if not g.user_id:
-        return jsonify({"error": "auth required"}), 401
-    if not SUPABASE_SERVICE_ROLE_KEY:
-        return jsonify({"error": "service unavailable"}), 503
-
-    data = request.get_json(silent=True) or {}
-    items = data.get("presets")
-    if not isinstance(items, list):
-        return jsonify({"error": "presets must be a list"}), 400
-
-    cleaned: list[dict] = []
-    seen_ids: set[str] = set()
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        pid = (it.get("id") or "").strip()
-        name = (it.get("name") or "").strip()[:PRESET_NAME_MAX]
-        prompt = _sanitize_preset_prompt(it.get("prompt") or "")
-        if not pid or not name or not prompt:
-            continue
-        if pid in seen_ids:
-            continue
-        seen_ids.add(pid)
-        cleaned.append({
-            "id":    pid,
-            "name":  name,
-            "prompt": prompt,
-            "scope": "personal",
-        })
-        if len(cleaned) >= PRESET_MAX_PERSONAL:
-            break
-
-    try:
-        _sb_admin("user_profiles", method="PATCH",
-                  params={"id": f"eq.{g.user_id}"},
-                  data={"presets": cleaned})
-    except Exception as e:
-        return jsonify({"error": f"save failed: {e}"}), 500
-    return jsonify({"ok": True, "presets": cleaned})
-
-
-# ── Team Presets management (owner only) ──────────────────────
-@app.route("/api/workspace/presets", methods=["POST"])
-def update_workspace_presets_endpoint():
-    """Replace the workspace's team presets array. Owner only.
-
-    Body: {presets: [{id, name, prompt, scope}, ...]}
-    Returns: {ok: true, presets: [...canonical...]}
-    """
-    if not g.user_id:
-        return jsonify({"error": "auth required"}), 401
-    if not SUPABASE_SERVICE_ROLE_KEY:
-        return jsonify({"error": "service unavailable"}), 503
-
-    ws_rows = _sb_admin("workspaces", params={
-        "owner_id": f"eq.{g.user_id}", "select": "id", "limit": "1",
-    })
-    if not ws_rows:
-        return jsonify({"error": "You must be a workspace owner to manage team presets."}), 403
-
-    ws_id = ws_rows[0]["id"]
-    data = request.get_json(silent=True) or {}
-    items = data.get("presets")
-    if not isinstance(items, list):
-        return jsonify({"error": "presets must be a list"}), 400
-
-    cleaned: list[dict] = []
-    seen_ids: set[str] = set()
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        pid = (it.get("id") or "").strip()
-        name = (it.get("name") or "").strip()[:PRESET_NAME_MAX]
-        prompt = _sanitize_preset_prompt(it.get("prompt") or "")
-        if not pid or not name or not prompt:
-            continue
-        if pid in seen_ids:
-            continue
-        seen_ids.add(pid)
-        cleaned.append({
-            "id":         pid,
-            "name":       name,
-            "prompt":     prompt,
-            "scope":      "team",
-            "created_by": g.user_id,
-        })
-        if len(cleaned) >= PRESET_MAX_TEAM:
-            break
-
-    try:
-        _sb_admin("workspaces", method="PATCH",
-                  params={"id": f"eq.{ws_id}"},
-                  data={"presets": cleaned})
-    except Exception as e:
-        return jsonify({"error": f"save failed: {e}"}), 500
-    return jsonify({"ok": True, "presets": cleaned})
 
 
 # ── Privacy Mode toggle ────────────────────────────────────────
@@ -2368,37 +2224,6 @@ def _get_user_workspace(user_id: str, user_email: str | None = None) -> dict | N
             })
             return ws
 
-    return None
-
-
-def _get_workspace_presets(user_id: str) -> list:
-    """Return team presets for the workspace the user belongs to (owner or member).
-    Returns [] if user has no workspace or workspace has no presets."""
-    try:
-        ws = _get_user_workspace(user_id)
-        if not ws:
-            return []
-        return list(ws.get("presets") or [])
-    except Exception as e:
-        print(f"[presets] _get_workspace_presets error: {e}", flush=True)
-        return []
-
-
-def _load_preset_prompt(user_id: str, preset_id: str) -> tuple[str, str] | None:
-    """Load (name, prompt) for a preset_id from personal or team presets.
-    Returns None if not found."""
-    try:
-        profile = _get_user_profile(user_id)
-        for p in (profile.get("presets") or []):
-            if isinstance(p, dict) and p.get("id") == preset_id:
-                return (p.get("name") or "Custom", p.get("prompt") or "")
-        # Team presets
-        ws_presets = _get_workspace_presets(user_id)
-        for p in ws_presets:
-            if isinstance(p, dict) and p.get("id") == preset_id:
-                return (p.get("name") or "Custom", p.get("prompt") or "")
-    except Exception as e:
-        print(f"[presets] _load_preset_prompt error: {e}", flush=True)
     return None
 
 
@@ -3294,40 +3119,6 @@ def generate_endpoint():
 
     speaker_names = data.get("speakerNames") or {}
     full_text = _format_segments_for_llm(segments, speaker_names)
-
-    # ── Custom preset path — resolve before GENERATE_TEMPLATES check ──
-    if template_name == "custom":
-        preset_id = (data.get("preset_id") or "").strip()
-        if not preset_id or not g.user_id:
-            return jsonify({"error": "preset_id required for custom template"}), 400
-        found = _load_preset_prompt(g.user_id, preset_id)
-        if not found:
-            return jsonify({"error": f"preset not found: {preset_id}"}), 404
-        preset_name, user_prompt = found
-        # Build prompt: hard-rules frame + user instructions + transcript.
-        # str.replace (not .format) so user's curly braces don't throw.
-        prompt = CUSTOM_PRESET_HARD_RULES.replace("{user_prompt}", user_prompt).replace(
-            "<<TRANSCRIPT_TEXT>>", full_text
-        )
-        if USE_MODAL:
-            try:
-                gemini_fn = _modal.Function.from_name("transcriptor-v2", "gemini_generate")
-                call = gemini_fn.spawn(prompt, max_output_tokens=6000, temperature=0.4)
-            except Exception as e:
-                return jsonify({"error": f"custom preset spawn failed: {e}"}), 502
-            return jsonify({"job_id": JOB_PREFIX_GENERATE + call.object_id,
-                            "status": "queued", "preset_name": preset_name})
-        # Local fallback
-        job_id = _create_local_job("custom")
-        def custom_worker():
-            try:
-                _update_local_job(job_id, status="processing", progress="generating")
-                result = _ollama_generate(prompt, max_tokens=2000, temperature=0.4, timeout=300)
-                _update_local_job(job_id, status="done", result=result.strip())
-            except Exception as e:
-                _update_local_job(job_id, status="error", error=f"custom failed: {e}")
-        threading.Thread(target=custom_worker, daemon=True).start()
-        return jsonify({"job_id": job_id, "status": "queued", "preset_name": preset_name})
 
     if template_name not in GENERATE_TEMPLATES:
         return jsonify({"error": f"unknown template: {template_name}",
