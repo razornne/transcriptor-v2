@@ -9,3 +9,6 @@ venv/
 
 # HuggingFace кеш моделей (если попадёт в проект)
 .cache/
+
+# Eval audio (generated / downloaded from the archive) — never commit
+eval_set/
