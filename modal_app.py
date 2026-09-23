@@ -2156,9 +2156,13 @@ def transcribe_soniox(
     progress_key: str | None = None,
     correction_hints: str = "",
     vocab_terms: list[str] | None = None,
+    fallback_quality: str = "fast",
 ) -> dict:
     """Основной STT-путь (не Privacy Mode, до 300 мин): Soniox batch вместо
     Whisper+pyannote. Контракт ответа = transcribe_full.
+
+    Любой сбой Soniox (кончился баланс, их outage) → та же запись уходит в
+    self-hosted GPU-пайплайн: юзер получает транскрипт, только медленнее.
 
     Стерео веб-рекордера (dual): две сессии Soniox параллельно — микрофон без
     диаризации (владелец = SPEAKER_00), звонок с диаризацией, если собеседников
@@ -2195,9 +2199,24 @@ def transcribe_soniox(
             diarize = [False, num_speakers not in (1, 2)]
         else:
             diarize = [num_speakers != 1]
-        with ThreadPoolExecutor(len(tracks)) as pool:
-            tokens = list(pool.map(
-                lambda td: soniox.transcribe(api_key, td[0], language, td[1], context), zip(tracks, diarize)))
+        try:
+            with ThreadPoolExecutor(len(tracks)) as pool:
+                tokens = list(pool.map(
+                    lambda td: soniox.transcribe(api_key, td[0], language, td[1], context), zip(tracks, diarize)))
+        except Exception as e:
+            print(f"[soniox] FAILED ({e}) — falling back to self-hosted pipeline", flush=True)
+            whisper_prompt = " ".join(filter(None, [
+                ("Recurring terms in this user's recordings: " + ", ".join(vocab_terms[:30]) + ".") if vocab_terms else "",
+                prompt or "",
+            ])) or None
+            duration = float(subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", src],
+                capture_output=True, text=True).stdout.strip() or 0)
+            args = (audio_bytes, language, num_speakers, whisper_prompt, progress_key, fallback_quality,
+                    False, correction_hints)
+            if duration > 1800:
+                return transcribe_long.remote(*args)
+            return Transcriptor().transcribe_full.remote(*args)
         words = [soniox.tokens_to_words(t) for t in tokens]
         pp.done("transcription")
         if not any(words):

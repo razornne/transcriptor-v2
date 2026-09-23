@@ -3550,13 +3550,13 @@ def transcribe_endpoint():
         est_duration = duration_sec or (len(audio_bytes) * 8 / 32000)
         use_soniox = STT_PROVIDER == "soniox" and not privacy_mode and est_duration <= SONIOX_MAX_S
         use_long = est_duration > LONG_AUDIO_THRESHOLD_S
-        if use_soniox:
-            quality = "soniox"  # в архиве видно, каким движком распознано
         try:
             if use_soniox:
                 call = _modal.Function.from_name("transcriptor-v2", "transcribe_soniox").spawn(
                     audio_bytes, language, num_speakers, user_context, progress_key, correction_hints, vocab_terms,
+                    quality,  # на случай отката на GPU-пайплайн
                 )
+                quality = "soniox"  # в архиве видно, каким движком распознано
             elif use_long:
                 long_fn = _modal.Function.from_name("transcriptor-v2", "transcribe_long")
                 call = long_fn.spawn(

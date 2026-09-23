@@ -52,6 +52,12 @@ def test_context_builder():
     assert ctx == {"terms": ["HubSpot", "CRM"], "text": "Porada o marketingu"}
 
 
+def test_context_stays_under_soniox_limit():
+    ctx = build_context([f"term{i}-" + "x" * 250 for i in range(100)], "y" * 20000)
+    size = sum(len(t) for t in ctx["terms"]) + len(ctx["text"])
+    assert size < 8000, size
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

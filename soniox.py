@@ -118,7 +118,13 @@ def build_context(terms: list[str] | None, text: str | None) -> dict | None:
     """Личный словарь → context.terms, поле «Context» юзера → context.text.
     Лимит Soniox ~10k символов на весь context — режем с запасом."""
     ctx: dict = {}
-    clean_terms = [t.strip() for t in (terms or []) if t and t.strip()][:100]
+    clean_terms: list[str] = []
+    budget = 3000  # символов на термины: вместе с text гарантированно ниже лимита Soniox
+    for t in terms or []:
+        t = (t or "").strip()[:80]
+        if t and len(clean_terms) < 100 and budget - len(t) >= 0:
+            clean_terms.append(t)
+            budget -= len(t) + 2
     if clean_terms:
         ctx["terms"] = clean_terms
     if text and text.strip():
