@@ -3,19 +3,20 @@ import { idbCreateSession, idbAppendChunk } from "./idb";
 
 // Запись: микрофон + (опционально) аудио вкладки/системы через getDisplayMedia.
 // Пишем СТЕРЕО через ChannelMergerNode: L = микрофон, R = звук вкладки/системы.
-// Раньше оба источника сводились в один моно-трек, и тихого собеседника было
-// не отделить от громкого микрофона. Сервер пока сводит в моно (как раньше),
-// раздельная обработка каналов — следующий шаг.
+// Сервер распознаёт каналы раздельно (modal_app._prepare_audio / channels.py).
 //
 // Микрофон следует за активным устройством системы: надел AirPods — пишем с
-// них, убрал в кейс — переключаемся на встроенный/новый. Каждое переключение
-// попадает в журнал событий телеметрии (capture_stats.events).
+// них, убрал в кейс — переключаемся на встроенный/новый. Если выбранный
+// микрофон отдаёт абсолютную тишину (так бывает с iPhone, который macOS сама
+// подставляет по "Непрерывности"), пробуем остальные и переключаемся на живой.
+// Каждое переключение попадает в журнал событий телеметрии (capture_stats.events).
 //
 // Safety net: каждый 5с-chunk дублируется в IndexedDB (idb.ts). Сессия
 // удаляется вызывающим кодом ТОЛЬКО после успешной транскрипции.
 
 export type CaptureEvent =
-  | { t: number; type: "mic_switch"; reason: "ended" | "default_changed"; from: string; to: string }
+  | { t: number; type: "mic_switch"; reason: "ended" | "default_changed" | "dead"; from: string; to: string }
+  | { t: number; type: "mic_dead"; device: string }
   | { t: number; type: "mic_lost" }
   | { t: number; type: "system_audio_ended" }
   | { t: number; type: "system_audio_silent" };
@@ -48,7 +49,9 @@ export type StartRecordingOptions = {
   /** Вкладка расшарена, но за SILENT_WARN_S из неё ни звука, хотя микрофон
    *  слышит речь — скорее всего расшарили не ту вкладку. Один раз за запись. */
   onSystemAudioSilent?: () => void;
-  onMicSwitched?: (label: string) => void;
+  /** Микрофон отдаёт абсолютную тишину, и живого запасного не нашлось. Один раз. */
+  onMicDead?: (label: string) => void;
+  onMicSwitched?: (label: string, reason: "ended" | "default_changed" | "dead") => void;
   /** RMS-уровень (0..1) микрофона и звука вкладки, ~каждые 100мс. */
   onLevels?: (micLevel: number, systemLevel: number) => void;
 };
@@ -63,14 +66,19 @@ export class SystemAudioMissingError extends Error {
 const SILENCE_RMS = 0.02;
 const LEVELS_INTERVAL_MS = 100;
 const SILENT_WARN_S = 60;
+// Живой микрофон даже в тихой комнате шумит на -70..-90 dBFS (3e-5..3e-4);
+// ниже -100 dBFS (1e-5) — цифровая тишина мёртвого устройства.
+const DEAD_RMS = 1e-5;
+const LIVE_RMS = 3e-5;
+const DEAD_MIC_S = 6;
+const DEAD_RECHECK_S = 30;
 
-function rms(analyser: AnalyserNode, buf: Uint8Array<ArrayBuffer>): number {
-  analyser.getByteTimeDomainData(buf);
+// Float-данные, а не байтовые: 8-битная выборка округляет тихий, но живой
+// микрофон до нуля, и его не отличить от мёртвого.
+function rms(analyser: AnalyserNode, buf: Float32Array<ArrayBuffer>): number {
+  analyser.getFloatTimeDomainData(buf);
   let sum = 0;
-  for (let i = 0; i < buf.length; i++) {
-    const v = (buf[i] - 128) / 128;
-    sum += v * v;
-  }
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
   return Math.sqrt(sum / buf.length);
 }
 
@@ -109,18 +117,18 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
 
   let micSource = ctx.createMediaStreamSource(mic);
   const micAnalyser = ctx.createAnalyser();
-  micAnalyser.fftSize = 256;
-  const micBuf = new Uint8Array(micAnalyser.fftSize);
+  micAnalyser.fftSize = 1024;
+  const micBuf = new Float32Array(micAnalyser.fftSize);
   micSource.connect(merger, 0, 0); // L = микрофон
   micSource.connect(micAnalyser);
 
   let sysAnalyser: AnalyserNode | null = null;
-  let sysBuf: Uint8Array<ArrayBuffer> | null = null;
+  let sysBuf: Float32Array<ArrayBuffer> | null = null;
   if (display) {
     const sysSource = ctx.createMediaStreamSource(display);
     sysAnalyser = ctx.createAnalyser();
-    sysAnalyser.fftSize = 256;
-    sysBuf = new Uint8Array(sysAnalyser.fftSize);
+    sysAnalyser.fftSize = 1024;
+    sysBuf = new Float32Array(sysAnalyser.fftSize);
     sysSource.connect(merger, 0, 1); // R = звук вкладки/системы
     sysSource.connect(sysAnalyser);
   }
@@ -130,15 +138,18 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
   const events: CaptureEvent[] = [];
   let stopped = false;
   let trackEndedEvents = 0;
+  const deadGroups = new Set<string>(); // устройства, отдавшие цифровую тишину
 
-  // ── Микрофон следует за активным устройством ──────────────────────────
+  // ── Микрофон: переключение устройства ─────────────────────────────────
   let switching = false;
-  async function switchMic(reason: "ended" | "default_changed") {
+  async function switchMic(reason: "ended" | "default_changed" | "dead", deviceId?: string) {
     if (switching || stopped) return;
     switching = true;
     const from = mic.getAudioTracks()[0]?.label || "";
     try {
-      const fresh = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const fresh = await navigator.mediaDevices.getUserMedia({
+        audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+      });
       if (stopped) { fresh.getTracks().forEach((t) => t.stop()); return; }
       const old = mic;
       mic = fresh;
@@ -150,7 +161,7 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
       watchMicTrack(fresh.getAudioTracks()[0]);
       const to = fresh.getAudioTracks()[0]?.label || "";
       events.push({ t: elapsed(), type: "mic_switch", reason, from, to });
-      opts.onMicSwitched?.(to);
+      opts.onMicSwitched?.(to, reason);
     } catch {
       events.push({ t: elapsed(), type: "mic_lost" });
     } finally {
@@ -168,7 +179,8 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
 
   // Chrome/Edge отдают псевдо-устройство "default" с groupId реального
   // устройства — сравниваем с тем, что пишем сейчас. Firefox/Safari его не
-  // отдают: там ловим только пропажу текущего устройства.
+  // отдают: там ловим только пропажу текущего устройства. Мёртвое устройство
+  // по умолчанию игнорируем, иначе вернёмся на него после переключения.
   async function onDeviceChange() {
     if (stopped) return;
     try {
@@ -176,13 +188,63 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
       const current = mic.getAudioTracks()[0]?.getSettings() ?? {};
       const def = inputs.find((d) => d.deviceId === "default");
       if (def) {
-        if (def.groupId && current.groupId && def.groupId !== current.groupId) void switchMic("default_changed");
+        if (def.groupId && current.groupId && def.groupId !== current.groupId && !deadGroups.has(def.groupId)) {
+          void switchMic("default_changed");
+        }
       } else if (current.deviceId && !inputs.some((d) => d.deviceId === current.deviceId)) {
         void switchMic("ended");
       }
     } catch {}
   }
   navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
+
+  // Слушаем кандидата ~0.7с: есть ли вообще сигнал (шум тихой комнаты — уже сигнал).
+  async function probe(deviceId: string): Promise<number> {
+    let s: MediaStream | null = null;
+    try {
+      s = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+      const src = ctx.createMediaStreamSource(s);
+      const an = ctx.createAnalyser();
+      an.fftSize = 2048;
+      src.connect(an);
+      const buf = new Float32Array(an.fftSize);
+      let peak = 0;
+      for (let i = 0; i < 6; i++) {
+        await new Promise((r) => setTimeout(r, 120));
+        peak = Math.max(peak, rms(an, buf));
+      }
+      src.disconnect();
+      return peak;
+    } catch {
+      return 0;
+    } finally {
+      s?.getTracks().forEach((t) => t.stop());
+    }
+  }
+
+  let deadWarned = false;
+  async function handleDeadMic() {
+    const track = mic.getAudioTracks()[0];
+    const settings = track?.getSettings() ?? {};
+    if (settings.groupId) deadGroups.add(settings.groupId);
+    events.push({ t: elapsed(), type: "mic_dead", device: track?.label || "" });
+    const inputs = (await navigator.mediaDevices.enumerateDevices()).filter(
+      (d) => d.kind === "audioinput" && d.deviceId !== "default" && d.deviceId !== "communications"
+        && !deadGroups.has(d.groupId),
+    );
+    for (const cand of inputs) {
+      if (stopped) return;
+      if (await probe(cand.deviceId) > LIVE_RMS) {
+        await switchMic("dead", cand.deviceId);
+        return;
+      }
+      deadGroups.add(cand.groupId);
+    }
+    if (!deadWarned) {
+      deadWarned = true;
+      opts.onMicDead?.(track?.label || "");
+    }
+  }
 
   display?.getAudioTracks()[0]?.addEventListener("ended", () => {
     trackEndedEvents++;
@@ -196,6 +258,9 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
   let rmsMicSum = 0, rmsSysSum = 0, sampleCount = 0;
   let silentMicSamples = 0, silentSysSamples = 0;
   let micHeardSpeech = false, sysEverHeard = false, silentWarned = false;
+  let deadSince: number | null = null;
+  let nextDeadCheck = 0;
+  let deadHandling = false;
 
   const levelTimer = window.setInterval(() => {
     const micLevel = rms(micAnalyser, micBuf);
@@ -203,6 +268,19 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
     sampleCount++;
     rmsMicSum += micLevel;
     if (micLevel < SILENCE_RMS) silentMicSamples++; else micHeardSpeech = true;
+
+    const now = Date.now();
+    deadSince = micLevel < DEAD_RMS ? (deadSince ?? now) : null;
+    if (deadSince !== null && !deadHandling && !switching && now >= nextDeadCheck
+        && now - deadSince >= DEAD_MIC_S * 1000) {
+      deadHandling = true;
+      void handleDeadMic().finally(() => {
+        deadHandling = false;
+        deadSince = null;
+        nextDeadCheck = Date.now() + DEAD_RECHECK_S * 1000;
+      });
+    }
+
     if (sysAnalyser) {
       rmsSysSum += sysLevel;
       if (sysLevel < SILENCE_RMS) silentSysSamples++; else sysEverHeard = true;

@@ -583,7 +583,21 @@ export default function InkApp() {
           notify("Skriptly — can't hear the call", "No sound from the shared tab for a minute. Check the tab you shared.");
           phCapture("capture_system_audio_silent");
         },
-        onMicSwitched: (label) => {
+        onMicDead: (label) => {
+          captureAlertRef.current = true;
+          setStatusKind("error");
+          setStatus(`your microphone${label ? ` “${label}”` : ""} sends no sound — you won't be in the transcript. Pick a working microphone in your system sound settings (a Mac often picks a nearby iPhone automatically)`);
+          notify("Skriptly — microphone is silent", "Your microphone sends no sound. Pick another one in system settings.");
+          phCapture("capture_mic_dead", { label });
+        },
+        onMicSwitched: (label, reason) => {
+          if (reason === "dead") {
+            captureAlertRef.current = false;
+            setStatusKind("info");
+            setStatus(`recording — the selected microphone sent no sound, switched to ${label || "another one"}`);
+            phCapture("capture_mic_dead_recovered", { label });
+            return;
+          }
           if (captureAlertRef.current) return;
           setStatusKind("info");
           setStatus(`recording — microphone switched to ${label || "a new device"}`);

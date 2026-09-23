@@ -36,6 +36,8 @@ function flagsOf(r: ArchivedRecording): Flag[] {
     if (pct(c.silent_seconds_mic) > 90) out.push({ label: `mic silent ${pct(c.silent_seconds_mic)}%`, bad: true });
     if (c.events.some((e) => e.type === "system_audio_ended")) out.push({ label: "call audio lost", bad: true });
     if (c.events.some((e) => e.type === "mic_lost")) out.push({ label: "mic lost", bad: true });
+    if (c.events.some((e) => e.type === "mic_dead")) out.push({ label: "mic sent no sound", bad: true });
+    else if ((c.rms_mic_avg ?? 1) < 1e-5) out.push({ label: "mic dead (silence)", bad: true });
     const switches = c.events.filter((e) => e.type === "mic_switch").length;
     if (switches) out.push({ label: `mic switched ×${switches}`, bad: false });
   }

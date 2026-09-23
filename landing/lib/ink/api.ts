@@ -119,7 +119,7 @@ export type CaptureRow = {
   browser: string | null;
   os: string | null;
   display_surface: string | null;
-  events: { t: number; type: string; reason?: string; from?: string; to?: string }[];
+  events: { t: number; type: string; reason?: string; from?: string; to?: string; device?: string }[];
 };
 
 export type ArchivedRecording = {
