@@ -16,4 +16,5 @@ export const SUPPORTED_LANGUAGES = [
   { value: "ru", label: "RU" },
   { value: "uk", label: "UK" },
   { value: "pl", label: "PL" },
+  { value: "cs", label: "CS" },
 ] as const;

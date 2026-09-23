@@ -202,12 +202,13 @@ LANG_HINTS = {
     "uk": "Write the entire response in Ukrainian.",
     "en": "Write the entire response in English.",
     "pl": "Write the entire response in Polish.",
+    "cs": "Write the entire response in Czech.",
 }
 LANG_HINT_DEFAULT = "Write the entire response in the same language as the transcript."
 
 
 def _detect_transcript_language(segments_or_text) -> str | None:
-    """Эвристика по содержимому: 'uk' / 'ru' / 'en' / None.
+    """Эвристика по содержимому: 'uk' / 'ru' / 'pl' / 'cs' / 'en' / None.
 
     Нужна когда фронт прислал autodetect (пустой language). Без явного
     указания LLM (Qwen2.5) часто скатывается в английский, даже если в
@@ -228,12 +229,15 @@ def _detect_transcript_language(segments_or_text) -> str | None:
     latin = sum(1 for c in text if 'a' <= c.lower() <= 'z')
     # Польские диакритики, которых нет в английском — отличают pl от en
     pl_specific = sum(1 for c in text if c in 'ąćęłńóśźżĄĆĘŁŃÓŚŹŻ')
+    # Чешские гачеки/кроужек — в польском их нет (там ż, а не ž)
+    cs_specific = sum(1 for c in text if c in 'ěščřžůťďňĚŠČŘŽŮŤĎŇ')
 
     if cyrillic == 0 and latin == 0:
         return None
     if cyrillic > latin:
         return 'uk' if uk_specific > 0 else 'ru'
-    # Латиница: польский если есть характерные диакритики, иначе английский
+    if cs_specific > pl_specific:
+        return 'cs'
     return 'pl' if pl_specific > 0 else 'en'
 
 GENERATE_TEMPLATES = {
@@ -553,7 +557,10 @@ app = Flask(__name__)
 # Разрешаем все origins для dev — в проде заменить на список доменов
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-ALLOWED_LANGUAGES = {"ru", "uk", "en", "pl"}
+ALLOWED_LANGUAGES = {"ru", "uk", "en", "pl", "cs"}
+# large-v3-turbo (урезанный декодер) заметно слабее на языках среднего ресурса —
+# для них всегда large-v3, независимо от плана.
+FORCE_BEST_QUALITY_LANGUAGES = {"cs"}
 
 # Порог (сек) для роутинга в chunked long-pipeline (transcribe_long).
 # Записи длиннее этого режутся на чанки и обрабатываются параллельно;
@@ -2975,6 +2982,7 @@ def title_endpoint():
         "uk": "Напиши заголовок українською.",
         "en": "Write the title in English.",
         "pl": "Napisz tytuł po polsku.",
+        "cs": "Napiš název v češtině.",
     }.get(language, "Write the title in the same language as the transcript.")
 
     # Ограничиваем контекст ~3000 символов — для заголовка достаточно
@@ -3508,6 +3516,9 @@ def transcribe_endpoint():
                 correction_hints = _build_correction_hints(vocab_items)
         except Exception as e:
             print(f"[limits] check failed: {e}")
+
+    if language in FORCE_BEST_QUALITY_LANGUAGES:
+        quality = "best"
 
     # Подмешиваем персональный словарь к пользовательскому prompt
     if user_vocab_prompt:

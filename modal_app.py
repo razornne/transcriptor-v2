@@ -300,6 +300,11 @@ _LANG_PROMPTS: dict[str, str] = {
         "— Dzień dobry, miło mi państwa widzieć. — Również, zaczynajmy. "
         "Tematy: biznes, marketing, technologia, sztuczna inteligencja, startupy, edukacja."
     ),
+    "cs": (
+        "Nahrávka pracovního hovoru, schůzky nebo rozhovoru v češtině. "
+        "— Dobrý den, rád vás vidím. — Také, pojďme začít. "
+        "Témata: byznys, marketing, technologie, umělá inteligence, startupy, vzdělávání."
+    ),
 }
 
 _CORRECTION_INSTRUCTIONS: dict[str, str] = {
@@ -328,6 +333,13 @@ _CORRECTION_INSTRUCTIONS: dict[str, str] = {
         "NIE zmieniaj sensu, stylu, szyku wyrazów, interpunkcji ani wielkości liter. "
         "NIE dodawaj i NIE usuwaj słów. Język pozostaw polski. "
         "Jeśli nie masz pewności — zostaw bez zmian."
+    ),
+    "cs": (
+        "Oprav POUZE zjevné fonetické chyby rozpoznávání řeči (STT). "
+        "NEMĚŇ smysl, styl, slovosled, interpunkci ani velikost písmen. "
+        "NEPŘIDÁVEJ a NEODSTRAŇUJ slova. Jazyk ponech český, včetně diakritiky. "
+        "Anglické termíny, které mluvčí skutečně použil, ponech. "
+        "Pokud si nejsi jistý, ponech beze změny."
     ),
 }
 
@@ -1598,6 +1610,7 @@ def transcribe_long(
             "ru": "[~{m} мин аудио не удалось обработать]",
             "uk": "[~{m} хв аудіо не вдалося обробити]",
             "pl": "[~{m} min nagrania nie udało się przetworzyć]",
+            "cs": "[~{m} min nahrávky se nepodařilo zpracovat]",
             "en": "[~{m} min of audio could not be processed]",
         }
         for i in failed_chunks:
