@@ -300,6 +300,7 @@ def merge(
     transcript_segments: list[dict],
     speaker_turns: list[dict],
     smooth_threshold: float | None = None,
+    consolidate: bool = True,
 ) -> list[dict]:
     """transcript_segments: [{start, end, text, words?}] от Whisper
        speaker_turns:       [{start, end, speaker}] от pyannote
@@ -308,6 +309,9 @@ def merge(
     smooth_threshold: override SMOOTH_THRESHOLD_S (e.g. 0.4 when caller
     knows the exact num_speakers and wants to preserve brief minority-speaker
     interjections that the default 1.0s threshold would absorb).
+
+    consolidate=False: не склеивать соседние сегменты одного спикера — нужно,
+    когда этот канал потом чередуется по времени с другим (channels.py).
 
     Если в сегментах есть `words` — режем пословно. Иначе — сегментный уровень.
     """
@@ -321,7 +325,7 @@ def merge(
         labeled = _assign_initial(transcript_segments, speaker_turns)
 
     labeled = _smooth(labeled, threshold=smooth_threshold)
-    merged = _merge_consecutive(labeled)
+    merged = _merge_consecutive(labeled) if consolidate else labeled
 
     # Анти-петля (после склейки соседей одного спикера — петля из нескольких
     # сегментов к этому моменту уже сжата в один текст и видна целиком)

@@ -183,6 +183,7 @@ def _modal_job_status(job_id: str) -> dict:
                 "status": "done",
                 "segments": result.get("segments") or [],
                 "vocab_additions": result.get("vocab_additions") or [],
+                "channel_mode": result.get("channel_mode"),
             }
         return {"status": "done", "segments": result or []}
     if kind == "generate":

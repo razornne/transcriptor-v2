@@ -179,8 +179,8 @@ image = (
         "numpy",
         "requests",
     )
-    # Включаем локальный merger.py в образ — чистая Python-логика без GPU-deps
-    .add_local_python_source("merger")
+    # Локальные модули с чистой Python-логикой без GPU-deps
+    .add_local_python_source("merger", "channels")
 )
 
 # Отдельный лёгкий image для Flask-обёртки (без torch/CUDA) — экономит cold start.
@@ -214,6 +214,7 @@ orchestrator_image = (
         "soundfile",
         "numpy",
     )
+    .add_local_python_source("merger", "channels")
 )
 
 # Длина чанка для длинных записей (сек). 1200 = 20 мин — базовая цель;
@@ -258,6 +259,74 @@ def _trim_to_core(segments: list[dict], lead_s: float, core_len_s: float,
             continue
         out.append(seg)
     return out
+
+
+# Предобработка перед Whisper. lowpass 12kHz, не 8kHz: 8kHz срезал согласные
+# в английских терминах ("pitch deck" → "page-теку").
+_PREPROC_AF = ("highpass=f=80,lowpass=f=12000,anlmdn,loudnorm=I=-16:TP=-1.5:LRA=11,"
+               "acompressor=threshold=-20dB:ratio=4:attack=5:release=50")
+
+
+def _merge_same_speaker(segments: list[dict]) -> list[dict]:
+    """Склеивает соседние сегменты одного спикера (после boundary-fix Gemini)."""
+    out: list[dict] = []
+    for seg in segments:
+        if out and out[-1]["speaker"] == seg["speaker"]:
+            out[-1]["end"] = seg["end"]
+            out[-1]["text"] += " " + seg["text"]
+        else:
+            out.append(dict(seg))
+    return out
+
+
+def _tmp_path(suffix: str) -> str:
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    return path
+
+
+def _prepare_audio(src_path: str) -> tuple[str, list[str]]:
+    """Декод + предобработка в 16k mono WAV. Возвращает (mode, wav_paths):
+      'dual'                    → [mic_wav, call_wav] — каналы веб-рекордера по отдельности
+      'left_only'/'right_only'  → [wav] — звучит только один канал, берём его
+      'mono'                    → [wav] — даунмикс как раньше (моно-файл или dual-mono)
+    Удалять файлы — забота вызывающего.
+    """
+    import soundfile as sf
+    from channels import ChannelStats
+
+    def extract(pan: str | None) -> str:
+        out = _tmp_path(".wav")
+        af = f"{pan},{_PREPROC_AF}" if pan else _PREPROC_AF
+        subprocess.run(["ffmpeg", "-y", "-i", src_path, "-af", af, "-ar", "16000", "-ac", "1", out],
+                       check=True, capture_output=True)
+        return out
+
+    stereo = _tmp_path(".wav")
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "2", stereo],
+                       check=True, capture_output=True)
+        stats = ChannelStats()
+        for block in sf.blocks(stereo, blocksize=16000 * 30, dtype="float32", always_2d=True):
+            stats.feed(block[:, 0], block[:, 1])
+        mode = stats.verdict()
+        print(f"[audio] channels={mode} corr={stats.correlation():.2f} "
+              f"active_l={stats.active_l}/{stats.frames} active_r={stats.active_r}/{stats.frames}", flush=True)
+    finally:
+        try:
+            os.remove(stereo)
+        except OSError:
+            pass
+
+    if mode == "dual":
+        return mode, [extract("pan=mono|c0=c0"), extract("pan=mono|c0=c1")]
+    if mode == "left_only":
+        return mode, [extract("pan=mono|c0=c0")]
+    if mode == "right_only":
+        return mode, [extract("pan=mono|c0=c1")]
+    return mode, [extract(None)]
+
+
 # Порог cosine-расстояния для глобальной кластеризации спикеров между чанками.
 # Точка EER wespeaker-эмбеддингов (граница "тот же/другой спикер") ~0.5 distance.
 # Меньше → больше спикеров (дробит, дубли на швах), больше → меньше (сливает).
@@ -520,9 +589,6 @@ class Transcriptor:
         quality: "fast" (large-v3-turbo, default) | "best" (large-v3).
         Best качество доступно только для Max-юзеров (проверяется в Flask).
         """
-        import soundfile as sf
-        import numpy as np
-        import torch
         from merger import merge
 
         # Honest pipeline monitoring: container (cold start) уже позади — фиксируем
@@ -531,144 +597,153 @@ class Transcriptor:
         self._served = getattr(self, "_served", 0) + 1
         pp = _PipelineProgress(progress_key, container_sec=container_sec)
 
-        # WebM → WAV (16kHz mono)
-        webm_fd, webm_path = tempfile.mkstemp(suffix=".webm")
-        wav_fd,  wav_path  = tempfile.mkstemp(suffix=".wav")
-        os.close(webm_fd); os.close(wav_fd)
-
+        src_path = _tmp_path(".webm")
+        wavs: list[str] = []
         try:
-            with open(webm_path, "wb") as f:
+            with open(src_path, "wb") as f:
                 f.write(audio_bytes)
 
             pp.start("audio_split")
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", webm_path,
-                 "-af", "highpass=f=80,lowpass=f=12000,anlmdn,loudnorm=I=-16:TP=-1.5:LRA=11,"
-                        "acompressor=threshold=-20dB:ratio=4:attack=5:release=50",
-                 "-ar", "16000", "-ac", "1", wav_path],
-                check=True, capture_output=True,
-            )
-            pp.done("audio_split")  # ffmpeg done — warmup + decode complete
+            mode, wavs = _prepare_audio(src_path)
+            pp.done("audio_split")  # decode + channel split + preprocessing done
+
             pp.start("transcription")
-
-            # --- Whisper ---
-            lang_hint = _LANG_PROMPTS.get(language or "")
-            if lang_hint and prompt:
-                effective_prompt = f"{lang_hint} {prompt}"
-            else:
-                effective_prompt = lang_hint or prompt
-
-            # Best quality для Max — large-v3 (~3x медленнее, +15-20% качества на UA/RU)
-            whisper_model = self.whisper_best if (quality == "best" and getattr(self, "whisper_best", None)) else self.whisper
-            segments_iter, _ = whisper_model.transcribe(
-                wav_path,
-                language=language,
-                initial_prompt=effective_prompt,
-                beam_size=3,
-                best_of=3,
-                temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
-                compression_ratio_threshold=2.4,
-                log_prob_threshold=-1.0,
-                no_speech_threshold=0.6,
-                hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
-                condition_on_previous_text=True,
-                vad_filter=True,
-                vad_parameters={
-                    "threshold": 0.45,
-                    "min_silence_duration_ms": 500,
-                    "speech_pad_ms": 200,
-                },
-                word_timestamps=True,  # для word-level alignment в merger
-            )
-            # Кастуем к нативным Python типам — faster-whisper иногда возвращает
-            # numpy.float32 для start/end, и Modal/cbor2 на стороне Flask-контейнера
-            # без numpy падает с "Deserialization failed because 'numpy' is not available".
-            segments = [
-                {
-                    "start": float(s.start),
-                    "end":   float(s.end),
-                    "text":  s.text.strip(),
-                    "words": [
-                        {"start": float(w.start), "end": float(w.end), "word": w.word}
-                        for w in (s.words or [])
-                    ],
-                }
-                for s in segments_iter
-                if s.text.strip()
-            ]
-            pp.done("transcription")  # whisper done
-
-            if not segments:
+            tracks = [self._run_whisper(w, language, prompt, quality) for w in wavs]
+            pp.done("transcription")
+            if not any(tracks):
                 return {"segments": [], "vocab_additions": []}
 
             pp.start("diarization")
-
-            # --- Pyannote ---
-            waveform, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
-            waveform = waveform.T  # (channels, time)
-            audio_input = {
-                "waveform": torch.from_numpy(np.ascontiguousarray(waveform)),
-                "sample_rate": sample_rate,
-            }
-            kwargs = {}
-            if num_speakers:
-                # Юзер задал точное число — pyannote делает constrained clustering,
-                # качество резко лучше. Особенно для 2-3 спикеров.
-                kwargs["num_speakers"] = num_speakers
+            if mode == "dual":
+                merged = self._label_dual(tracks[0], tracks[1], wavs[1], num_speakers)
             else:
-                # Bounds на пространство поиска — помогает кластеризации не
-                # фрагментировать одного спикера на несколько и не сливать
-                # двух в одного. 1..6 покрывает 95% реальных созвонов.
-                kwargs["min_speakers"] = 1
-                kwargs["max_speakers"] = 6
-
-            result = self.pyannote(audio_input, **kwargs)
-            annotation = result.speaker_diarization
-            speaker_turns = [
-                {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
-                for turn, _, speaker in annotation.itertracks(yield_label=True)
-            ]
-
-            # --- Merge --- (часть стадии diarization: разнос слов по спикерам)
-            # Когда юзер задал точное num_speakers, уменьшаем порог сглаживания
-            # (1.0s → 0.4s): короткие реплики (<1s) миноритарного спикера не
-            # поглощаются соседними блоками. Без этого "Так", "Добре", "Окей"
-            # (<0.8s) исчезают в Speaker 1 при несбалансированной диаризации
-            # (напр. смешанный моно-поток system audio). 0.4s выше типичного
-            # pyannote-шума (0.05-0.2s), но ниже реальных коротких реплик.
-            smooth_th = 0.4 if num_speakers else None
-            merged = merge(segments, speaker_turns, smooth_threshold=smooth_th)
-            # На случай если merger пропустил numpy типы — финальная нормализация
+                segments = tracks[0]
+                if num_speakers:
+                    # Юзер задал точное число — constrained clustering, качество резко лучше.
+                    diar_kwargs = {"num_speakers": num_speakers}
+                else:
+                    # Bounds 1..6: pyannote не дробит одного спикера и не сливает двух.
+                    diar_kwargs = {"min_speakers": 1, "max_speakers": 6}
+                _, speaker_turns = self._diarize(wavs[0], **diar_kwargs)
+                # При точном num_speakers порог сглаживания 1.0s → 0.4s: короткие
+                # реплики миноритарного спикера ("Так", "Добре", <0.8s) не поглощаются.
+                smooth_th = 0.4 if num_speakers else None
+                merged = merge(segments, speaker_turns, smooth_threshold=smooth_th)
             for m in merged:
                 m["start"]   = float(m["start"])
                 m["end"]     = float(m["end"])
                 m["speaker"] = str(m["speaker"])
-            pp.done("diarization")  # pyannote + merge done
+            pp.done("diarization")
 
             # --- LLM correction ---
             pp.start("ai_formatting")
-            merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints)
+            merged, vocab_additions = self._correct_segments(
+                merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints,
+                speakers_fixed=(mode == "dual"),
+            )
+            merged = _merge_same_speaker(merged)  # boundary-fix мог сделать соседей одного спикера
+            pp.done("ai_formatting")
 
-            # После Gemini boundary-fix соседние сегменты могут оказаться
-            # одного спикера — склеиваем заново.
-            re_merged: list[dict] = []
-            for seg in merged:
-                if re_merged and re_merged[-1]["speaker"] == seg["speaker"]:
-                    re_merged[-1]["end"]   = seg["end"]
-                    re_merged[-1]["text"] += " " + seg["text"]
-                else:
-                    re_merged.append(dict(seg))
-            merged = re_merged
-            pp.done("ai_formatting")  # LLM correction done
-
-            return {"segments": merged, "vocab_additions": vocab_additions}
+            return {"segments": merged, "vocab_additions": vocab_additions, "channel_mode": mode}
 
         finally:
-            for p in (webm_path, wav_path):
+            for p in [src_path, *wavs]:
                 try:
                     os.remove(p)
                 except OSError:
                     pass
+
+    def _run_whisper(self, wav_path: str, language: str | None, prompt: str | None,
+                     quality: str) -> list[dict]:
+        """Whisper по одному 16k mono WAV → [{start, end, text, words}] (нативные float)."""
+        lang_hint = _LANG_PROMPTS.get(language or "")
+        effective_prompt = f"{lang_hint} {prompt}" if (lang_hint and prompt) else (lang_hint or prompt)
+
+        # Best quality — large-v3 (~3x медленнее, заметно точнее вне ru/uk/en)
+        whisper_model = self.whisper_best if (quality == "best" and getattr(self, "whisper_best", None)) else self.whisper
+        segments_iter, _ = whisper_model.transcribe(
+            wav_path,
+            language=language,
+            initial_prompt=effective_prompt,
+            beam_size=3,
+            best_of=3,
+            temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+            hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
+            condition_on_previous_text=True,
+            vad_filter=True,
+            vad_parameters={
+                "threshold": 0.45,
+                "min_silence_duration_ms": 500,
+                "speech_pad_ms": 200,
+            },
+            word_timestamps=True,  # для word-level alignment в merger и фильтра эха
+        )
+        # Нативные Python типы: faster-whisper отдаёт numpy.float32, а Flask-контейнер
+        # без numpy падает на десериализации ("'numpy' is not available").
+        return [
+            {
+                "start": float(s.start),
+                "end":   float(s.end),
+                "text":  s.text.strip(),
+                "words": [
+                    {"start": float(w.start), "end": float(w.end), "word": w.word}
+                    for w in (s.words or [])
+                ],
+            }
+            for s in segments_iter
+            if s.text.strip()
+        ]
+
+    def _diarize(self, wav_path: str, **kwargs):
+        """pyannote по WAV → (annotation, [{start, end, speaker}])."""
+        import numpy as np
+        import soundfile as sf
+        import torch
+
+        waveform, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
+        audio_input = {
+            "waveform": torch.from_numpy(np.ascontiguousarray(waveform.T)),  # (channels, time)
+            "sample_rate": sample_rate,
+        }
+        annotation = self.pyannote(audio_input, **kwargs).speaker_diarization
+        turns = [
+            {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
+            for turn, _, speaker in annotation.itertracks(yield_label=True)
+        ]
+        return annotation, turns
+
+    def _label_dual(self, mic_segs: list[dict], call_segs: list[dict], call_wav: str,
+                    num_speakers: int | None) -> list[dict]:
+        """Двухканальная запись → один размеченный транскрипт.
+
+        SPEAKER_00 — владелец микрофона (известен по каналу). Канал звонка
+        диаризуется только если собеседников может быть больше одного
+        (num_speakers не задан или > 2). num_speakers == 1 (Free, без
+        диаризации) — всё одним спикером, но каналы всё равно распознаны
+        раздельно (одновременная речь не теряется).
+        """
+        from channels import drop_echo, interleave, label, relabel, split_on_pauses
+        from merger import merge
+
+        mic_segs, call_segs = split_on_pauses(mic_segs), split_on_pauses(call_segs)
+        mic_segs = drop_echo(mic_segs, call_segs)
+        if num_speakers == 1:
+            return interleave(label(mic_segs, "SPEAKER_00"), label(call_segs, "SPEAKER_00"))
+
+        call_n = num_speakers - 1 if num_speakers else None
+        if not call_segs or call_n == 1:
+            call = label(call_segs, "SPEAKER_01")
+        else:
+            kwargs = {"num_speakers": call_n} if call_n else {"min_speakers": 1, "max_speakers": 5}
+            _, turns = self._diarize(call_wav, **kwargs)
+            call = relabel(
+                merge(call_segs, turns, smooth_threshold=0.4 if call_n else None, consolidate=False),
+                mapping_start=1,
+            )
+        return interleave(label(mic_segs, "SPEAKER_00"), call)
 
     # ── Chunked transcription (long recordings) ──────────────────
 
@@ -685,8 +760,13 @@ class Transcriptor:
         core_lead_s: float = 0.0,
         core_len_s: float | None = None,
         is_last_chunk: bool = True,
+        call_wav_bytes: bytes | None = None,
     ) -> dict:
         """Обрабатывает ОДИН чанк длинной записи (для transcribe_long).
+
+        call_wav_bytes — канал звонка двухканальной записи (тогда wav_bytes —
+        канал микрофона). Микрофонные сегменты помечаются channels.MIC_LABEL,
+        единственный собеседник — CALL_LABEL; эмбеддинги — только по каналу звонка.
 
         Принимает уже сконвертированный 16kHz mono WAV — оркестратор делает
         ffmpeg один раз на весь файл и режет на куски. В отличие от
@@ -709,114 +789,74 @@ class Transcriptor:
             "embeddings": {"SPEAKER_00": [[float, ...], ...], ...},  # до EMB_PER_SPEAKER векторов
             "vocab_additions": [term, ...] }
         """
-        import soundfile as sf
-        import numpy as np
-        import torch
+        from channels import CALL_LABEL, MIC_LABEL, drop_echo, interleave, label, split_on_pauses
         from merger import merge
 
-        wav_fd, wav_path = tempfile.mkstemp(suffix=".wav")
-        os.close(wav_fd)
+        def core(segs: list[dict]) -> list[dict]:
+            # Дедуп пад-зон: текст из нахлёста отдаёт соседний чанк
+            if core_len_s is None:
+                return segs
+            return _trim_to_core(segs, core_lead_s, core_len_s, is_last_chunk)
+
+        empty = {"segments": [], "embeddings": {}, "vocab_additions": []}
+        wav_path = _tmp_path(".wav")
+        paths = [wav_path]
         try:
             with open(wav_path, "wb") as f:
                 f.write(wav_bytes)
+            segments = core(self._run_whisper(wav_path, language, prompt, quality))
 
-            # --- Whisper (те же параметры что в transcribe_full) ---
-            lang_hint = _LANG_PROMPTS.get(language or "")
-            if lang_hint and prompt:
-                effective_prompt = f"{lang_hint} {prompt}"
+            if call_wav_bytes is None:
+                if not segments:
+                    return empty
+                # Не форсим точное число — в чанке может говорить меньше спикеров;
+                # num_speakers — верхний предел против over-segmentation.
+                annotation, turns = self._diarize(wav_path, min_speakers=1, max_speakers=num_speakers or 6)
+                embeddings = self._speaker_centroids(wav_path, annotation)
+                merged = merge(segments, turns)
             else:
-                effective_prompt = lang_hint or prompt
+                call_path = _tmp_path(".wav")
+                paths.append(call_path)
+                with open(call_path, "wb") as f:
+                    f.write(call_wav_bytes)
+                call_segs = split_on_pauses(core(self._run_whisper(call_path, language, prompt, quality)))
+                segments = split_on_pauses(segments)
+                if not segments and not call_segs:
+                    return empty
+                mic = label(drop_echo(segments, call_segs), MIC_LABEL)
+                embeddings = {}
+                if num_speakers == 1:  # без диаризации (Free) — всё одним спикером
+                    call = label(call_segs, MIC_LABEL)
+                elif not call_segs or num_speakers == 2:
+                    call = label(call_segs, CALL_LABEL)
+                else:
+                    call_max = num_speakers - 1 if num_speakers else 5
+                    annotation, turns = self._diarize(call_path, min_speakers=1, max_speakers=call_max)
+                    embeddings = self._speaker_centroids(call_path, annotation)
+                    call = merge(call_segs, turns, consolidate=False)
+                merged = interleave(mic, call)
 
-            whisper_model = self.whisper_best if (quality == "best" and getattr(self, "whisper_best", None)) else self.whisper
-            segments_iter, _ = whisper_model.transcribe(
-                wav_path,
-                language=language,
-                initial_prompt=effective_prompt,
-                beam_size=3,
-                best_of=3,
-                temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
-                compression_ratio_threshold=2.4,
-                log_prob_threshold=-1.0,
-                no_speech_threshold=0.6,
-                hallucination_silence_threshold=HALLUCINATION_SILENCE_S,
-                condition_on_previous_text=True,
-                vad_filter=True,
-                vad_parameters={
-                    "threshold": 0.45,
-                    "min_silence_duration_ms": 500,
-                    "speech_pad_ms": 200,
-                },
-                word_timestamps=True,
-            )
-            segments = [
-                {
-                    "start": float(s.start),
-                    "end":   float(s.end),
-                    "text":  s.text.strip(),
-                    "words": [
-                        {"start": float(w.start), "end": float(w.end), "word": w.word}
-                        for w in (s.words or [])
-                    ],
-                }
-                for s in segments_iter
-                if s.text.strip()
-            ]
-            # Дедуп пад-зон: текст из нахлёста отдаёт соседний чанк
-            if core_len_s is not None:
-                segments = _trim_to_core(segments, core_lead_s, core_len_s, is_last_chunk)
-            if not segments:
-                return {"segments": [], "embeddings": {}, "vocab_additions": []}
-
-            # --- Pyannote (1..num_speakers если задан, иначе 1..6) ---
-            # Не форсим точное число — в чанке может говорить меньше спикеров.
-            # num_speakers используется как верхний предел, чтобы pyannote не
-            # дробил голоса сверх нужного (over-segmentation).
-            waveform, sample_rate = sf.read(wav_path, dtype="float32", always_2d=True)
-            waveform = waveform.T  # (channels, time)
-            audio_input = {
-                "waveform": torch.from_numpy(np.ascontiguousarray(waveform)),
-                "sample_rate": sample_rate,
-            }
-            _max_spk = num_speakers if num_speakers else 6
-            result = self.pyannote(audio_input, min_speakers=1, max_speakers=_max_spk)
-            annotation = result.speaker_diarization
-            speaker_turns = [
-                {"start": float(turn.start), "end": float(turn.end), "speaker": str(speaker)}
-                for turn, _, speaker in annotation.itertracks(yield_label=True)
-            ]
-
-            # Centroid-эмбеддинги локальных спикеров (для глобального сшивания)
-            embeddings = self._speaker_centroids(wav_path, annotation)
-
-            # --- Merge ---
-            merged = merge(segments, speaker_turns)
             for m in merged:
                 m["start"]   = float(m["start"])
                 m["end"]     = float(m["end"])
                 m["speaker"] = str(m["speaker"])
 
             # --- LLM correction (per-chunk; ~20мин транскрипт влезает в 1 Gemini-вызов) ---
-            merged, vocab_additions = self._correct_segments(merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints)
-
-            # Re-merge соседних сегментов одного спикера после boundary-fix
-            re_merged: list[dict] = []
-            for seg in merged:
-                if re_merged and re_merged[-1]["speaker"] == seg["speaker"]:
-                    re_merged[-1]["end"]   = seg["end"]
-                    re_merged[-1]["text"] += " " + seg["text"]
-                else:
-                    re_merged.append(dict(seg))
-
+            merged, vocab_additions = self._correct_segments(
+                merged, language, privacy_mode=privacy_mode, correction_hints=correction_hints,
+                speakers_fixed=call_wav_bytes is not None,
+            )
             return {
-                "segments": re_merged,
+                "segments": _merge_same_speaker(merged),
                 "embeddings": embeddings,
                 "vocab_additions": vocab_additions,
             }
         finally:
-            try:
-                os.remove(wav_path)
-            except OSError:
-                pass
+            for p in paths:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
     def _speaker_centroids(self, wav_path: str, annotation) -> dict:
         """Embedding'и каждого локального спикера для глобального сшивания.
@@ -861,7 +901,8 @@ class Transcriptor:
 
     def _correct_segments(self, segments: list[dict], language: str | None,
                           privacy_mode: bool = False,
-                          correction_hints: str = "") -> tuple[list[dict], list[dict]]:
+                          correction_hints: str = "",
+                          speakers_fixed: bool = False) -> tuple[list[dict], list[dict]]:
         """Главный correction pass.
 
         privacy_mode=True skips the Gemini call entirely — falls back to
@@ -888,7 +929,8 @@ class Transcriptor:
         # Try Gemini first if API key available
         if os.environ.get("GEMINI_API_KEY", "").strip():
             try:
-                result = self._correct_segments_gemini(segments, language, correction_hints)
+                result = self._correct_segments_gemini(segments, language, correction_hints,
+                                                       speakers_fixed=speakers_fixed)
                 if result:
                     return result  # (segments, vocab_additions)
             except Exception as e:
@@ -991,7 +1033,8 @@ class Transcriptor:
         return pairs
 
     def _correct_segments_gemini(self, segments: list[dict], language: str | None,
-                                 correction_hints: str = "") -> tuple[list[dict], list[dict]] | None:
+                                 correction_hints: str = "",
+                                 speakers_fixed: bool = False) -> tuple[list[dict], list[dict]] | None:
         """Gemini-based correction с boundary-fix capability.
 
         Передаём весь транскрипт с метками спикеров. Gemini может:
@@ -1023,6 +1066,16 @@ class Transcriptor:
         ]
         lines_in = "\n".join(lines)
 
+        # Двухканальная запись: спикер известен по микрофону — переносить слова
+        # между репликами/спикерами нельзя, это только испортит атрибуцию.
+        boundary_task = (
+            "2. Speaker labels come from separate microphones and are ALWAYS correct:\n"
+            "   never move words between lines and never change a label.\n\n"
+            if speakers_fixed else
+            "2. Boundary fix: if you see a phrase clearly belonging to the NEXT or PREVIOUS speaker\n"
+            "   (e.g. an answer's first words attached to the question), move those 1-5 words\n"
+            "   across the speaker boundary. ONLY when grammar and semantics give clear evidence.\n\n"
+        )
         prompt = (
             f"{instruction}{hints_block}\n\n"
             "Below is a numbered, speaker-diarized transcript. Each line is:\n"
@@ -1032,9 +1085,7 @@ class Transcriptor:
             "   - Acronyms transliterated wrong (e.g. рдух → ADHD, СДВГ; стіарар → CTR)\n"
             "   - Misrecognized names of people, brands, products\n"
             "   - Technical terms broken by phonetic recognition\n"
-            "2. Boundary fix: if you see a phrase clearly belonging to the NEXT or PREVIOUS speaker\n"
-            "   (e.g. an answer's first words attached to the question), move those 1-5 words\n"
-            "   across the speaker boundary. ONLY when grammar and semantics give clear evidence.\n\n"
+            f"{boundary_task}"
             "STRICT RULES:\n"
             "- Output ONLY the same numbered lines, same format: 'N. [SPEAKER_XX] text'\n"
             "- Keep numbering 1..N identical, no gaps\n"
@@ -1138,7 +1189,7 @@ class Transcriptor:
                 corrected[idx]["text"] = new_text
                 changes_count += 1
             # Speaker reassignment (boundary fix)
-            if new_speaker in original_speakers and new_speaker != orig["speaker"]:
+            if not speakers_fixed and new_speaker in original_speakers and new_speaker != orig["speaker"]:
                 corrected[idx]["speaker"] = new_speaker
                 speaker_changes += 1
 
@@ -1450,30 +1501,31 @@ def transcribe_long(
     # «ai_formatting» = финальная агрегация. container_sec=0 (CPU-оркестратор).
     pp = _PipelineProgress(progress_key, container_sec=0.0)
 
-    src_fd, src_path = tempfile.mkstemp(suffix=".bin")
-    wav_fd, wav_path = tempfile.mkstemp(suffix=".wav")
-    os.close(src_fd); os.close(wav_fd)
+    from channels import CALL_LABEL, MIC_LABEL
+
+    src_path = _tmp_path(".bin")
+    wavs: list[str] = []
     chunk_paths: list[str] = []
     try:
         with open(src_path, "wb") as f:
             f.write(audio_bytes)
 
-        # 1. Декод полного аудио → 16k mono wav (на диск, не в RAM)
+        # 1. Декод → 16k mono wav (на диск, не в RAM). Двухканальная запись
+        # веб-рекордера → два wav (микрофон, звонок), режутся по одним границам.
         pp.start("audio_split")
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", src_path,
-             "-af", "highpass=f=80,lowpass=f=12000,anlmdn,loudnorm=I=-16:TP=-1.5:LRA=11,"
-                    "acompressor=threshold=-20dB:ratio=4:attack=5:release=50",
-             "-ar", "16000", "-ac", "1", wav_path],
-            check=True, capture_output=True,
-        )
+        mode, wavs = _prepare_audio(src_path)
+        dual = mode == "dual"
+        wav_path = wavs[0]
         duration = float(sf.info(wav_path).duration)
 
-        # 2. Silence-aware split
-        sil_proc = subprocess.run(
-            ["ffmpeg", "-i", wav_path, "-af", "silencedetect=noise=-30dB:d=0.5", "-f", "null", "-"],
-            capture_output=True, text=True,
+        # 2. Silence-aware split (для двух каналов — тишина в обоих, через amix)
+        sil_cmd = (
+            ["ffmpeg", "-i", wavs[0], "-i", wavs[1], "-filter_complex",
+             "amix=inputs=2:normalize=0,silencedetect=noise=-30dB:d=0.5", "-f", "null", "-"]
+            if dual else
+            ["ffmpeg", "-i", wav_path, "-af", "silencedetect=noise=-30dB:d=0.5", "-f", "null", "-"]
         )
+        sil_proc = subprocess.run(sil_cmd, capture_output=True, text=True)
         silences = _parse_silences(sil_proc.stderr)
         boundaries = _plan_chunk_boundaries(duration, silences)
         n = len(boundaries)
@@ -1489,33 +1541,37 @@ def transcribe_long(
         pp.start("transcription", chunks_total=n, chunks_done=0, chunks_failed=0)
         calls = []
         pad_starts: list[float] = []
-        for i, (start, end) in enumerate(boundaries):
-            ch_fd, ch_path = tempfile.mkstemp(suffix=f".chunk{i}.wav")
-            os.close(ch_fd)
+        def cut(src: str, ss: float, dur: float, i: int) -> bytes:
+            ch_path = _tmp_path(f".chunk{i}.wav")
             chunk_paths.append(ch_path)
-            ss = max(0.0, start - CHUNK_PAD_S)
-            to = min(duration, end + CHUNK_PAD_S)
-            pad_starts.append(ss)
             # -ss/-t (не -to): -t = длительность, однозначно во всех версиях
             # ffmpeg (в отличие от -to, который может быть абсолютным/относительным).
             subprocess.run(
-                ["ffmpeg", "-y", "-ss", str(ss), "-t", str(to - ss),
-                 "-i", wav_path, "-ar", "16000", "-ac", "1", ch_path],
+                ["ffmpeg", "-y", "-ss", str(ss), "-t", str(dur),
+                 "-i", src, "-ar", "16000", "-ac", "1", ch_path],
                 check=True, capture_output=True,
             )
             with open(ch_path, "rb") as f:
-                chunk_bytes = f.read()
+                data = f.read()
             # Файл чанка больше не нужен — байты ушли в spawn. Чистим сразу,
             # иначе к концу джобы на диске лежит полный дубль записи в wav.
             try:
                 os.remove(ch_path)
             except OSError:
                 pass
+            return data
+
+        for i, (start, end) in enumerate(boundaries):
+            ss = max(0.0, start - CHUNK_PAD_S)
+            to = min(duration, end + CHUNK_PAD_S)
+            pad_starts.append(ss)
             call = Transcriptor().transcribe_chunk.spawn(
-                chunk_bytes, language, num_speakers, prompt, quality, privacy_mode, correction_hints,
+                cut(wav_path, ss, to - ss, i), language, num_speakers, prompt, quality,
+                privacy_mode, correction_hints,
                 core_lead_s=start - ss,
                 core_len_s=end - start,
                 is_last_chunk=(i == n - 1),
+                call_wav_bytes=cut(wavs[1], ss, to - ss, i) if dual else None,
             )
             calls.append((i, start, call))
 
@@ -1567,8 +1623,10 @@ def transcribe_long(
         label_map: dict[tuple[int, str], int] = {}
         if items:
             chunk_ids = [ci for ci, _ in items]
+            # Для двух каналов эмбеддинги есть только у собеседников — их на одного меньше
+            cluster_k = (num_speakers - 1 if num_speakers else None) if dual else num_speakers
             cluster_ids = _cluster_speaker_embeddings(
-                chunk_ids, groups, num_speakers, GLOBAL_SPK_THRESHOLD,
+                chunk_ids, groups, cluster_k, GLOBAL_SPK_THRESHOLD,
             )
             label_map = {items[kk]: int(cluster_ids[kk]) for kk in range(len(items))}
             # diag: разделимость спикеров (off-diagonal cosine distance по
@@ -1599,8 +1657,15 @@ def transcribe_long(
             offset = pad_starts[i] if i < len(pad_starts) else start
             for seg in (res.get("segments") or []):
                 cluster = label_map.get((i, seg["speaker"]))
-                # Фоллбэк если эмбеддинга не было — уникальный per-chunk лейбл
-                key = cluster if cluster is not None else f"c{i}_{seg['speaker']}"
+                if seg["speaker"] == MIC_LABEL:
+                    key = "me"        # владелец микрофона — известен по каналу
+                elif seg["speaker"] == CALL_LABEL:
+                    key = "call"      # единственный собеседник — известен по каналу
+                elif cluster is not None:
+                    key = cluster
+                else:
+                    # Фоллбэк если эмбеддинга не было — уникальный per-chunk лейбл
+                    key = f"c{i}_{seg['speaker']}"
                 all_segs.append({
                     "start": float(seg["start"]) + offset,
                     "end":   float(seg["end"]) + offset,
@@ -1629,8 +1694,9 @@ def transcribe_long(
             })
         all_segs.sort(key=lambda s: s["start"])
 
-        # Глобальная нумерация спикеров по времени первого появления
-        order: dict = {}
+        # Глобальная нумерация спикеров по времени первого появления;
+        # у двухканальной записи владелец микрофона — всегда SPEAKER_00.
+        order: dict = {"me": 0} if dual else {}
         for s in all_segs:
             if isinstance(s["_k"], tuple):
                 continue  # gap-маркер — не спикер
@@ -1669,10 +1735,10 @@ def transcribe_long(
                 chunks_failed=len(failed_chunks))
         print(f"[long] done: {len(final)} segments, {len(order)} speakers, "
               f"vocab+{len(vocab)}, failed_chunks={failed_chunks or 'none'}", flush=True)
-        return {"segments": final, "vocab_additions": vocab}
+        return {"segments": final, "vocab_additions": vocab, "channel_mode": mode}
 
     finally:
-        for p in [src_path, wav_path, *chunk_paths]:
+        for p in [src_path, *wavs, *chunk_paths]:
             try:
                 os.remove(p)
             except OSError:

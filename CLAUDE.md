@@ -144,6 +144,13 @@ Supabase Postgres
 - **`011_capture_stats.sql`** — `public.capture_stats`: телеметрия захвата на каждую запись (есть ли звук вкладки, уровни, секунды тишины по каналам, отвалы/переключения микрофона в `events` JSONB, браузер/ОС). `recording_id` — связь с сохранённым аудио того же звонка. Пишется с клиента после Stop.
 - **`012_recordings.sql`** — `public.recordings`: индекс архива аудио в Cloudflare R2 (`storage_key`), метаданные записи, **сырой** результат пайплайна (`segments`, до правок юзера) или `error`. `id` = `recording_id` (= `capture_stats.recording_id`). Только service role (RLS без политик).
 
+### Двухканальные записи (L = микрофон, R = звонок)
+- `_prepare_audio` (modal_app.py) декодирует запись в 16k стерео и по `channels.ChannelStats` решает: `dual` (каналы разные → два wav), `left_only`/`right_only` (звучит один канал → он), `mono` (моно-файл или dual-mono → даунмикс как раньше). Моно-путь не изменился.
+- `dual` в `transcribe_full` (`_label_dual`) и в чанках `transcribe_long` (`call_wav_bytes`): Whisper по каждому каналу → `split_on_pauses` (faster-whisper с VAD склеивает реплики через паузу, иначе каналы не чередуются) → `drop_echo` (эхо собеседника из колонок в микрофоне) → pyannote ТОЛЬКО на канале звонка и только если собеседников может быть >1 (num_speakers не задан или >2) → `interleave`. Владелец микрофона — всегда `SPEAKER_00`. num_speakers=1 (Free) → всё одним спикером.
+- Gemini-коррекция в dual-режиме с `speakers_fixed=True`: без boundary-fix, смена спикера запрещена (спикер известен по каналу).
+- Ответ содержит `channel_mode`. Логи: `[audio] channels=… corr=…`.
+- Тесты: `tests/test_channels.py`. Проверено на GPU на синтетическом стерео-звонке (чешский TTS + эхо 25%/200мс): 2 спикера — 0% ошибок разметки, эхо вычищено, длинный пайплайн так же.
+
 ### Архив записей (работа над ошибками)
 - Каждая транскрипция (запись и upload, **кроме Privacy Mode**) → копия аудио в R2 `recordings/{user_id}/{recording_id}.{ext}` + строка в `public.recordings`. Делает `/api/transcribe` фоновым потоком (`_archive_recording`) после spawn; результат джобы (`segments`/`error`) дописывает `/api/jobs/<id>` (`_archive_job_result`, PATCH по `job_id`). Всё best-effort — сбой архива не ломает транскрипцию.
 - Фронт шлёт `recording_id` (из `startRecording`, для upload — новый uuid) и `source` (`record`/`upload`) в FormData.
