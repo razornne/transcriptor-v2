@@ -143,6 +143,14 @@ Supabase Postgres
 - **`011_capture_stats.sql`** — `public.capture_stats`: телеметрия захвата на каждую запись (есть ли звук вкладки, уровни, секунды тишины по каналам, отвалы/переключения микрофона в `events` JSONB, браузер/ОС). `recording_id` — связь с сохранённым аудио того же звонка. Пишется с клиента после Stop.
 - **`012_recordings.sql`** — `public.recordings`: индекс архива аудио в Cloudflare R2 (`storage_key`), метаданные записи, **сырой** результат пайплайна (`segments`, до правок юзера) или `error`. `id` = `recording_id` (= `capture_stats.recording_id`). Только service role (RLS без политик).
 
+### STT: Soniox — основной путь (с 2026-09-24)
+- `/api/transcribe` → `transcribe_soniox` (CPU, `soniox_image`) для всех, **кроме Privacy Mode и записей > 295 мин** (лимит Soniox 300 мин/файл) — те идут в старый GPU-пайплайн (`transcribe_full`/`transcribe_long`). Откат для всех: env `STT_PROVIDER=selfhost` на flask_app.
+- Выбор по `tests/score_stt.py`: эталон (uk/ru/pl/cs/en, чистый+телефонный) — Soniox WER 2.4% / 0% пропущенных слов против 3.7% / 1.3% у Whisper+pyannote; на реальном 54-мин звонке на 4 человека — больше слов и чистые границы реплик; $0.10/ч против ~$0.41.
+- Поток: `_classify_channels` → моно-файл в родном формате (ogg/webm/mp3/wav/flac) уходит **как есть**, иначе `_encode_for_stt` (opus 64k, исходная частота — **не** 16k/32k: пережатие стоило Soniox спикера и ~4% слов) → `soniox.transcribe` (dual: 2 сессии параллельно, микрофон без диаризации) → `tokens_to_words` → `words_to_segments` → `drop_echo`/`interleave` (channels.py) → `_gemini_correct_segments` (module-level, без Qwen-фоллбэка) → `_merge_same_speaker`.
+- Словарь юзера → `context.terms`, поле «Context» → `context.text` (`soniox.build_context`). Секрет `soniox-secrets` (SONIOX_API_KEY). Файлы/транскрипции у Soniox удаляются сразу (лимит 1000/2000 на аккаунт).
+- **Известное ограничение:** у Soniox нельзя задать число спикеров — на моно-записях он может найти меньше людей, чем было (4-человечный звонок → 3). Для веб-записей спасает стерео: владелец микрофона известен по каналу.
+- В архиве `recordings.quality = "soniox"`. Тесты: `tests/test_soniox.py`.
+
 ### Двухканальные записи (L = микрофон, R = звонок)
 - `_prepare_audio` (modal_app.py) декодирует запись в 16k стерео и по `channels.ChannelStats` решает: `dual` (каналы разные → два wav), `left_only`/`right_only` (звучит один канал → он), `mono` (моно-файл или dual-mono → даунмикс как раньше). Моно-путь не изменился.
 - `dual` в `transcribe_full` (`_label_dual`) и в чанках `transcribe_long` (`call_wav_bytes`): Whisper по каждому каналу → `split_on_pauses` (faster-whisper с VAD склеивает реплики через паузу, иначе каналы не чередуются) → `drop_echo` (эхо собеседника из колонок в микрофоне) → pyannote ТОЛЬКО на канале звонка и только если собеседников может быть >1 (num_speakers не задан или >2) → `interleave`. Владелец микрофона — всегда `SPEAKER_00`. num_speakers=1 (Free) → всё одним спикером.

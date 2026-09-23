@@ -560,6 +560,12 @@ FORCE_BEST_QUALITY_LANGUAGES = {"cs"}
 # короче — идут в монолитный transcribe_full. Default 1800 = 30 мин.
 LONG_AUDIO_THRESHOLD_S = float(os.environ.get("LONG_AUDIO_THRESHOLD_S", "1800"))
 
+# Основной STT — Soniox (transcribe_soniox). Self-hosted Whisper+pyannote
+# остаётся для Privacy Mode и записей длиннее лимита Soniox (300 мин).
+# STT_PROVIDER=selfhost — быстрый откат на старый пайплайн для всех.
+STT_PROVIDER = os.environ.get("STT_PROVIDER", "soniox")
+SONIOX_MAX_S = 295 * 60
+
 
 # ── Supabase JWT validation ─────────────────────────────────────
 # Проверяем JWT от Supabase Auth на всех /api/* кроме /api/health.
@@ -3460,6 +3466,7 @@ def transcribe_endpoint():
 
     # Plan limits check + best-quality gating + vocabulary fetch
     user_vocab_prompt = ""
+    vocab_terms: list[str] = []  # правые формы словаря → context.terms у Soniox
     correction_hints = ""  # пары wrong→right для Gemini correction
     if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
         try:
@@ -3485,13 +3492,17 @@ def transcribe_endpoint():
             if isinstance(vocab_items, list) and vocab_items:
                 user_vocab_prompt = _build_vocab_prompt(vocab_items)
                 correction_hints = _build_correction_hints(vocab_items)
+                vocab_terms = [v.get("term") for v in sorted(vocab_items, key=lambda x: -int(x.get("freq", 1)))
+                               if v.get("term")][:VOCAB_MAX_ITEMS]
         except Exception as e:
             print(f"[limits] check failed: {e}")
 
     if language in FORCE_BEST_QUALITY_LANGUAGES:
         quality = "best"
 
-    # Подмешиваем персональный словарь к пользовательскому prompt
+    # Soniox получает словарь списком терминов, а поле «Context» — отдельно текстом
+    user_context = prompt
+    # Подмешиваем персональный словарь к пользовательскому prompt (Whisper initial_prompt)
     if user_vocab_prompt:
         prompt = f"{user_vocab_prompt} {prompt}" if prompt else user_vocab_prompt
 
@@ -3537,9 +3548,16 @@ def transcribe_endpoint():
         # в монолитный transcribe_full как раньше. Фоллбэк на оценку
         # длительности по размеру блоба если фронт не прислал duration_sec.
         est_duration = duration_sec or (len(audio_bytes) * 8 / 32000)
+        use_soniox = STT_PROVIDER == "soniox" and not privacy_mode and est_duration <= SONIOX_MAX_S
         use_long = est_duration > LONG_AUDIO_THRESHOLD_S
+        if use_soniox:
+            quality = "soniox"  # в архиве видно, каким движком распознано
         try:
-            if use_long:
+            if use_soniox:
+                call = _modal.Function.from_name("transcriptor-v2", "transcribe_soniox").spawn(
+                    audio_bytes, language, num_speakers, user_context, progress_key, correction_hints, vocab_terms,
+                )
+            elif use_long:
                 long_fn = _modal.Function.from_name("transcriptor-v2", "transcribe_long")
                 call = long_fn.spawn(
                     audio_bytes, language, num_speakers, prompt, progress_key, quality, privacy_mode, correction_hints,

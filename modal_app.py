@@ -135,6 +135,8 @@ notion_secret = modal.Secret.from_name("notion-secrets", required_keys=[
 admin_secret = modal.Secret.from_name("admin-secrets", required_keys=[
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_CHAT_ID",
 ])
+# Soniox — основной STT (batch), см. transcribe_soniox.
+soniox_secret = modal.Secret.from_name("soniox-secrets", required_keys=["SONIOX_API_KEY"])
 # OpenAI — саммари/action items (GPT-6 Luna, fallback на Gemini).
 openai_secret = modal.Secret.from_name("openai-secrets", required_keys=["OPENAI_API_KEY"])
 # Cloudflare R2 (S3 API) — архив аудио всех записей для работы над ошибками.
@@ -219,6 +221,15 @@ orchestrator_image = (
     .add_local_python_source("merger", "channels")
 )
 
+# CPU-образ основного STT-пути через Soniox: ffmpeg (каналы/кодирование),
+# numpy/soundfile (детектор каналов), requests (Soniox + Gemini-коррекция).
+soniox_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg")
+    .pip_install("soundfile", "numpy", "requests")
+    .add_local_python_source("merger", "channels", "soniox")
+)
+
 # Длина чанка для длинных записей (сек). 1200 = 20 мин — базовая цель;
 # реальная длина растягивается _plan_chunk_boundaries так, чтобы все чанки
 # влезли в одну параллельную волну (см. MAX_PARALLEL_CHUNKS).
@@ -294,15 +305,30 @@ def _prepare_audio(src_path: str) -> tuple[str, list[str]]:
       'mono'                    → [wav] — даунмикс как раньше (моно-файл или dual-mono)
     Удалять файлы — забота вызывающего.
     """
-    import soundfile as sf
-    from channels import ChannelStats
-
     def extract(pan: str | None) -> str:
         out = _tmp_path(".wav")
         af = f"{pan},{_PREPROC_AF}" if pan else _PREPROC_AF
         subprocess.run(["ffmpeg", "-y", "-i", src_path, "-af", af, "-ar", "16000", "-ac", "1", out],
                        check=True, capture_output=True)
         return out
+
+    mode = _classify_channels(src_path)
+    return mode, [extract(pan) for pan in _CHANNEL_PANS[mode]]
+
+
+# ffmpeg pan-фильтр под каждый режим каналов (None = даунмикс в моно)
+_CHANNEL_PANS = {
+    "dual": ["pan=mono|c0=c0", "pan=mono|c0=c1"],
+    "left_only": ["pan=mono|c0=c0"],
+    "right_only": ["pan=mono|c0=c1"],
+    "mono": [None],
+}
+
+
+def _classify_channels(src_path: str) -> str:
+    """dual | left_only | right_only | mono — см. channels.ChannelStats."""
+    import soundfile as sf
+    from channels import ChannelStats
 
     stereo = _tmp_path(".wav")
     try:
@@ -319,14 +345,39 @@ def _prepare_audio(src_path: str) -> tuple[str, list[str]]:
             os.remove(stereo)
         except OSError:
             pass
+    return mode
 
-    if mode == "dual":
-        return mode, [extract("pan=mono|c0=c0"), extract("pan=mono|c0=c1")]
-    if mode == "left_only":
-        return mode, [extract("pan=mono|c0=c0")]
-    if mode == "right_only":
-        return mode, [extract("pan=mono|c0=c1")]
-    return mode, [extract(None)]
+
+def _encode_for_stt(src_path: str, pan: str | None) -> str:
+    """Канал (или даунмикс) → mono opus 64 kbps с исходной частотой, без нашей
+    шумоочистки (вендор делает своё). Не 16k/32kbps: на реальном 4-человечном
+    звонке такое сжатие стоило Soniox одного найденного спикера и ~4% слов."""
+    out = _tmp_path(".ogg")
+    cmd = ["ffmpeg", "-y", "-i", src_path] + (["-af", pan] if pan else []) + \
+          ["-ac", "1", "-c:a", "libopus", "-b:a", "64k", out]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out
+
+
+# Контейнеры, которые Soniox распознаёт сам — моно-файл в них шлём без перекодирования
+_SONIOX_NATIVE_FORMATS = {"ogg", "matroska,webm", "mp3", "wav", "flac"}
+
+
+def _container_format(path: str) -> str:
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=format_name", "-of", "csv=p=0", path],
+                       capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def _diff_corrections(before: list[dict], after: list[dict]) -> list[dict]:
+    """Строки, которые изменила LLM-коррекция (было → стало) — для архива/разбора.
+    Коррекция не меняет число и порядок сегментов, поэтому сравнение попарное."""
+    return [
+        {"start": float(b["start"]), "speaker_before": a["speaker"], "speaker_after": b["speaker"],
+         "before": a["text"], "after": b["text"]}
+        for a, b in zip(before, after)
+        if a["text"] != b["text"] or a["speaker"] != b["speaker"]
+    ]
 
 
 # Порог cosine-расстояния для глобальной кластеризации спикеров между чанками.
@@ -429,6 +480,249 @@ HALLUCINATION_SILENCE_S = float(os.environ.get("HALLUCINATION_SILENCE_S", "2.0")
 # Pro даёт лучшее качество на длинных контекстах — можно включать для Max
 # юзеров (override через env CORRECTION_MODEL=gemini-2.5-pro).
 GEMINI_CORRECTION_MODEL = os.environ.get("CORRECTION_MODEL", "gemini-2.5-flash")
+
+
+# ── STT-коррекция через Gemini (без GPU) ─────────────────────────
+# Модульные функции: их зовут и GPU-пайплайн (Transcriptor), и CPU-путь
+# Soniox (transcribe_soniox). Qwen-фоллбэк остаётся методом Transcriptor.
+
+def _vocab_is_interesting(w: str) -> bool:
+    """Слово достойно словаря: аббревиатура (2+ CAPS, в т.ч. 2-буквенная
+    как ЖК/AI/HR) или имя собственное (Capitalized, 4+)."""
+    if len(w) < 2:
+        return False
+    if sum(1 for c in w if c.isupper()) >= 2 and any(c.isalpha() for c in w):
+        return True
+    if len(w) >= 4 and w[0].isupper() and w[1:].islower():
+        return True
+    return False
+
+def _extract_vocab_pairs(orig_text: str, corrected_text: str) -> list[dict]:
+    """Извлекаем пары (wrong → right) из разницы оригинал/коррекция.
+
+    В отличие от _extract_vocab_terms (только правая форма), сохраняем ЧТО
+    именно было заменено: "пожика" → "по ЖК". Пары идут в персональный
+    словарь и потом подаются Gemini как "known corrections" при будущей
+    коррекции. Выравнивание — difflib по словам; берём replace-блоки, где в
+    правой части есть "интересный" термин.
+    """
+    if orig_text == corrected_text:
+        return []
+    import difflib
+
+    def tokenize(t: str) -> list[str]:
+        cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in t)
+        return cleaned.split()
+
+    def worthy(w: str) -> bool:
+        # Достойно пары: аббревиатура / имя собственное (как в Whisper-словаре)
+        # ИЛИ содержательное слово 5+ букв — чтобы ловить строчные доменные
+        # термины (дебіторська, алерти, формули), но не короткие
+        # грамматические фиксы (він→вона).
+        if _vocab_is_interesting(w):
+            return True
+        return len(w) >= 5 and any(c.isalpha() for c in w)
+
+    a = tokenize(orig_text)
+    b = tokenize(corrected_text)
+    sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+    pairs: list[dict] = []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op != "replace":
+            continue
+        right_words = b[j1:j2]
+        wrong_words = a[i1:i2]
+        # Только короткие term-уровневые замены (не перефразирование/boundary fix)
+        if not right_words or not wrong_words:
+            continue
+        if len(right_words) > 3 or len(wrong_words) > 3:
+            continue
+        if not any(worthy(w) for w in right_words):
+            continue
+        right = " ".join(right_words).strip()
+        wrong = " ".join(wrong_words).strip()
+        if right and wrong and right.lower() != wrong.lower():
+            pairs.append({"wrong": wrong, "right": right})
+    return pairs
+
+def _gemini_correct_segments(segments: list[dict], language: str | None,
+                             correction_hints: str = "",
+                             speakers_fixed: bool = False) -> tuple[list[dict], list[dict]] | None:
+    """Gemini-based correction с boundary-fix capability.
+
+    Передаём весь транскрипт с метками спикеров. Gemini может:
+    - исправить STT-ошибки используя знание мира (рдух → ADHD)
+    - переместить 1-3 слова в начале/конце реплики на соседнего
+      спикера если грамматика явно указывает на pyannote-ошибку
+    Возвращает обновлённые segments или None если ничего не вышло.
+    """
+    import requests
+
+    api_key = os.environ["GEMINI_API_KEY"].strip()
+    instruction = _CORRECTION_INSTRUCTIONS.get(language or "", _CORRECTION_INSTRUCTIONS["en"])
+
+    # Персональные known corrections юзера (wrong → right из его прошлых
+    # правок). Gemini применяет их контекстно, не слепой заменой.
+    hints_block = ""
+    if correction_hints:
+        hints_block = (
+            "\n\nKnown corrections for THIS specific user (their recurring "
+            "domain terms, learned from past edits). When you see the LEFT form "
+            "misrecognized, prefer the RIGHT form — but only when context fits:\n"
+            f"{correction_hints}\n"
+        )
+
+    # Format: "N. [SPEAKER_XX] text"
+    lines = [
+        f"{i + 1}. [{seg['speaker']}] {seg['text']}"
+        for i, seg in enumerate(segments)
+    ]
+    lines_in = "\n".join(lines)
+
+    # Двухканальная запись: спикер известен по микрофону — переносить слова
+    # между репликами/спикерами нельзя, это только испортит атрибуцию.
+    boundary_task = (
+        "2. Speaker labels come from separate microphones and are ALWAYS correct:\n"
+        "   never move words between lines and never change a label.\n\n"
+        if speakers_fixed else
+        "2. Boundary fix: if you see a phrase clearly belonging to the NEXT or PREVIOUS speaker\n"
+        "   (e.g. an answer's first words attached to the question), move those 1-5 words\n"
+        "   across the speaker boundary. ONLY when grammar and semantics give clear evidence.\n\n"
+    )
+    prompt = (
+        f"{instruction}{hints_block}\n\n"
+        "Below is a numbered, speaker-diarized transcript. Each line is:\n"
+        "  N. [SPEAKER_XX] text\n\n"
+        "Your tasks (in this order of importance):\n"
+        "1. Fix obvious phonetic STT errors using world knowledge:\n"
+        "   - Acronyms transliterated wrong (e.g. рдух → ADHD, СДВГ; стіарар → CTR)\n"
+        "   - Misrecognized names of people, brands, products\n"
+        "   - Technical terms broken by phonetic recognition\n"
+        f"{boundary_task}"
+        "STRICT RULES:\n"
+        "- Output ONLY the same numbered lines, same format: 'N. [SPEAKER_XX] text'\n"
+        "- Keep numbering 1..N identical, no gaps\n"
+        "- Keep speaker labels [SPEAKER_XX] unchanged\n"
+        "- Do NOT add commentary, headers, explanations\n"
+        "- Do NOT change meaning, style, punctuation, case\n"
+        "- Word count per line: within ±20% of original (boundary moves can shift it more)\n"
+        "- If unsure about a line — output it verbatim\n"
+        "- Same language as input\n\n"
+        "INPUT:\n"
+        f"{lines_in}\n\n"
+        "OUTPUT (numbered lines only, no preamble):"
+    )
+
+    endpoint = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_CORRECTION_MODEL}:generateContent"
+    )
+    # Cyrillic ≈ 1.5 chars/token → output ≈ len(lines_in)/1.5 tokens.
+    # Old formula (× 2) assumed ASCII (4 chars/token) and overshot 3×, causing
+    # 30k-token requests on medium transcripts → Gemini at ~100 tok/s →
+    # exceeded the 180s timeout → silent fallback to Qwen (3.5min total).
+    # thinkingBudget=0: correction is a character-substitution task, not
+    # reasoning — adaptive thinking only adds latency, no quality benefit.
+    max_out = min(16000, max(2000, len(lines_in)))
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": max_out,
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }
+
+    try:
+        resp = requests.post(endpoint, params={"key": api_key}, json=body, timeout=240)
+    except requests.RequestException as e:
+        print(f"[modal] gemini request error: {e}", flush=True)
+        return None
+
+    if resp.status_code != 200:
+        print(f"[modal] gemini {resp.status_code}: {resp.text[:200]}", flush=True)
+        return None
+
+    data = resp.json()
+    candidates = data.get("candidates") or []
+    if not candidates:
+        print(f"[modal] gemini: no candidates ({data.get('promptFeedback')})", flush=True)
+        return None
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    raw = "".join(p.get("text", "") for p in parts).strip()
+    if not raw:
+        return None
+
+    # Parse: same format "N. [SPEAKER_XX] text"
+    parsed: dict[int, tuple[str, str]] = {}
+    line_re = re.compile(r'^\s*(\d+)\.\s*\[([A-Z_0-9]+)\]\s*(.+)$')
+    for line in raw.splitlines():
+        m = line_re.match(line)
+        if not m:
+            continue
+        idx     = int(m.group(1)) - 1
+        speaker = m.group(2)
+        text    = m.group(3).strip()
+        if 0 <= idx < len(segments):
+            parsed[idx] = (speaker, text)
+
+    # Coverage check — если Gemini вернул меньше 70% строк, что-то пошло
+    # не так, лучше вообще не применять (избегаем частичной коррекции).
+    coverage = len(parsed) / max(len(segments), 1)
+    if coverage < 0.7:
+        print(f"[modal] gemini parse coverage too low: {coverage:.0%}", flush=True)
+        return None
+
+    # Apply corrections with safety checks
+    corrected = [dict(s) for s in segments]
+    changes_count = 0
+    speaker_changes = 0
+    vocab_additions: list[dict] = []
+    original_speakers = {s["speaker"] for s in segments}
+    for idx, (new_speaker, new_text) in parsed.items():
+        orig = corrected[idx]
+        orig_text = orig["text"]
+
+        # Length sanity: 50% (boundary moves can shift things)
+        length_ratio = abs(len(new_text) - len(orig_text)) / max(len(orig_text), 1)
+        if length_ratio > 0.5:
+            continue
+
+        # Latin/Cyrillic safety — не пускаем массовый переход в латиницу
+        orig_latin = sum(1 for c in orig_text if c.isascii() and c.isalpha())
+        new_latin  = sum(1 for c in new_text  if c.isascii() and c.isalpha())
+        orig_cyr   = sum(1 for c in orig_text if 'Ѐ' <= c <= 'ӿ')
+        # Allow some Latin (acronyms like ADHD, CTR), but not wholesale
+        if orig_cyr > len(orig_text) * 0.5 and new_latin > orig_latin + 8:
+            continue
+
+        if new_text != orig_text:
+            # Извлекаем пары (wrong → right) для персонального словаря
+            vocab_additions.extend(_extract_vocab_pairs(orig_text, new_text))
+            corrected[idx]["text"] = new_text
+            changes_count += 1
+        # Speaker reassignment (boundary fix)
+        if not speakers_fixed and new_speaker in original_speakers and new_speaker != orig["speaker"]:
+            corrected[idx]["speaker"] = new_speaker
+            speaker_changes += 1
+
+    # Дедуплицируем по правой форме (сохраняем порядок появления)
+    seen: set[str] = set()
+    unique_vocab: list[dict] = []
+    for p in vocab_additions:
+        key = p["right"].lower()
+        if key not in seen:
+            seen.add(key)
+            unique_vocab.append(p)
+
+    print(
+        f"[modal] gemini corrected {changes_count} texts, "
+        f"reassigned {speaker_changes} segments, "
+        f"vocab+{len(unique_vocab)} ({', '.join(p['right'] for p in unique_vocab[:8])}) "
+        f"(coverage {coverage:.0%})",
+        flush=True,
+    )
+    return corrected, unique_vocab
 
 
 # ── Main class ───────────────────────────────────────────────────
@@ -913,13 +1207,7 @@ class Transcriptor:
         corrected, vocab = self._correct_segments_impl(
             segments, language, privacy_mode=privacy_mode,
             correction_hints=correction_hints, speakers_fixed=speakers_fixed)
-        changes = [
-            {"start": float(b["start"]), "speaker_before": a["speaker"], "speaker_after": b["speaker"],
-             "before": a["text"], "after": b["text"]}
-            for a, b in zip(segments, corrected)
-            if a["text"] != b["text"] or a["speaker"] != b["speaker"]
-        ]
-        return corrected, vocab, changes
+        return corrected, vocab, _diff_corrections(segments, corrected)
 
     def _correct_segments_impl(self, segments: list[dict], language: str | None,
                                privacy_mode: bool = False,
@@ -951,7 +1239,7 @@ class Transcriptor:
         # Try Gemini first if API key available
         if os.environ.get("GEMINI_API_KEY", "").strip():
             try:
-                result = self._correct_segments_gemini(segments, language, correction_hints,
+                result = _gemini_correct_segments(segments, language, correction_hints,
                                                        speakers_fixed=speakers_fixed)
                 if result:
                     return result  # (segments, vocab_additions)
@@ -959,279 +1247,6 @@ class Transcriptor:
                 print(f"[modal] gemini correction failed, falling back to qwen: {e}", flush=True)
 
         return self._correct_segments_qwen(segments, language), []
-
-    def _extract_vocab_terms(self, orig_text: str, corrected_text: str) -> list[str]:
-        """Извлекаем "интересные" термины из разницы оригинал/коррекция.
-
-        Идея: если Gemini заменил "рдух" на "ADHD" — это терминология
-        пользователя, она должна попасть в его персональный словарь.
-        Берём только: аббревиатуры (CAPS), имена собственные (Capitalized),
-        длиннее 2 символов. Игнорируем мелкие правки регистра/пунктуации.
-        """
-        if orig_text == corrected_text:
-            return []
-
-        import string
-        # Извлекаем слова из обоих текстов (без пунктуации)
-        def words(t: str) -> set[str]:
-            cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in t)
-            return {w for w in cleaned.split() if len(w) > 2}
-
-        orig_words = words(orig_text)
-        new_words  = words(corrected_text)
-        # Новые токены, которых не было в оригинале
-        added = new_words - orig_words
-
-        interesting: list[str] = []
-        for w in added:
-            # Аббревиатура: 2+ заглавных подряд (ADHD, CTR, FPV, ПТСР)
-            if sum(1 for c in w if c.isupper()) >= 2 and any(c.isalpha() for c in w):
-                interesting.append(w)
-                continue
-            # Имя собственное: первая заглавная + хотя бы 4 символа всего
-            # (отфильтровывает обычные слова в начале предложения)
-            if len(w) >= 4 and w[0].isupper() and w[1:].islower():
-                interesting.append(w)
-        return interesting
-
-    @staticmethod
-    def _vocab_is_interesting(w: str) -> bool:
-        """Слово достойно словаря: аббревиатура (2+ CAPS, в т.ч. 2-буквенная
-        как ЖК/AI/HR) или имя собственное (Capitalized, 4+)."""
-        if len(w) < 2:
-            return False
-        if sum(1 for c in w if c.isupper()) >= 2 and any(c.isalpha() for c in w):
-            return True
-        if len(w) >= 4 and w[0].isupper() and w[1:].islower():
-            return True
-        return False
-
-    def _extract_vocab_pairs(self, orig_text: str, corrected_text: str) -> list[dict]:
-        """Извлекаем пары (wrong → right) из разницы оригинал/коррекция.
-
-        В отличие от _extract_vocab_terms (только правая форма), сохраняем ЧТО
-        именно было заменено: "пожика" → "по ЖК". Пары идут в персональный
-        словарь и потом подаются Gemini как "known corrections" при будущей
-        коррекции. Выравнивание — difflib по словам; берём replace-блоки, где в
-        правой части есть "интересный" термин.
-        """
-        if orig_text == corrected_text:
-            return []
-        import difflib
-
-        def tokenize(t: str) -> list[str]:
-            cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in t)
-            return cleaned.split()
-
-        def worthy(w: str) -> bool:
-            # Достойно пары: аббревиатура / имя собственное (как в Whisper-словаре)
-            # ИЛИ содержательное слово 5+ букв — чтобы ловить строчные доменные
-            # термины (дебіторська, алерти, формули), но не короткие
-            # грамматические фиксы (він→вона).
-            if self._vocab_is_interesting(w):
-                return True
-            return len(w) >= 5 and any(c.isalpha() for c in w)
-
-        a = tokenize(orig_text)
-        b = tokenize(corrected_text)
-        sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
-        pairs: list[dict] = []
-        for op, i1, i2, j1, j2 in sm.get_opcodes():
-            if op != "replace":
-                continue
-            right_words = b[j1:j2]
-            wrong_words = a[i1:i2]
-            # Только короткие term-уровневые замены (не перефразирование/boundary fix)
-            if not right_words or not wrong_words:
-                continue
-            if len(right_words) > 3 or len(wrong_words) > 3:
-                continue
-            if not any(worthy(w) for w in right_words):
-                continue
-            right = " ".join(right_words).strip()
-            wrong = " ".join(wrong_words).strip()
-            if right and wrong and right.lower() != wrong.lower():
-                pairs.append({"wrong": wrong, "right": right})
-        return pairs
-
-    def _correct_segments_gemini(self, segments: list[dict], language: str | None,
-                                 correction_hints: str = "",
-                                 speakers_fixed: bool = False) -> tuple[list[dict], list[dict]] | None:
-        """Gemini-based correction с boundary-fix capability.
-
-        Передаём весь транскрипт с метками спикеров. Gemini может:
-        - исправить STT-ошибки используя знание мира (рдух → ADHD)
-        - переместить 1-3 слова в начале/конце реплики на соседнего
-          спикера если грамматика явно указывает на pyannote-ошибку
-        Возвращает обновлённые segments или None если ничего не вышло.
-        """
-        import requests
-
-        api_key = os.environ["GEMINI_API_KEY"].strip()
-        instruction = _CORRECTION_INSTRUCTIONS.get(language or "", _CORRECTION_INSTRUCTIONS["en"])
-
-        # Персональные known corrections юзера (wrong → right из его прошлых
-        # правок). Gemini применяет их контекстно, не слепой заменой.
-        hints_block = ""
-        if correction_hints:
-            hints_block = (
-                "\n\nKnown corrections for THIS specific user (their recurring "
-                "domain terms, learned from past edits). When you see the LEFT form "
-                "misrecognized, prefer the RIGHT form — but only when context fits:\n"
-                f"{correction_hints}\n"
-            )
-
-        # Format: "N. [SPEAKER_XX] text"
-        lines = [
-            f"{i + 1}. [{seg['speaker']}] {seg['text']}"
-            for i, seg in enumerate(segments)
-        ]
-        lines_in = "\n".join(lines)
-
-        # Двухканальная запись: спикер известен по микрофону — переносить слова
-        # между репликами/спикерами нельзя, это только испортит атрибуцию.
-        boundary_task = (
-            "2. Speaker labels come from separate microphones and are ALWAYS correct:\n"
-            "   never move words between lines and never change a label.\n\n"
-            if speakers_fixed else
-            "2. Boundary fix: if you see a phrase clearly belonging to the NEXT or PREVIOUS speaker\n"
-            "   (e.g. an answer's first words attached to the question), move those 1-5 words\n"
-            "   across the speaker boundary. ONLY when grammar and semantics give clear evidence.\n\n"
-        )
-        prompt = (
-            f"{instruction}{hints_block}\n\n"
-            "Below is a numbered, speaker-diarized transcript. Each line is:\n"
-            "  N. [SPEAKER_XX] text\n\n"
-            "Your tasks (in this order of importance):\n"
-            "1. Fix obvious phonetic STT errors using world knowledge:\n"
-            "   - Acronyms transliterated wrong (e.g. рдух → ADHD, СДВГ; стіарар → CTR)\n"
-            "   - Misrecognized names of people, brands, products\n"
-            "   - Technical terms broken by phonetic recognition\n"
-            f"{boundary_task}"
-            "STRICT RULES:\n"
-            "- Output ONLY the same numbered lines, same format: 'N. [SPEAKER_XX] text'\n"
-            "- Keep numbering 1..N identical, no gaps\n"
-            "- Keep speaker labels [SPEAKER_XX] unchanged\n"
-            "- Do NOT add commentary, headers, explanations\n"
-            "- Do NOT change meaning, style, punctuation, case\n"
-            "- Word count per line: within ±20% of original (boundary moves can shift it more)\n"
-            "- If unsure about a line — output it verbatim\n"
-            "- Same language as input\n\n"
-            "INPUT:\n"
-            f"{lines_in}\n\n"
-            "OUTPUT (numbered lines only, no preamble):"
-        )
-
-        endpoint = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{GEMINI_CORRECTION_MODEL}:generateContent"
-        )
-        # Cyrillic ≈ 1.5 chars/token → output ≈ len(lines_in)/1.5 tokens.
-        # Old formula (× 2) assumed ASCII (4 chars/token) and overshot 3×, causing
-        # 30k-token requests on medium transcripts → Gemini at ~100 tok/s →
-        # exceeded the 180s timeout → silent fallback to Qwen (3.5min total).
-        # thinkingBudget=0: correction is a character-substitution task, not
-        # reasoning — adaptive thinking only adds latency, no quality benefit.
-        max_out = min(16000, max(2000, len(lines_in)))
-        body = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": max_out,
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
-        }
-
-        try:
-            resp = requests.post(endpoint, params={"key": api_key}, json=body, timeout=240)
-        except requests.RequestException as e:
-            print(f"[modal] gemini request error: {e}", flush=True)
-            return None
-
-        if resp.status_code != 200:
-            print(f"[modal] gemini {resp.status_code}: {resp.text[:200]}", flush=True)
-            return None
-
-        data = resp.json()
-        candidates = data.get("candidates") or []
-        if not candidates:
-            print(f"[modal] gemini: no candidates ({data.get('promptFeedback')})", flush=True)
-            return None
-        parts = (candidates[0].get("content") or {}).get("parts") or []
-        raw = "".join(p.get("text", "") for p in parts).strip()
-        if not raw:
-            return None
-
-        # Parse: same format "N. [SPEAKER_XX] text"
-        parsed: dict[int, tuple[str, str]] = {}
-        line_re = re.compile(r'^\s*(\d+)\.\s*\[([A-Z_0-9]+)\]\s*(.+)$')
-        for line in raw.splitlines():
-            m = line_re.match(line)
-            if not m:
-                continue
-            idx     = int(m.group(1)) - 1
-            speaker = m.group(2)
-            text    = m.group(3).strip()
-            if 0 <= idx < len(segments):
-                parsed[idx] = (speaker, text)
-
-        # Coverage check — если Gemini вернул меньше 70% строк, что-то пошло
-        # не так, лучше вообще не применять (избегаем частичной коррекции).
-        coverage = len(parsed) / max(len(segments), 1)
-        if coverage < 0.7:
-            print(f"[modal] gemini parse coverage too low: {coverage:.0%}", flush=True)
-            return None
-
-        # Apply corrections with safety checks
-        corrected = [dict(s) for s in segments]
-        changes_count = 0
-        speaker_changes = 0
-        vocab_additions: list[dict] = []
-        original_speakers = {s["speaker"] for s in segments}
-        for idx, (new_speaker, new_text) in parsed.items():
-            orig = corrected[idx]
-            orig_text = orig["text"]
-
-            # Length sanity: 50% (boundary moves can shift things)
-            length_ratio = abs(len(new_text) - len(orig_text)) / max(len(orig_text), 1)
-            if length_ratio > 0.5:
-                continue
-
-            # Latin/Cyrillic safety — не пускаем массовый переход в латиницу
-            orig_latin = sum(1 for c in orig_text if c.isascii() and c.isalpha())
-            new_latin  = sum(1 for c in new_text  if c.isascii() and c.isalpha())
-            orig_cyr   = sum(1 for c in orig_text if 'Ѐ' <= c <= 'ӿ')
-            # Allow some Latin (acronyms like ADHD, CTR), but not wholesale
-            if orig_cyr > len(orig_text) * 0.5 and new_latin > orig_latin + 8:
-                continue
-
-            if new_text != orig_text:
-                # Извлекаем пары (wrong → right) для персонального словаря
-                vocab_additions.extend(self._extract_vocab_pairs(orig_text, new_text))
-                corrected[idx]["text"] = new_text
-                changes_count += 1
-            # Speaker reassignment (boundary fix)
-            if not speakers_fixed and new_speaker in original_speakers and new_speaker != orig["speaker"]:
-                corrected[idx]["speaker"] = new_speaker
-                speaker_changes += 1
-
-        # Дедуплицируем по правой форме (сохраняем порядок появления)
-        seen: set[str] = set()
-        unique_vocab: list[dict] = []
-        for p in vocab_additions:
-            key = p["right"].lower()
-            if key not in seen:
-                seen.add(key)
-                unique_vocab.append(p)
-
-        print(
-            f"[modal] gemini corrected {changes_count} texts, "
-            f"reassigned {speaker_changes} segments, "
-            f"vocab+{len(unique_vocab)} ({', '.join(p['right'] for p in unique_vocab[:8])}) "
-            f"(coverage {coverage:.0%})",
-            flush=True,
-        )
-        return corrected, unique_vocab
 
     def _correct_segments_qwen(self, segments: list[dict], language: str | None) -> list[dict]:
         """Фоллбэк: локальный Qwen 7B (4-bit) на GPU. Используется когда
@@ -2124,6 +2139,119 @@ def gemini_generate(prompt: str, max_output_tokens: int = 32768, temperature: fl
         print(f"[gemini_generate] still truncated at 65536 tokens ({len(text)} chars)", flush=True)
 
     return text
+
+
+@app.function(
+    image=soniox_image,
+    secrets=[hf_secret, soniox_secret],   # hf_secret несёт GEMINI_API_KEY для коррекции
+    timeout=3600,                          # 4ч запись: загрузка + ~5 мин у Soniox + коррекция
+    scaledown_window=60,
+    min_containers=0,
+)
+def transcribe_soniox(
+    audio_bytes: bytes,
+    language: str | None,
+    num_speakers: int | None,
+    prompt: str | None = None,
+    progress_key: str | None = None,
+    correction_hints: str = "",
+    vocab_terms: list[str] | None = None,
+) -> dict:
+    """Основной STT-путь (не Privacy Mode, до 300 мин): Soniox batch вместо
+    Whisper+pyannote. Контракт ответа = transcribe_full.
+
+    Стерео веб-рекордера (dual): две сессии Soniox параллельно — микрофон без
+    диаризации (владелец = SPEAKER_00), звонок с диаризацией, если собеседников
+    может быть больше одного; дальше тот же фильтр эха и склейка, что в
+    GPU-пайплайне (channels.py). Моно: одна сессия с диаризацией.
+    Потом Gemini-коррекция со словарём юзера (без Qwen-фоллбэка — нет GPU).
+    """
+    from collections import Counter
+    from concurrent.futures import ThreadPoolExecutor
+
+    import soniox
+    from channels import drop_echo, interleave, label, relabel
+
+    pp = _PipelineProgress(progress_key, container_sec=0.0)
+    api_key = os.environ["SONIOX_API_KEY"].strip()
+    context = soniox.build_context(vocab_terms, prompt)
+    src = _tmp_path(".bin")
+    paths = [src]
+    try:
+        with open(src, "wb") as f:
+            f.write(audio_bytes)
+
+        pp.start("audio_split")
+        mode = _classify_channels(src)
+        if mode == "mono" and _container_format(src) in _SONIOX_NATIVE_FORMATS:
+            tracks = [src]  # как есть: без второго сжатия
+        else:
+            tracks = [_encode_for_stt(src, pan) for pan in _CHANNEL_PANS[mode]]
+            paths += tracks
+        pp.done("audio_split")
+
+        pp.start("transcription")
+        if mode == "dual":
+            diarize = [False, num_speakers not in (1, 2)]
+        else:
+            diarize = [num_speakers != 1]
+        with ThreadPoolExecutor(len(tracks)) as pool:
+            tokens = list(pool.map(
+                lambda td: soniox.transcribe(api_key, td[0], language, td[1], context), zip(tracks, diarize)))
+        words = [soniox.tokens_to_words(t) for t in tokens]
+        pp.done("transcription")
+        if not any(words):
+            return {"segments": [], "vocab_additions": [], "channel_mode": mode, "stt": "soniox"}
+
+        # Язык для коррекции: выбранный юзером, иначе преобладающий по токенам Soniox
+        lang = language or (Counter(t.get("language") for tt in tokens for t in tt if t.get("language"))
+                            .most_common(1) or [(None, 0)])[0][0]
+
+        def strip_words(segs: list[dict]) -> list[dict]:
+            return [{k: v for k, v in s.items() if k != "words"} for s in segs]
+
+        pp.start("diarization")
+        if mode == "dual":
+            mic = soniox.words_to_segments(words[0])
+            call = soniox.words_to_segments(words[1])
+            mic = drop_echo(mic, call)
+            if num_speakers == 1:
+                merged = interleave(label(mic, "SPEAKER_00"), label(call, "SPEAKER_00"))
+            else:
+                merged = interleave(label(mic, "SPEAKER_00"), strip_words(relabel(call, mapping_start=1)))
+        else:
+            segs = soniox.words_to_segments(words[0])
+            if num_speakers == 1:
+                segs = [{**s, "speaker": "SPEAKER_00"} for s in segs]
+            merged = interleave(strip_words(relabel(segs)))
+        pp.done("diarization")
+
+        pp.start("ai_formatting")
+        vocab_additions: list[dict] = []
+        corrections: list[dict] = []
+        if os.environ.get("GEMINI_API_KEY", "").strip():
+            try:
+                res = _gemini_correct_segments(merged, lang, correction_hints, speakers_fixed=(mode == "dual"))
+                if res:
+                    corrected, vocab_additions = res
+                    corrections = _diff_corrections(merged, corrected)
+                    merged = corrected
+            except Exception as e:
+                print(f"[soniox] gemini correction failed, keeping raw: {e}", flush=True)
+        merged = _merge_same_speaker(merged)
+        pp.done("ai_formatting")
+
+        n_min = (max((s["end"] for s in merged), default=0)) / 60
+        print(f"[soniox] mode={mode} lang={lang} segments={len(merged)} "
+              f"speakers={len({s['speaker'] for s in merged})} audio={n_min:.1f}min", flush=True)
+        return {"segments": merged, "vocab_additions": vocab_additions, "channel_mode": mode,
+                "corrections": corrections, "stt": "soniox"}
+    finally:
+        for p in paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 @app.function(
