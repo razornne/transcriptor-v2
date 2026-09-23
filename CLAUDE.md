@@ -141,6 +141,7 @@ Supabase Postgres
 - **`008_vocabulary_pairs.sql`** — расширяет формат элемента `user_profiles.vocabulary` опциональным полем `wrong` (исходная ошибочная форма). Хранит пару `wrong→right` из Gemini-правок → подаётся Gemini correction как "known corrections" на будущих транскрипциях. DDL не нужен (JSONB), только обновление COMMENT.
 - **`009_custom_presets.sql`** — `user_profiles.presets JSONB` + `workspaces.presets JSONB` — кастомные пресеты генерации (личные + командные). Структура: `{id, name, prompt, scope, created_by, updated_at}`. Лимит 20, prompt ≤2000 символов.
 - **`010_speaker_names.sql`** — `transcripts.speaker_names JSONB DEFAULT '{}'` — карта `raw-лейбл → отображаемое имя` (например `{"SPEAKER_00": "Alice"}`). Используется endpoint `/api/entries/<id>/rename-speaker`. Пустая карта = дефолтные "Speaker N" лейблы.
+- **`011_capture_stats.sql`** — `public.capture_stats`: телеметрия захвата на каждую запись (есть ли звук вкладки, уровни, секунды тишины по каналам, отвалы/переключения микрофона в `events` JSONB, браузер/ОС). `recording_id` — связь с сохранённым аудио того же звонка. Пишется с клиента после Stop.
 - Миграции выполняются **вручную через Supabase SQL Editor** — нет миграционного фреймворка. После добавления новой — обновить эту секцию + сам файл должен начинаться с комментария "Run in Supabase SQL Editor".
 
 ### Frontend — приложение
@@ -642,12 +643,10 @@ posthog.setPersonProperties(props);
 - `autocapture: true` — pageviews + все клики/inputs автоматом. Дополняет наши named events базовой engagement-картой без instrumentation каждой кнопки.
 - `capture_exceptions: true` — uncaught JS errors + unhandled promise rejections автоматом в PostHog → Error tracking. Заменяет нужду в Sentry для нашего объёма.
 
-### Session Replay (включён)
-Privacy masking настроен в `posthog.init` в `templates/index.html`:
-- `session_recording: { maskAllInputs: true }` — все input/textarea замаскированы
-- `blockSelector: '#transcript, .ai-result-content'` — блоки с текстом транскрипта и AI-результатов не пишутся в replay
+### Session Replay (включён, БЕЗ маскировки)
+`posthog.init` в `landing/app/app/page.tsx`: `session_recording: { maskAllInputs: false, maskTextSelector: null }` — в replay виден весь текст, включая транскрипты. **Решение владельца от 2026-09-23** (работа над ошибками; все пользователи — его знакомые, никто не платит). Пароли маскируются дефолтом rrweb. Маскировку всего текста ещё можно включить на уровне проекта в PostHog UI (Settings → Session replay) — там должна быть выключена.
 
-Без этого PostHog записывал бы тексты всех созвонов — privacy disaster. **Не убирать эти настройки.**
+**Перед публичным запуском:** раскрыть в Privacy Policy (replays + хранение аудио-записей) или вернуть маскировку. Не возвращать маскировку молча — сначала спросить владельца.
 
 ### Настроенные dashboards / insights (в PostHog UI)
 - **Activation funnel**: `sign_in → transcription_started → transcription_completed → summary_generated|export_clicked` (24h window)
@@ -695,7 +694,10 @@ landing/
 │   └── UpgradeCard.tsx← апгрейд-промпт при достижении лимита / AI-гейте
 └── lib/ink/
     ├── api.ts         ← клиент к Flask-бэку на Modal (authFetch + все эндпоинты)
-    ├── audio.ts       ← MediaRecorder helpers, AudioContext mix
+    ├── audio.ts       ← запись: СТЕРЕО (L=микрофон, R=звук вкладки) через ChannelMerger,
+    │                    микрофон следует за активным устройством (devicechange/ended),
+    │                    предупреждения о пропаже/тишине звука вкладки, CaptureStats
+    │                    (→ capture_stats). Шумодав/автогромкость — дефолты браузера
     ├── config.ts      ← API_BASE (Modal URL или '' для localhost)
     ├── db.ts          ← Supabase CRUD (raw REST через _sbFetch, не PostgrestClient)
     ├── idb.ts         ← IndexedDB autosave чанков (audio safety net)
@@ -829,6 +831,7 @@ git push origin main  # Vercel сразу собирает и катит на sk
 - `migrations/008_vocabulary_pairs.sql` — vocabulary item format: adds `wrong` field
 - `migrations/009_custom_presets.sql` — user_profiles.presets + workspaces.presets JSONB
 - `migrations/010_speaker_names.sql` — transcripts.speaker_names JSONB
+- `migrations/011_capture_stats.sql` — capture_stats (телеметрия захвата)
 
 Миграции **не идемпотентны через какой-то фреймворк** — каждая написана с `IF NOT EXISTS` чтобы безопасно перезапустить, но фиксить руками тоже окей.
 

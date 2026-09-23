@@ -9,7 +9,7 @@ import { LoginScreen } from "@/components/ink/LoginScreen";
 import { ResultView, transcriptText, type Tab } from "@/components/ink/ResultView";
 import { UpgradeCard } from "@/components/ink/UpgradeCard";
 import { SettingsModal } from "@/components/ink/SettingsModal";
-import { startRecording, probeDuration, type Recorder } from "@/lib/ink/audio";
+import { startRecording, probeDuration, SystemAudioMissingError, type Recorder } from "@/lib/ink/audio";
 import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
@@ -20,7 +20,7 @@ import {
   type Project, loadProjects, saveProjects,
 } from "@/lib/ink/api";
 import {
-  fetchHistory, insertEntry, patchEntry, deleteEntry,
+  fetchHistory, insertEntry, patchEntry, deleteEntry, insertCaptureStats,
   type HistoryEntry, type Segment,
 } from "@/lib/ink/db";
 import { loadSettings, saveSettings, type InkSettings } from "@/lib/ink/settings";
@@ -36,6 +36,32 @@ import { loadSettings, saveSettings, type InkSettings } from "@/lib/ink/settings
 const ph = (): any => (typeof window !== "undefined" ? (window as any).posthog : null);
 function phCapture(event: string, props?: Record<string, unknown>) {
   try { ph()?.capture?.(event, props); } catch {}
+}
+
+// ── Coarse browser/OS sniff for capture_stats — good enough for triage ────
+function detectBrowserOS(): { browser: string; os: string } {
+  if (typeof navigator === "undefined") return { browser: "unknown", os: "unknown" };
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? "edge" : /OPR\//.test(ua) ? "opera"
+    : /Chrome\//.test(ua) ? "chrome" : /Firefox\//.test(ua) ? "firefox"
+    : /Safari\//.test(ua) ? "safari" : "unknown";
+  const os = /Windows/.test(ua) ? "windows" : /Mac OS X/.test(ua) ? "macos"
+    : /Linux/.test(ua) ? "linux" : /Android/.test(ua) ? "android"
+    : /iPhone|iPad/.test(ua) ? "ios" : "unknown";
+  return { browser, os };
+}
+
+// What to tell the user when the shared tab/window came without audio —
+// browsers differ a lot in what they can capture.
+function systemAudioHelp(): string {
+  const { browser, os } = detectBrowserOS();
+  if (browser === "firefox" || browser === "safari") {
+    return "This browser can't capture call audio, so only your microphone will be recorded. To record both sides of the call, use Chrome or Edge.";
+  }
+  if (os === "macos") {
+    return "No call audio was shared. On a Mac only a Chrome tab can share audio: pick the tab with your call (Google Meet, or Zoom/Teams in the browser) and tick “Share tab audio”. Calls in the Zoom or Teams desktop apps can't be captured from the browser.";
+  }
+  return "No call audio was shared. Pick the tab with your call and tick “Share tab audio”, or share your entire screen with “Share system audio” turned on.";
 }
 
 // ── Smooth theme toggle shared by InkThemeToggle and Cmd+D ───────────────
@@ -195,7 +221,7 @@ export default function InkApp() {
     try { localStorage.setItem("ink_uiLang", lang); } catch {}
   };
 
-  // PostHog init — Sprint 6 (privacy-masked)
+  // PostHog init
   useEffect(() => {
     if (typeof window === "undefined") return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -217,10 +243,11 @@ export default function InkApp() {
         person_profiles: "identified_only",
         capture_exceptions: true,
         autocapture: true,
+        // Unmasked on purpose (error analysis). Must be disclosed in the Privacy
+        // Policy before public launch. Password fields stay masked by default.
         session_recording: {
-          maskAllInputs: true,
-          // Transcript text, AI results and notes must NEVER be sent to PostHog
-          blockSelector: ".i-seglist, .i-md, .i-notes-area",
+          maskAllInputs: false,
+          maskTextSelector: null,
         },
       });
     };
@@ -258,6 +285,8 @@ export default function InkApp() {
   const stageRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const recTimerRef = useRef<number>(0);
+  const levelsRef = useRef({ mic: 0, sys: 0 });
+  const captureAlertRef = useRef(false); // a capture warning is on screen — don't overwrite it
   const keepAliveStopRef = useRef<(() => void) | null>(null);
   const cancelRef = useRef<CancelToken | null>(null);
 
@@ -469,8 +498,32 @@ export default function InkApp() {
       recorderRef.current = null;
       window.clearInterval(recTimerRef.current);
       setRecording(false);
+      levelsRef.current = { mic: 0, sys: 0 };
       keepAliveStopRef.current?.(); keepAliveStopRef.current = null;
-      if (rec) { const { blob, durationSec } = await rec.stop(); void cookBlob(blob, durationSec, rec.sessionId); }
+      if (rec) {
+        const { blob, durationSec, stats } = await rec.stop();
+        void cookBlob(blob, durationSec, rec.sessionId);
+        if (session?.user) {
+          const { browser, os } = detectBrowserOS();
+          phCapture("capture_stats", { ...stats, duration_sec: durationSec });
+          void insertCaptureStats({
+            user_id: session.user.id,
+            recording_id: stats.recordingId,
+            session_id: rec.sessionId,
+            has_system_audio: stats.hasSystemAudio,
+            mic_device_label: stats.micDeviceLabel,
+            rms_mic_avg: stats.rmsMicAvg,
+            rms_system_avg: stats.rmsSystemAvg,
+            silent_seconds_mic: stats.silentSecondsMic,
+            silent_seconds_system: stats.silentSecondsSystem,
+            track_ended_events: stats.trackEndedEvents,
+            duration_sec: durationSec,
+            browser, os,
+            display_surface: stats.displaySurface,
+            events: stats.events,
+          }).catch((err) => console.error("[capture_stats] insert failed:", err));
+        }
+      }
       return;
     }
     if (!passLimitGate()) return;
@@ -479,16 +532,43 @@ export default function InkApp() {
       if (warn && !window.confirm(warn)) return;
       ensureNotifyPermission();
       setLimitHit(false); setStatusKind("info"); setStatus("requesting microphone…");
-      recorderRef.current = await startRecording();
+      captureAlertRef.current = false;
+      recorderRef.current = await startRecording({
+        onSystemAudioMissing: () => window.confirm(`${systemAudioHelp()}\n\nContinue with microphone only?`),
+        onSystemAudioLost: () => {
+          captureAlertRef.current = true;
+          setStatusKind("error");
+          setStatus("call audio stopped — the other side is no longer being recorded. Stop and record again, sharing the call tab with “Share tab audio”");
+          notify("Skriptly — call audio lost", "The other side of the call is no longer being recorded.");
+          phCapture("capture_system_audio_lost");
+        },
+        onSystemAudioSilent: () => {
+          captureAlertRef.current = true;
+          setStatusKind("error");
+          setStatus("we can't hear the other side — check that you shared the tab with the call and ticked “Share tab audio”");
+          notify("Skriptly — can't hear the call", "No sound from the shared tab for a minute. Check the tab you shared.");
+          phCapture("capture_system_audio_silent");
+        },
+        onMicSwitched: (label) => {
+          if (captureAlertRef.current) return;
+          setStatusKind("info");
+          setStatus(`recording — microphone switched to ${label || "a new device"}`);
+        },
+        onLevels: (mic, sys) => { levelsRef.current = { mic, sys }; },
+      });
       keepAliveStopRef.current = await startKeepAlive();
       setRecSeconds(0); setRecording(true); setActiveId(null);
       setStatus("recording — share a tab to capture call audio too");
       recTimerRef.current = window.setInterval(() => setRecSeconds((s) => s + 1), 1000);
       phCapture("recording_started");
     } catch (e) {
+      if (e instanceof SystemAudioMissingError) {
+        setStatusKind("info"); setStatus("recording cancelled — share tab/window audio, or record with microphone only next time");
+        return;
+      }
       setStatusKind("error"); setStatus(`microphone access failed: ${e instanceof Error ? e.message : e}`);
     }
-  }, [recording, passLimitGate, cookBlob]);
+  }, [recording, passLimitGate, cookBlob, session]);
 
   useEffect(() => { onRecToggleRef.current = onRecToggle; }, [onRecToggle]);
   useEffect(() => () => { window.clearInterval(recTimerRef.current); keepAliveStopRef.current?.(); }, []);
@@ -709,6 +789,7 @@ export default function InkApp() {
                   chunkProgress={chunkProgress}
                   recording={recording}
                   recSeconds={recSeconds}
+                  levelsRef={levelsRef}
                   language={language}
                   onLanguage={(v) => { setLanguage(v); saveSettings({ language: v }); }}
                   speakers={speakers}

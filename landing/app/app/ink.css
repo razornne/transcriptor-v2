@@ -1025,6 +1025,21 @@
   font-variant-numeric: tabular-nums; line-height: 1;
 }
 
+/* ── Live capture level meters (mic / shared-tab audio) ──────────── */
+.i-levels { display: flex; flex-direction: column; gap: 4px; width: 160px; max-width: 60vw; }
+.i-level-row { display: flex; align-items: center; gap: 6px; }
+.i-level-label {
+  font-family: var(--i-ui); font-size: 10px; color: var(--i-graphite); opacity: .65;
+  width: 26px; flex: none; text-align: right;
+}
+.i-level-bar {
+  flex: 1; height: 4px; border-radius: 2px; background: var(--i-hairline); overflow: hidden;
+}
+.i-level-fill { width: 0; height: 100%; border-radius: 2px; transition: width .1s linear; }
+.i-level-fill.mic { background: var(--i-accent); }
+.i-level-fill.sys { background: var(--i-signal); }
+@media (prefers-reduced-motion: reduce) { .i-level-fill { transition: none; } }
+
 /* ── InputCard: Control row ───────────────────────────────────── */
 .i-ctrl-row {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;

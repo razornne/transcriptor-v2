@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 import type { PipelineSteps } from "@/lib/ink/api";
 
@@ -101,8 +101,38 @@ function StepTimeline({ pipeline, chunkProgress }: {
   );
 }
 
+// Live capture levels. Reads a ref and writes bar widths directly each frame —
+// no React state, so an hour-long call doesn't re-render the page 10×/sec.
+function LevelMeters({ levelsRef }: { levelsRef: MutableRefObject<{ mic: number; sys: number }> }) {
+  const micRef = useRef<HTMLDivElement>(null);
+  const sysRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    const loop = () => {
+      const { mic, sys } = levelsRef.current;
+      if (micRef.current) micRef.current.style.width = `${Math.min(100, mic * 220)}%`;
+      if (sysRef.current) sysRef.current.style.width = `${Math.min(100, sys * 220)}%`;
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [levelsRef]);
+  return (
+    <div className="i-levels" aria-hidden="true">
+      <div className="i-level-row">
+        <span className="i-level-label">Mic</span>
+        <div className="i-level-bar"><div ref={micRef} className="i-level-fill mic" /></div>
+      </div>
+      <div className="i-level-row">
+        <span className="i-level-label">Tab</span>
+        <div className="i-level-bar"><div ref={sysRef} className="i-level-fill sys" /></div>
+      </div>
+    </div>
+  );
+}
+
 export function InputCard({
-  cooking, pipeline, chunkProgress, recording, recSeconds,
+  cooking, pipeline, chunkProgress, recording, recSeconds, levelsRef,
   language, onLanguage,
   speakers, onSpeakers,
   context, onContext,
@@ -114,6 +144,7 @@ export function InputCard({
   chunkProgress?: { done: number; total: number } | null;
   recording: boolean;
   recSeconds: number;
+  levelsRef?: MutableRefObject<{ mic: number; sys: number }>;
   language: string;
   onLanguage: (v: string) => void;
   speakers: string;
@@ -152,6 +183,7 @@ export function InputCard({
           <div className="i-dropzone-rec">
             <span className="i-rec-dot-lg" />
             <span className="i-dropzone-timer">{formatDuration(recSeconds)}</span>
+            {levelsRef && <LevelMeters levelsRef={levelsRef} />}
             <span className="i-dropzone-hint-sub">Recording in progress — click Stop when done</span>
           </div>
         ) : cooking ? (

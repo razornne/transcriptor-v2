@@ -96,3 +96,29 @@ export async function patchEntry(id: string, fields: Record<string, unknown>): P
 export async function deleteEntry(id: string): Promise<void> {
   await sbFetch(`/transcripts?id=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
 }
+
+// Capture telemetry (Фаза 0, skriptly-plan v2) — не аудио, только диагностика
+// захвата: был ли второй канал, молчал ли он. См. migrations/011_capture_stats.sql.
+export async function insertCaptureStats(payload: {
+  user_id: string;
+  recording_id: string;
+  session_id: string | null;
+  has_system_audio: boolean;
+  mic_device_label: string;
+  rms_mic_avg: number;
+  rms_system_avg: number;
+  silent_seconds_mic: number;
+  silent_seconds_system: number;
+  track_ended_events: number;
+  duration_sec: number;
+  browser: string;
+  os: string;
+  display_surface: string | null;
+  events: unknown[];
+}): Promise<void> {
+  await sbFetch("/capture_stats", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    headers: { Prefer: "return=minimal" },
+  });
+}
