@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 
 import jwt as pyjwt
 import requests
-from flask import Flask, render_template, jsonify, request, g, make_response, redirect
+from flask import Flask, render_template, jsonify, request, g, make_response, redirect, Response
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -668,6 +668,67 @@ def _sb_admin(path: str, method: str = "GET", data: dict = None, params: dict = 
     return r.json() if r.content else []
 
 
+# ── Recording archive (Cloudflare R2) ──────────────────────────────────
+# Every transcribed recording/upload (except Privacy Mode) is copied to R2 for
+# the founder's error analysis, with a row in public.recordings (migration 012)
+# linking audio, raw pipeline output and capture_stats by recording_id.
+# Objects expire via an R2 lifecycle rule (RECORDING_RETENTION_DAYS).
+R2_BUCKET = os.environ.get("R2_BUCKET", "")
+RECORDING_RETENTION_DAYS = 90
+_r2_client = None
+
+_ARCHIVE_EXT = {
+    "audio/webm": "webm", "video/webm": "webm", "audio/ogg": "ogg", "audio/mpeg": "mp3",
+    "audio/mp4": "m4a", "audio/x-m4a": "m4a", "video/mp4": "mp4", "video/quicktime": "mov",
+    "audio/wav": "wav", "audio/x-wav": "wav", "audio/flac": "flac", "audio/aac": "aac",
+}
+
+
+def _r2():
+    global _r2_client
+    if _r2_client is None:
+        import boto3
+        from botocore.config import Config
+        _r2_client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+            aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+            region_name="auto",
+            config=Config(signature_version="s3v4", retries={"max_attempts": 3}),
+        )
+    return _r2_client
+
+
+def _archive_recording(audio_bytes: bytes, content_type: str, *, recording_id: str, user_id: str,
+                       user_email: str | None, job_id: str, source: str, duration_sec: float,
+                       language: str | None, num_speakers: int | None, quality: str):
+    """Best-effort, runs in a background thread: audio → R2, metadata → public.recordings."""
+    ctype = (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    key = f"recordings/{user_id}/{recording_id}.{_ARCHIVE_EXT.get(ctype, 'bin')}"
+    try:
+        _r2().put_object(Bucket=R2_BUCKET, Key=key, Body=audio_bytes, ContentType=ctype)
+        _sb_admin("recordings", method="POST", data={
+            "id": recording_id, "user_id": user_id, "user_email": user_email,
+            "storage_key": key, "size_bytes": len(audio_bytes), "content_type": ctype,
+            "source": source, "duration_sec": duration_sec or None, "language": language,
+            "num_speakers": num_speakers, "quality": quality, "job_id": job_id,
+            "expires_at": (datetime.utcnow() + timedelta(days=RECORDING_RETENTION_DAYS)).isoformat() + "Z",
+        })
+        print(f"[archive] {recording_id} → {key} ({len(audio_bytes) / 1048576:.1f} MB)", flush=True)
+    except Exception as e:
+        print(f"[archive] {recording_id} failed: {e}", flush=True)
+
+
+def _archive_job_result(job_id: str, fields: dict):
+    """Best-effort: attach the raw pipeline result (or error) to the archived recording."""
+    try:
+        _sb_admin(f"recordings?job_id=eq.{job_id}", method="PATCH",
+                  data={**fields, "completed_at": datetime.utcnow().isoformat() + "Z"})
+    except Exception as e:
+        print(f"[archive] result patch for {job_id} failed: {e}", flush=True)
+
+
 def _notify_admin(text: str):
     """Best-effort Telegram ping to admin. No-op if not configured.
     Never raises — caller must not depend on this for correctness."""
@@ -1038,6 +1099,15 @@ def job_status_endpoint(job_id):
     # Modal: префикс кодирует тип
     if USE_MODAL and len(job_id) > 2 and job_id[1] == "_":
         result = _modal_job_status(job_id)
+        if R2_BUCKET and job_id.startswith(JOB_PREFIX_TRANSCRIBE) and job_id not in _tracked_jobs:
+            if result.get("status") == "done":
+                threading.Thread(target=_archive_job_result, daemon=True, args=(job_id, {
+                    "segments": result.get("segments") or [],
+                    "vocab_additions": result.get("vocab_additions") or [],
+                })).start()
+            elif result.get("status") == "error":
+                threading.Thread(target=_archive_job_result, daemon=True,
+                                 args=(job_id, {"error": str(result.get("error"))[:2000]})).start()
         # Трекаем минуты ровно один раз когда транскрипция завершилась
         if (result.get("status") == "done"
                 and job_id.startswith(JOB_PREFIX_TRANSCRIBE)
@@ -3399,6 +3469,67 @@ def lab_compare():
     })
 
 
+@app.route("/api/admin/recordings", methods=["GET"])
+def admin_recordings():
+    """Admin: archived recordings (newest first) with their capture telemetry."""
+    if not _is_admin():
+        return jsonify({"error": "admin only"}), 403
+    rows = _sb_admin("recordings", params={
+        "select": "id,user_id,user_email,source,duration_sec,language,num_speakers,quality,"
+                  "size_bytes,content_type,created_at,completed_at,error",
+        "expires_at": f"gt.{datetime.utcnow().isoformat()}Z",
+        "order": "created_at.desc",
+        "limit": "100",
+    })
+    if rows:
+        ids = ",".join(r["id"] for r in rows)
+        stats = {s["recording_id"]: s for s in _sb_admin("capture_stats", params={"recording_id": f"in.({ids})"})}
+        for r in rows:
+            r["capture"] = stats.get(r["id"])
+    return jsonify({"recordings": rows})
+
+
+def _admin_recording_row(rid: str) -> dict | None:
+    try:
+        rid = str(uuid.UUID(rid))
+    except ValueError:
+        return None
+    rows = _sb_admin("recordings", params={"id": f"eq.{rid}", "select": "*"})
+    return rows[0] if rows else None
+
+
+@app.route("/api/admin/recordings/<rid>", methods=["GET"])
+def admin_recording_detail(rid):
+    """Admin: one recording — raw pipeline segments, error, capture telemetry."""
+    if not _is_admin():
+        return jsonify({"error": "admin only"}), 403
+    rec = _admin_recording_row(rid)
+    if not rec:
+        return jsonify({"error": "not found"}), 404
+    stats = _sb_admin("capture_stats", params={"recording_id": f"eq.{rec['id']}"})
+    rec["capture"] = stats[0] if stats else None
+    return jsonify(rec)
+
+
+@app.route("/api/admin/recordings/<rid>/audio", methods=["GET"])
+def admin_recording_audio(rid):
+    """Admin: stream the archived audio from R2 (proxied — no bucket CORS needed)."""
+    if not _is_admin():
+        return jsonify({"error": "admin only"}), 403
+    rec = _admin_recording_row(rid)
+    if not rec:
+        return jsonify({"error": "not found"}), 404
+    try:
+        obj = _r2().get_object(Bucket=R2_BUCKET, Key=rec["storage_key"])
+    except Exception as e:
+        return jsonify({"error": f"audio unavailable: {e}"}), 404
+    return Response(
+        obj["Body"].iter_chunks(1 << 20),
+        mimetype=rec.get("content_type") or "application/octet-stream",
+        headers={"Content-Length": str(obj["ContentLength"])},
+    )
+
+
 @app.route("/api/lab/info", methods=["GET"])
 def lab_info():
     """Admin discovery — returns available models + GENERATE_TEMPLATES keys
@@ -3487,6 +3618,13 @@ def transcribe_endpoint():
     except ValueError:
         duration_sec = 0.0
 
+    # Archive linkage: the client's recording_id ties this audio to its capture_stats.
+    try:
+        recording_id = str(uuid.UUID(request.form.get("recording_id") or ""))
+    except ValueError:
+        recording_id = str(uuid.uuid4())
+    source = request.form.get("source") if request.form.get("source") in ("record", "upload") else "upload"
+
     # Plan limits check + best-quality gating + vocabulary fetch
     user_vocab_prompt = ""
     correction_hints = ""  # пары wrong→right для Gemini correction
@@ -3542,10 +3680,12 @@ def transcribe_endpoint():
                 dl = requests.get(storage_url, timeout=300, stream=False)
                 dl.raise_for_status()
                 audio_bytes = dl.content
+                audio_ctype = dl.headers.get("Content-Type", "")
             except Exception as e:
                 return jsonify({"error": f"storage download failed: {e}"}), 502
         else:
             audio_bytes = audio_file.read()
+            audio_ctype = audio_file.mimetype or ""
         progress_key = uuid.uuid4().hex  # уникальный ключ для modal.Dict прогресса
         # Resolve Privacy Mode for this user — if on, Modal will skip Gemini
         # correction entirely (falls back to local Qwen on the same GPU)
@@ -3585,7 +3725,13 @@ def transcribe_endpoint():
         if g.user_id:
             _job_user[job_id] = g.user_id
             _user_active_job[g.user_id] = job_id  # отметка активной джобы (zombie-guard)
-        return jsonify({"job_id": job_id, "status": "queued"})
+        if R2_BUCKET and g.user_id and not privacy_mode:
+            threading.Thread(target=_archive_recording, daemon=True, args=(audio_bytes, audio_ctype), kwargs=dict(
+                recording_id=recording_id, user_id=g.user_id, user_email=g.user_email, job_id=job_id,
+                source=source, duration_sec=duration_sec, language=language,
+                num_speakers=num_speakers, quality=quality,
+            )).start()
+        return jsonify({"job_id": job_id, "status": "queued", "recording_id": recording_id})
 
     # ── Local path: пишем на диск, обрабатываем в фоновом потоке
     filename = datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".webm"

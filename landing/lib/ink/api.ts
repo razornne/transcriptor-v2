@@ -106,6 +106,61 @@ async function submitJob(url: string, body: FormData | object): Promise<string> 
   return data.job_id as string;
 }
 
+// ── Admin: recording archive (/app/review) ─────────────────────────
+export type CaptureRow = {
+  has_system_audio: boolean;
+  mic_device_label: string | null;
+  rms_mic_avg: number | null;
+  rms_system_avg: number | null;
+  silent_seconds_mic: number | null;
+  silent_seconds_system: number | null;
+  track_ended_events: number;
+  duration_sec: number | null;
+  browser: string | null;
+  os: string | null;
+  display_surface: string | null;
+  events: { t: number; type: string; reason?: string; from?: string; to?: string }[];
+};
+
+export type ArchivedRecording = {
+  id: string;
+  user_email: string | null;
+  source: "record" | "upload" | null;
+  duration_sec: number | null;
+  language: string | null;
+  num_speakers: number | null;
+  quality: string | null;
+  size_bytes: number | null;
+  content_type: string | null;
+  created_at: string;
+  completed_at: string | null;
+  error: string | null;
+  capture: CaptureRow | null;
+  segments?: Segment[] | null;
+  vocab_additions?: { wrong: string; right: string }[] | null;
+};
+
+async function adminJson<T>(path: string): Promise<T> {
+  const res = await authFetch(`${API_BASE}${path}`);
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  return data as T;
+}
+
+export async function adminListRecordings(): Promise<ArchivedRecording[]> {
+  return (await adminJson<{ recordings: ArchivedRecording[] }>("/api/admin/recordings")).recordings;
+}
+
+export async function adminGetRecording(id: string): Promise<ArchivedRecording> {
+  return adminJson<ArchivedRecording>(`/api/admin/recordings/${encodeURIComponent(id)}`);
+}
+
+export async function adminRecordingAudio(id: string): Promise<Blob> {
+  const res = await authFetch(`${API_BASE}/api/admin/recordings/${encodeURIComponent(id)}/audio`);
+  if (!res.ok) throw new Error(`audio: HTTP ${res.status}`);
+  return res.blob();
+}
+
 export async function cancelJob(jobId: string): Promise<void> {
   try {
     await authFetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
@@ -155,6 +210,13 @@ export async function pollJob(
   }
 }
 
+type TranscribeOpts = {
+  language: string; numSpeakers: string; durationSec: number; prompt?: string; quality?: "best";
+  /** Links the archived audio with its capture_stats row. */
+  recordingId?: string;
+  source?: "record" | "upload";
+};
+
 // Files above this threshold are uploaded to Supabase Storage first so that
 // the raw bytes never pass through Modal's ~250MB request body limit (ISS-11).
 const LARGE_FILE_THRESHOLD = 200 * 1024 * 1024; // 200 MB
@@ -188,7 +250,7 @@ function _blobExt(blob: Blob): string {
 // Storage → New bucket, private).
 async function transcribeLarge(
   blob: Blob,
-  o: { language: string; numSpeakers: string; durationSec: number; prompt?: string; quality?: "best" },
+  o: TranscribeOpts,
   onProgress?: (p: JobProgress) => void,
   cancel?: CancelToken,
 ): Promise<Segment[]> {
@@ -222,6 +284,8 @@ async function transcribeLarge(
     if (o.durationSec) fd.append("duration_sec", String(Math.round(o.durationSec)));
     if (o.prompt && o.prompt.trim()) fd.append("prompt", o.prompt.trim());
     if (o.quality === "best") fd.append("quality", "best");
+    if (o.recordingId) fd.append("recording_id", o.recordingId);
+    if (o.source) fd.append("source", o.source);
 
     // 4. Submit job and poll as normal
     const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd);
@@ -238,7 +302,7 @@ async function transcribeLarge(
 
 export async function transcribe(
   blob: Blob,
-  o: { language: string; numSpeakers: string; durationSec: number; prompt?: string; quality?: "best" },
+  o: TranscribeOpts,
   onProgress?: (p: JobProgress) => void,
   cancel?: CancelToken,
 ): Promise<Segment[]> {
@@ -254,6 +318,8 @@ export async function transcribe(
   if (o.durationSec) fd.append("duration_sec", String(Math.round(o.durationSec)));
   if (o.prompt && o.prompt.trim()) fd.append("prompt", o.prompt.trim());
   if (o.quality === "best") fd.append("quality", "best");
+  if (o.recordingId) fd.append("recording_id", o.recordingId);
+  if (o.source) fd.append("source", o.source);
   const jobId = await submitJob(`${API_BASE}/api/transcribe`, fd);
   const maxWait = o.durationSec > 1800 ? 120 * 60 * 1000 : 22 * 60 * 1000;
   const result = await pollJob(jobId, onProgress, maxWait, cancel);

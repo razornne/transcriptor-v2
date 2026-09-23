@@ -135,6 +135,10 @@ notion_secret = modal.Secret.from_name("notion-secrets", required_keys=[
 admin_secret = modal.Secret.from_name("admin-secrets", required_keys=[
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_CHAT_ID",
 ])
+# Cloudflare R2 (S3 API) — архив аудио всех записей для работы над ошибками.
+r2_secret = modal.Secret.from_name("r2-secrets", required_keys=[
+    "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET",
+])
 # Stripe live-mode credentials. Kept separate from transcriptor-secrets so we
 # can rotate keys without --force-replacing the whole core secret.
 stripe_secret = modal.Secret.from_name("stripe-secrets", required_keys=[
@@ -190,6 +194,7 @@ web_image = (
         "requests",
         "pyjwt[crypto]",  # для валидации Supabase JWT (включая asymmetric ES256/RS256)
         "stripe",
+        "boto3",  # S3 API клиента для архива записей в Cloudflare R2
     )
     .add_local_python_source("app")
     # Cutover (2026-06-14): фронт переехал на Next.js /app, GET / теперь 301-редирект.
@@ -2028,7 +2033,7 @@ def gemini_generate(prompt: str, max_output_tokens: int = 8000, temperature: flo
     image=web_image,
     # stripe_secret last so its STRIPE_* values override anything stale in
     # transcriptor-secrets from earlier --force runs (test-mode keys).
-    secrets=[hf_secret, notion_secret, admin_secret, stripe_secret],
+    secrets=[hf_secret, notion_secret, admin_secret, r2_secret, stripe_secret],
     timeout=900,                 # 15 min — почти все запросы моментальные через .spawn(),
                                  # но /api/lab/compare блокирует до завершения всех моделей
                                  # (3-5 мин cold start на A100 + до 60s генерации × N моделей)

@@ -142,6 +142,13 @@ Supabase Postgres
 - **`009_custom_presets.sql`** — `user_profiles.presets JSONB` + `workspaces.presets JSONB` — кастомные пресеты генерации (личные + командные). Структура: `{id, name, prompt, scope, created_by, updated_at}`. Лимит 20, prompt ≤2000 символов.
 - **`010_speaker_names.sql`** — `transcripts.speaker_names JSONB DEFAULT '{}'` — карта `raw-лейбл → отображаемое имя` (например `{"SPEAKER_00": "Alice"}`). Используется endpoint `/api/entries/<id>/rename-speaker`. Пустая карта = дефолтные "Speaker N" лейблы.
 - **`011_capture_stats.sql`** — `public.capture_stats`: телеметрия захвата на каждую запись (есть ли звук вкладки, уровни, секунды тишины по каналам, отвалы/переключения микрофона в `events` JSONB, браузер/ОС). `recording_id` — связь с сохранённым аудио того же звонка. Пишется с клиента после Stop.
+- **`012_recordings.sql`** — `public.recordings`: индекс архива аудио в Cloudflare R2 (`storage_key`), метаданные записи, **сырой** результат пайплайна (`segments`, до правок юзера) или `error`. `id` = `recording_id` (= `capture_stats.recording_id`). Только service role (RLS без политик).
+
+### Архив записей (работа над ошибками)
+- Каждая транскрипция (запись и upload, **кроме Privacy Mode**) → копия аудио в R2 `recordings/{user_id}/{recording_id}.{ext}` + строка в `public.recordings`. Делает `/api/transcribe` фоновым потоком (`_archive_recording`) после spawn; результат джобы (`segments`/`error`) дописывает `/api/jobs/<id>` (`_archive_job_result`, PATCH по `job_id`). Всё best-effort — сбой архива не ломает транскрипцию.
+- Фронт шлёт `recording_id` (из `startRecording`, для upload — новый uuid) и `source` (`record`/`upload`) в FormData.
+- Секрет `r2-secrets` (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET) на `flask_app`. Хранение 90 дней: lifecycle-правило бакета в дашборде Cloudflare + `recordings.expires_at`.
+- **`/app/review`** — админка (ADMIN_EMAILS): список записей с флагами проблем, плеер с раздельным прослушиванием каналов (L=микрофон, R=звонок) через ChannelSplitter, телеметрия + журнал событий, сырой транскрипт (клик → перемотка). Аудио проксируется через `/api/admin/recordings/<id>/audio` — CORS на бакете не нужен.
 - Миграции выполняются **вручную через Supabase SQL Editor** — нет миграционного фреймворка. После добавления новой — обновить эту секцию + сам файл должен начинаться с комментария "Run in Supabase SQL Editor".
 
 ### Frontend — приложение
@@ -832,6 +839,7 @@ git push origin main  # Vercel сразу собирает и катит на sk
 - `migrations/009_custom_presets.sql` — user_profiles.presets + workspaces.presets JSONB
 - `migrations/010_speaker_names.sql` — transcripts.speaker_names JSONB
 - `migrations/011_capture_stats.sql` — capture_stats (телеметрия захвата)
+- `migrations/012_recordings.sql` — recordings (индекс архива аудио в R2)
 
 Миграции **не идемпотентны через какой-то фреймворк** — каждая написана с `IF NOT EXISTS` чтобы безопасно перезапустить, но фиксить руками тоже окей.
 

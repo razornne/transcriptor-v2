@@ -401,7 +401,10 @@ export default function InkApp() {
     });
   }, [session, workspace, visibility]);
 
-  const cookBlob = useCallback(async (blob: Blob, durationSec: number, sessionId: string | null = null) => {
+  const cookBlob = useCallback(async (
+    blob: Blob, durationSec: number, sessionId: string | null = null,
+    archive: { recordingId?: string; source?: "record" | "upload" } = {},
+  ) => {
     if (cooking) return;
     setCooking(true); setPipeline(null); setSbOpen(false); setStatusKind("info"); setStatus("uploading…");
     dotsRef.current?.wave(0.8);
@@ -433,7 +436,12 @@ export default function InkApp() {
     try {
       const segments = await transcribe(
         blob,
-        { language, numSpeakers: speakers, durationSec, prompt: context, quality: currentQuality === "best" ? "best" : undefined },
+        {
+          language, numSpeakers: speakers, durationSec, prompt: context,
+          quality: currentQuality === "best" ? "best" : undefined,
+          recordingId: archive.recordingId ?? crypto.randomUUID(),
+          source: archive.source ?? (sessionId ? "record" : "upload"),
+        },
         onProgress, token,
       );
       if (!segments.length) {
@@ -502,7 +510,7 @@ export default function InkApp() {
       keepAliveStopRef.current?.(); keepAliveStopRef.current = null;
       if (rec) {
         const { blob, durationSec, stats } = await rec.stop();
-        void cookBlob(blob, durationSec, rec.sessionId);
+        void cookBlob(blob, durationSec, rec.sessionId, { recordingId: rec.recordingId, source: "record" });
         if (session?.user) {
           const { browser, os } = detectBrowserOS();
           phCapture("capture_stats", { ...stats, duration_sec: durationSec });
