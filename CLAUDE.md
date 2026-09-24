@@ -142,6 +142,8 @@ Supabase Postgres
 - **`010_speaker_names.sql`** — `transcripts.speaker_names JSONB DEFAULT '{}'` — карта `raw-лейбл → отображаемое имя` (например `{"SPEAKER_00": "Alice"}`). Используется endpoint `/api/entries/<id>/rename-speaker`. Пустая карта = дефолтные "Speaker N" лейблы.
 - **`011_capture_stats.sql`** — `public.capture_stats`: телеметрия захвата на каждую запись (есть ли звук вкладки, уровни, секунды тишины по каналам, отвалы/переключения микрофона в `events` JSONB, браузер/ОС). `recording_id` — связь с сохранённым аудио того же звонка. Пишется с клиента после Stop.
 - **`012_recordings.sql`** — `public.recordings`: индекс архива аудио в Cloudflare R2 (`storage_key`), метаданные записи, **сырой** результат пайплайна (`segments`, до правок юзера) или `error`. `id` = `recording_id` (= `capture_stats.recording_id`). Только service role (RLS без политик).
+- **`013_recordings_corrections.sql`** — `recordings.corrections` (что поменяла LLM-коррекция) + `recordings.channel_mode`.
+- **`014_user_emails.sql`** — email рядом с id для чтения таблиц в дашборде: `user_profiles/transcripts/capture_stats.user_email`, `workspaces.owner_email`. Заполняет триггер `fill_user_email` из `auth.users` (клиент не подделает), `sync_user_email` на `auth.users` обновляет копии при смене email. Приложение эти колонки не читает.
 
 ### STT: Soniox — основной путь (с 2026-09-24)
 - `/api/transcribe` → `transcribe_soniox` (CPU, `soniox_image`) для всех, **кроме Privacy Mode и записей > 295 мин** (лимит Soniox 300 мин/файл) — те идут в старый GPU-пайплайн (`transcribe_full`/`transcribe_long`). Откат для всех: env `STT_PROVIDER=selfhost` на flask_app.
@@ -862,6 +864,8 @@ git push origin main  # Vercel сразу собирает и катит на sk
 - `migrations/010_speaker_names.sql` — transcripts.speaker_names JSONB
 - `migrations/011_capture_stats.sql` — capture_stats (телеметрия захвата)
 - `migrations/012_recordings.sql` — recordings (индекс архива аудио в R2)
+- `migrations/013_recordings_corrections.sql` — recordings.corrections + channel_mode
+- `migrations/014_user_emails.sql` — email-колонки рядом с user_id (триггеры из auth.users)
 
 Миграции **не идемпотентны через какой-то фреймворк** — каждая написана с `IF NOT EXISTS` чтобы безопасно перезапустить, но фиксить руками тоже окей.
 
