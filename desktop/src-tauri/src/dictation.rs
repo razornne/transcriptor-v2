@@ -11,7 +11,7 @@
 use crate::api::{self, ApiError};
 use crate::hotkey::{HotkeyEvent, ACTIVE};
 use crate::state::AppState;
-use crate::{mic, overlay, paste, stt};
+use crate::{media, mic, overlay, paste, stt};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -123,6 +123,9 @@ async fn start(app: &AppHandle, state: &Arc<AppState>) -> Result<Active, String>
         format!("Microphone problem: {e}")
     })?;
     ACTIVE.store(true, Ordering::SeqCst);
+    if settings.pause_media {
+        tauri::async_runtime::spawn_blocking(media::pause_playing);
+    }
     // «arming» — микрофон ещё не отдал звук (BT-гарнитура переключается в режим
     // звонка); красная точка загорается, только когда звук реально пошёл.
     let ready = capture.got_audio.load(Ordering::Relaxed);
@@ -177,6 +180,7 @@ fn cancel(app: &AppHandle, active: Option<Active>) {
     }
     ACTIVE.store(false, Ordering::SeqCst);
     overlay::rest(app);
+    tauri::async_runtime::spawn_blocking(media::resume);
 }
 
 fn flash(app: &AppHandle, state: &str, text: &str, ms: u64) {
@@ -249,6 +253,8 @@ fn finish(
                 }
             }
         };
+        // Медиа — обратно, когда текст уже вставлен (или диктовка не удалась).
+        tauri::async_runtime::spawn_blocking(media::resume);
         let _ = done.send(res);
     });
 }

@@ -17,6 +17,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 const LABEL: &str = "overlay";
+/// Окно плашки (логические px): раскрытое — под плашку записи/сообщения, в покое —
+/// ровно под капсулу (иначе невидимая часть окна ловила бы клики, напр. по полю ввода
+/// над панелью задач). Центры совпадают, поэтому смена размера не даёт скачка.
+const BIG: (f64, f64) = (460.0, 64.0);
+const SMALL: (f64, f64) = (64.0, 20.0);
+/// Центр плашки — столько логических px над нижним краем рабочей области.
+const CENTER_FROM_BOTTOM: f64 = 21.0;
 
 /// Каждый показ — новое «поколение»: отложенный возврат в покой от прошлой
 /// диктовки не должен свернуть плашку новой.
@@ -50,6 +57,11 @@ pub fn setup(app: &AppHandle, bar: bool) {
             SetWindowLongPtrW(h, GWL_EXSTYLE, ex | add);
         }
     }
+    // Клики насквозь по всему окну, включая дочернее окно WebView2
+    // (одного WS_EX_TRANSPARENT на верхнем окне для этого мало).
+    if let Some(w) = app.get_webview_window(LABEL) {
+        let _ = w.set_ignore_cursor_events(true);
+    }
     BAR.store(bar, Ordering::SeqCst);
     let a = app.clone();
     // Страница плашки грузится асинхронно — капсулу покоя показываем чуть позже.
@@ -79,7 +91,7 @@ fn watch(app: &AppHandle) {
         RESTING_SHOWN.store(false, Ordering::SeqCst);
     } else if !full && !shown {
         emit(app, "idle", "", "");
-        place(app);
+        place(app, false);
         RESTING_SHOWN.store(true, Ordering::SeqCst);
     } else if !full {
         // Другие topmost-окна могли перекрыть — возвращаем наверх, не двигая.
@@ -118,10 +130,10 @@ fn foreground_is_fullscreen() -> bool {
 }
 
 /// Внизу по центру рабочей области монитора активного окна, поверх всех, без фокуса.
-fn place(app: &AppHandle) {
+/// `big` — окно под раскрытую плашку, иначе — под капсулу покоя.
+fn place(app: &AppHandle, big: bool) {
     let Some(h) = hwnd(app) else { return };
     let Some(w) = app.get_webview_window(LABEL) else { return };
-    let size = w.outer_size().unwrap_or(tauri::PhysicalSize::new(460, 64));
     unsafe {
         let fg = GetForegroundWindow();
         let mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
@@ -132,9 +144,12 @@ fn place(app: &AppHandle) {
             RECT { left: 0, top: 0, right: 1920, bottom: 1040 }
         };
         let scale = w.scale_factor().unwrap_or(1.0);
-        let x = work.left + ((work.right - work.left) - size.width as i32) / 2;
-        let y = work.bottom - size.height as i32 - (6.0 * scale) as i32;
-        let _ = SetWindowPos(h, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        let (lw, lh) = if big { BIG } else { SMALL };
+        let (pw, ph) = ((lw * scale).round() as i32, (lh * scale).round() as i32);
+        let center_y = work.bottom - (CENTER_FROM_BOTTOM * scale).round() as i32;
+        let x = work.left + ((work.right - work.left) - pw) / 2;
+        let y = center_y - ph / 2;
+        let _ = SetWindowPos(h, HWND_TOPMOST, x, y, pw, ph, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 }
 
@@ -150,7 +165,7 @@ fn raw_hide(app: &AppHandle) {
 pub fn show(app: &AppHandle) -> u64 {
     let gen = GEN.fetch_add(1, Ordering::SeqCst) + 1;
     BUSY.store(true, Ordering::SeqCst);
-    place(app);
+    place(app, true);
     RESTING_SHOWN.store(false, Ordering::SeqCst);
     gen
 }
@@ -160,8 +175,15 @@ pub fn rest(app: &AppHandle) {
     BUSY.store(false, Ordering::SeqCst);
     if BAR.load(Ordering::SeqCst) && !foreground_is_fullscreen() {
         emit(app, "idle", "", "");
-        place(app);
         RESTING_SHOWN.store(true, Ordering::SeqCst);
+        // Сначала плашка сворачивается анимацией в большом окне, потом окно ужимается.
+        let (a, gen) = (app.clone(), GEN.load(Ordering::SeqCst));
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(380)).await;
+            if GEN.load(Ordering::SeqCst) == gen && !BUSY.load(Ordering::SeqCst) {
+                place(&a, false);
+            }
+        });
     } else {
         emit(app, "hidden", "", "");
         raw_hide(app);

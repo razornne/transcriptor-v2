@@ -9,6 +9,7 @@ mod dictation;
 mod hotkey;
 #[macro_use]
 mod log;
+mod media;
 mod mic;
 mod overlay;
 mod paste;

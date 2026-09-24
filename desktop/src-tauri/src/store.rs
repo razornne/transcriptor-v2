@@ -18,6 +18,8 @@ pub struct Settings {
     pub show_bar: bool,
     /// Микрофон держится открытым: диктовка стартует мгновенно, с 0.5 с «до нажатия».
     pub instant_start: bool,
+    /// Ставить играющее медиа (YouTube, музыка) на паузу на время диктовки.
+    pub pause_media: bool,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             hotkey: crate::hotkey::DEFAULT_HOTKEY.to_vec(),
             show_bar: true,
             instant_start: false,
+            pause_media: true,
         }
     }
 }

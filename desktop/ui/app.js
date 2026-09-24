@@ -167,6 +167,7 @@ async function refresh() {
   $("autostart").checked = !!settings.autostart;
   $("showBar").checked = settings.show_bar !== false;
   $("instant").checked = !!settings.instant_start;
+  $("pauseMedia").checked = settings.pause_media !== false;
   const mic = $("mic");
   mic.innerHTML = "";
   mic.append(new Option("System default", ""));
@@ -184,6 +185,7 @@ async function save() {
     autostart: $("autostart").checked,
     show_bar: $("showBar").checked,
     instant_start: $("instant").checked,
+    pause_media: $("pauseMedia").checked,
     mic: $("mic").value || null,
   };
   await invoke("save_settings", { settings });
@@ -211,7 +213,7 @@ $("magic").onclick = () => {
   signIn("sign_in_email", { email }, `Check ${email} and open the sign-in link on this computer…`);
 };
 $("email").addEventListener("keydown", (e) => { if (e.key === "Enter") $("magic").click(); });
-for (const id of ["language", "cleanup", "autostart", "mic", "showBar", "instant"]) $(id).addEventListener("change", save);
+for (const id of ["language", "cleanup", "autostart", "mic", "showBar", "instant", "pauseMedia"]) $(id).addEventListener("change", save);
 $("signout").onclick = async () => { await invoke("sign_out"); await refresh(); };
 $("web").onclick = () => invoke("open_web");
 $("logs").onclick = () => invoke("open_log_folder");
