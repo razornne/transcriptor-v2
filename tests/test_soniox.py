@@ -7,6 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import soniox  # noqa: E402
 from soniox import build_context, tokens_to_words, words_to_segments  # noqa: E402
 
 
@@ -56,6 +57,41 @@ def test_context_stays_under_soniox_limit():
     ctx = build_context([f"term{i}-" + "x" * 250 for i in range(100)], "y" * 20000)
     size = sum(len(t) for t in ctx["terms"]) + len(ctx["text"])
     assert size < 8000, size
+
+
+def test_temporary_key_request_is_bounded():
+    """Ключ живого транскрипта: только для WebSocket, сессия не длиннее остатка
+    минут юзера и потолка Soniox (5 ч), reference id в пределах 256 символов."""
+    import types
+
+    sent = {}
+
+    class Resp:
+        ok = True
+        def json(self):
+            return {"api_key": "snx_temp_x", "expires_at": "2026-09-24T10:00:00Z"}
+
+    def fake_post(url, headers, json, timeout):
+        sent.update(url=url, auth=headers["Authorization"], body=json)
+        return Resp()
+
+    real = sys.modules.get("requests")
+    sys.modules["requests"] = types.SimpleNamespace(post=fake_post)
+    try:
+        out = soniox.create_temporary_key("perm", "live:" + "u" * 400, max_session_s=10 ** 6)
+        assert out == {"api_key": "snx_temp_x", "expires_at": "2026-09-24T10:00:00Z"}
+        assert sent["url"].endswith("/auth/temporary-api-key") and sent["auth"] == "Bearer perm"
+        body = sent["body"]
+        assert body["usage_type"] == "transcribe_websocket"
+        assert body["max_session_duration_seconds"] == soniox.MAX_RT_SESSION_S
+        assert len(body["client_reference_id"]) == 256
+        soniox.create_temporary_key("perm", "r", max_session_s=5)
+        assert sent["body"]["max_session_duration_seconds"] == 60  # не меньше минуты
+    finally:
+        if real is not None:
+            sys.modules["requests"] = real
+        else:
+            del sys.modules["requests"]
 
 
 if __name__ == "__main__":

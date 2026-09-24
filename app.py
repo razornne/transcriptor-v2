@@ -565,6 +565,9 @@ LONG_AUDIO_THRESHOLD_S = float(os.environ.get("LONG_AUDIO_THRESHOLD_S", "1800"))
 # STT_PROVIDER=selfhost — быстрый откат на старый пайплайн для всех.
 STT_PROVIDER = os.environ.get("STT_PROVIDER", "soniox")
 SONIOX_MAX_S = 295 * 60
+# Живой транскрипт во время записи (Soniox real-time из браузера, /api/live/token).
+# LIVE_TRANSCRIPT=off — выключатель: фронт тогда пишет как раньше, без живого текста.
+LIVE_TRANSCRIPT = os.environ.get("LIVE_TRANSCRIPT", "on").lower() not in ("off", "0", "false")
 
 
 # ── Supabase JWT validation ─────────────────────────────────────
@@ -3414,6 +3417,75 @@ def transcribe_chunk_endpoint():
             if p:
                 try: os.remove(p)
                 except OSError: pass
+
+
+@app.route("/api/live/token", methods=["POST"])
+def live_token_endpoint():
+    """Временный ключ Soniox для живого транскрипта во время записи.
+
+    Браузер сам открывает WebSocket к Soniox (stt-rt) по этому ключу —
+    постоянный SONIOX_API_KEY остаётся на сервере. Живой текст — только
+    предпросмотр: финальный транскрипт после Stop по-прежнему делает
+    /api/transcribe, минуты списываются там же (здесь не списываем).
+
+    Body (JSON): recording_id — связь с архивом записи и usage-логами Soniox.
+    Returns: {api_key, expires_at, model, language_hints, context, diarize, max_session_s}
+      403 {live_disabled} — Privacy Mode (звук не должен уходить третьим лицам)
+      402 — минуты кончились
+      503 — живой транскрипт выключен (LIVE_TRANSCRIPT=off) или нет ключа
+    Фронт на любой не-200 просто пишет без живого текста.
+    """
+    import soniox
+
+    api_key = os.environ.get("SONIOX_API_KEY", "").strip()
+    if not LIVE_TRANSCRIPT or not api_key or not g.user_id:
+        return jsonify({"error": "live transcript unavailable"}), 503
+    body = request.get_json(silent=True) or {}
+    try:
+        recording_id = str(uuid.UUID(str(body.get("recording_id") or "")))
+    except ValueError:
+        recording_id = str(uuid.uuid4())
+    language = body.get("language") or None
+    if language not in ALLOWED_LANGUAGES:
+        language = None
+
+    diarize = True
+    terms: list[str] = []
+    remaining_min = 60.0
+    if SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            profile = _get_user_profile(g.user_id)
+            plan = _get_effective_plan(g.user_id, g.user_email, profile)
+            if _privacy_mode_active(profile, plan):
+                return jsonify({"error": "live transcript is off in Privacy Mode", "live_disabled": True}), 403
+            limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+            remaining_min = limits["minutes"] + int(profile.get("bonus_minutes") or 0) - float(profile.get("minutes_used") or 0)
+            if remaining_min <= 0:
+                return jsonify({"error": "Monthly limit reached", "upgrade_required": True}), 402
+            diarize = bool(limits["diarization"])
+            vocab = profile.get("vocabulary") or []
+            if isinstance(vocab, list):
+                terms = [v.get("term") for v in sorted(vocab, key=lambda x: -int(x.get("freq", 1)))
+                         if isinstance(v, dict) and v.get("term")][:VOCAB_MAX_ITEMS]
+        except Exception as e:
+            print(f"[live] profile check failed: {e}")
+
+    max_session_s = int(remaining_min * 60) + 300  # запас: запись может чуть перебрать лимит
+    try:
+        key = soniox.create_temporary_key(
+            api_key, client_reference_id=f"live:{g.user_id}:{recording_id}", max_session_s=max_session_s,
+        )
+    except Exception as e:
+        print(f"[live] temporary key failed: {e}", flush=True)
+        return jsonify({"error": "live transcript unavailable"}), 503
+    return jsonify({
+        **key,
+        "model": soniox.MODEL_RT,
+        "language_hints": [language] if language else [],
+        "context": soniox.build_context(terms, body.get("context") or None),
+        "diarize": diarize,
+        "max_session_s": max_session_s,
+    })
 
 
 @app.route("/api/transcribe", methods=["POST"])

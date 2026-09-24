@@ -95,6 +95,36 @@ async function submitJob(url: string, body: FormData | object): Promise<string> 
   return data.job_id as string;
 }
 
+// ── Live transcript: temporary Soniox key (see live.ts) ────────────
+export type LiveToken = {
+  api_key: string;
+  expires_at: string | null;
+  model: string;
+  language_hints: string[];
+  context: Record<string, unknown> | null;
+  diarize: boolean;
+  max_session_s: number;
+};
+
+/** "denied" = the backend refused for good (Privacy Mode, no minutes left,
+ *  feature off) — don't retry. null = transient failure, retry later. */
+export async function fetchLiveToken(
+  body: { recording_id: string; language: string; context: string },
+): Promise<LiveToken | "denied" | null> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/live/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 402 || res.status === 403 || res.status === 503) return "denied";
+    if (!res.ok) return null;
+    return (await res.json()) as LiveToken;
+  } catch {
+    return null;
+  }
+}
+
 // ── Admin: recording archive (/app/review) ─────────────────────────
 export type CaptureRow = {
   has_system_audio: boolean;

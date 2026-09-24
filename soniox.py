@@ -114,6 +114,31 @@ def transcribe(api_key: str, audio_path: str, language: str | None, diarize: boo
                 pass
 
 
+MODEL_RT = "stt-rt-v5"
+MAX_RT_SESSION_S = 18000  # потолок Soniox для max_session_duration_seconds
+
+
+def create_temporary_key(api_key: str, client_reference_id: str, max_session_s: int,
+                         expires_in_s: int = 120) -> dict:
+    """Временный ключ для живого транскрипта: браузер открывает WebSocket к Soniox
+    сам, постоянный ключ не покидает сервер. Ключ нужен только на открытие
+    соединения (expires_in_s), саму сессию ограничивает max_session_s — сюда
+    кладём остаток минут юзера, чтобы ключ нельзя было крутить бесконечно.
+    client_reference_id попадает в usage-логи Soniox (для подсчёта себестоимости)."""
+    import requests
+
+    r = requests.post(f"{API}/auth/temporary-api-key", headers={"Authorization": f"Bearer {api_key}"}, json={
+        "usage_type": "transcribe_websocket",
+        "expires_in_seconds": expires_in_s,
+        "max_session_duration_seconds": max(60, min(int(max_session_s), MAX_RT_SESSION_S)),
+        "client_reference_id": client_reference_id[:256],
+    }, timeout=15)
+    if not r.ok:
+        raise RuntimeError(f"soniox temporary key {r.status_code}: {r.text[:300]}")
+    data = r.json()
+    return {"api_key": data["api_key"], "expires_at": data.get("expires_at")}
+
+
 def build_context(terms: list[str] | None, text: str | None) -> dict | None:
     """Личный словарь → context.terms, поле «Context» юзера → context.text.
     Лимит Soniox ~10k символов на весь context — режем с запасом."""

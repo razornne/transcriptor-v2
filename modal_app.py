@@ -200,7 +200,7 @@ web_image = (
         "stripe",
         "boto3",  # S3 API клиента для архива записей в Cloudflare R2
     )
-    .add_local_python_source("app")
+    .add_local_python_source("app", "soniox")  # soniox — временные ключи живого транскрипта
     # Cutover (2026-06-14): фронт переехал на Next.js /app, GET / теперь 301-редирект.
     # templates/index.html заархивирован в legacy/ — Flask его больше не рендерит,
     # поэтому каталог templates/ не монтируется (его и нет в корне).
@@ -2330,7 +2330,7 @@ def openai_generate(prompt: str, model: str = "gpt-6-luna", max_output_tokens: i
     image=web_image,
     # stripe_secret last so its STRIPE_* values override anything stale in
     # transcriptor-secrets from earlier --force runs (test-mode keys).
-    secrets=[hf_secret, notion_secret, admin_secret, r2_secret, stripe_secret],
+    secrets=[hf_secret, soniox_secret, notion_secret, admin_secret, r2_secret, stripe_secret],
     timeout=900,                 # 15 min — почти все запросы моментальные через .spawn(),
                                  # но /api/lab/compare блокирует до завершения всех моделей
                                  # (3-5 мин cold start на A100 + до 60s генерации × N моделей)

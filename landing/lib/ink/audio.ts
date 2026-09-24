@@ -37,6 +37,9 @@ export type CaptureStats = {
 export type Recorder = {
   sessionId: string | null;
   recordingId: string;
+  /** Моно-потоки каналов для живого транскрипта (live.ts). mic переживает
+   *  переключение микрофона; call = null, если звук вкладки не расшарен. */
+  liveStreams: { mic: MediaStream; call: MediaStream | null };
   stop: () => Promise<{ blob: Blob; durationSec: number; stats: CaptureStats }>;
 };
 
@@ -115,15 +118,24 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
   const dest = ctx.createMediaStreamDestination();
   merger.connect(dest);
 
+  // micBus — постоянная точка входа микрофона: при смене устройства
+  // переподключаем только источник, всё остальное (запись, уровни, живой
+  // транскрипт) остаётся на месте.
+  const micBus = ctx.createGain();
   let micSource = ctx.createMediaStreamSource(mic);
+  micSource.connect(micBus);
   const micAnalyser = ctx.createAnalyser();
   micAnalyser.fftSize = 1024;
   const micBuf = new Float32Array(micAnalyser.fftSize);
-  micSource.connect(merger, 0, 0); // L = микрофон
-  micSource.connect(micAnalyser);
+  micBus.connect(merger, 0, 0); // L = микрофон
+  micBus.connect(micAnalyser);
+  const liveMic = ctx.createMediaStreamDestination();
+  liveMic.channelCount = 1;
+  micBus.connect(liveMic);
 
   let sysAnalyser: AnalyserNode | null = null;
   let sysBuf: Float32Array<ArrayBuffer> | null = null;
+  let liveCall: MediaStreamAudioDestinationNode | null = null;
   if (display) {
     const sysSource = ctx.createMediaStreamSource(display);
     sysAnalyser = ctx.createAnalyser();
@@ -131,6 +143,9 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
     sysBuf = new Float32Array(sysAnalyser.fftSize);
     sysSource.connect(merger, 0, 1); // R = звук вкладки/системы
     sysSource.connect(sysAnalyser);
+    liveCall = ctx.createMediaStreamDestination();
+    liveCall.channelCount = 1;
+    sysSource.connect(liveCall);
   }
 
   const startedAt = Date.now();
@@ -155,8 +170,7 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
       mic = fresh;
       micSource.disconnect();
       micSource = ctx.createMediaStreamSource(mic);
-      micSource.connect(merger, 0, 0);
-      micSource.connect(micAnalyser);
+      micSource.connect(micBus);
       old.getTracks().forEach((t) => t.stop()); // stop() не диспатчит "ended"
       watchMicTrack(fresh.getAudioTracks()[0]);
       const to = fresh.getAudioTracks()[0]?.label || "";
@@ -307,6 +321,7 @@ export async function startRecording(opts: StartRecordingOptions = {}): Promise<
   return {
     sessionId,
     recordingId,
+    liveStreams: { mic: liveMic.stream, call: liveCall?.stream ?? null },
     stop: () =>
       new Promise((resolve) => {
         rec.onstop = () => {

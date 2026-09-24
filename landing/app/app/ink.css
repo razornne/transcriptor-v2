@@ -2004,3 +2004,39 @@
 .i-rv-fixes p { margin: 0 0 2px; line-height: 1.5; }
 .i-rv-before { color: var(--i-graphite); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--i-danger) 60%, transparent); }
 .i-rv-after { color: var(--i-ink); }
+
+/* ── Live transcript (запись + пока готовится финальный транскрипт) ─────── */
+.i-live {
+  margin-top: 18px;
+  border: 1px solid var(--i-hairline); border-radius: var(--i-r-lg);
+  background: color-mix(in srgb, var(--i-surface) 88%, transparent);
+  backdrop-filter: blur(6px);
+  animation: i-fade-in .3s ease;
+}
+.i-live-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 16px; border-bottom: 1px solid var(--i-hairline);
+}
+.i-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--i-graphite); opacity: .5; flex: none; }
+.i-live-dot.on { background: var(--i-signal); opacity: 1; animation: i-pulse 1.6s ease-in-out infinite; }
+.i-live-title { font-family: var(--i-ui); font-size: 12.5px; font-weight: 600; color: var(--i-ink); }
+.i-live-state {
+  margin-left: auto; font-family: var(--i-mono); font-size: 10.5px; color: var(--i-graphite);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.i-live-box {
+  max-height: min(46vh, 420px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 6px 6px 10px;
+  scrollbar-width: thin;
+}
+.i-live-seg { padding: 8px 10px; }
+.i-live-pending { color: var(--i-graphite); }
+.i-live-empty { margin: 0; padding: 18px 10px; font-size: 13px; color: var(--i-graphite); text-align: center; }
+@media (max-width: 640px) {
+  .i-live-head { padding: 10px 12px; }
+  .i-live-box { max-height: 52vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .i-live { animation: none; }
+  .i-live-dot.on { animation: none; }
+}

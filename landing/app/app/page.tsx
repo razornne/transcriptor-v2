@@ -9,6 +9,8 @@ import { LoginScreen } from "@/components/ink/LoginScreen";
 import { ResultView, transcriptText, type Tab } from "@/components/ink/ResultView";
 import { UpgradeCard } from "@/components/ink/UpgradeCard";
 import { SettingsModal } from "@/components/ink/SettingsModal";
+import { LivePanel } from "@/components/ink/LivePanel";
+import { LiveTranscript, type LiveSegment, type LiveStatus } from "@/lib/ink/live";
 import { startRecording, probeDuration, SystemAudioMissingError, type Recorder } from "@/lib/ink/audio";
 import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
@@ -277,6 +279,8 @@ export default function InkApp() {
   const [context, setContext] = useState("");
   const [limitHit, setLimitHit] = useState(false);
   const [recover, setRecover] = useState<RecoverState | null>(null);
+  const [liveSegs, setLiveSegs] = useState<LiveSegment[]>([]);
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>("off");
   const [projects, setProjects] = useState<Project[]>([]);
 
   const [undoEntry, setUndoEntry] = useState<HistoryEntry | null>(null);
@@ -285,6 +289,7 @@ export default function InkApp() {
   const dotsRef = useRef<DotFieldHandle>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<Recorder | null>(null);
+  const liveRef = useRef<LiveTranscript | null>(null);
   const recTimerRef = useRef<number>(0);
   const levelsRef = useRef({ mic: 0, sys: 0 });
   const captureAlertRef = useRef(false); // a capture warning is on screen — don't overwrite it
@@ -398,6 +403,7 @@ export default function InkApp() {
     if (!entry) { setStatusKind("error"); setStatus("saved locally only — history insert failed"); return; }
     setEntries((prev) => [entry, ...prev]);
     setActiveId(entry.id);
+    setLiveSegs([]); // финальный транскрипт заменил предпросмотр
     setStatus("");
     phCapture("transcription_completed", { segments: segments.length, language: lang });
     void generateTitle(transcriptText(segments, {}), lang).then((t) => {
@@ -478,7 +484,7 @@ export default function InkApp() {
       }
     } catch (e) {
       if (e instanceof CancelledError) {
-        setStatus(""); if (sessionId) void idbDeleteSession(sessionId); setRecover(null);
+        setStatus(""); setLiveSegs([]); if (sessionId) void idbDeleteSession(sessionId); setRecover(null);
       } else {
         setStatusKind("error");
         setStatus(`failed: ${e instanceof Error ? e.message : e}`);
@@ -530,6 +536,12 @@ export default function InkApp() {
       setRecording(false);
       levelsRef.current = { mic: 0, sys: 0 };
       keepAliveStopRef.current?.(); keepAliveStopRef.current = null;
+      const live = liveRef.current;
+      liveRef.current = null;
+      if (live) {
+        // Досылаем хвост и ждём последние слова параллельно с остановкой записи.
+        void live.stop().then((st) => phCapture("live_transcript_stopped", { ...st }));
+      }
       if (rec) {
         const { blob, durationSec, stats } = await rec.stop();
         void cookBlob(blob, durationSec, rec.sessionId, { recordingId: rec.recordingId, source: "record" });
@@ -601,6 +613,20 @@ export default function InkApp() {
         onLevels: (mic, sys) => { levelsRef.current = { mic, sys }; },
       });
       keepAliveStopRef.current = await startKeepAlive();
+      setLiveSegs([]); setLiveStatus("connecting");
+      const rec = recorderRef.current;
+      const live = new LiveTranscript({
+        recordingId: rec.recordingId, language, context, numSpeakers: speakers,
+        mic: rec.liveStreams.mic, call: rec.liveStreams.call,
+        onUpdate: setLiveSegs,
+        onStatus: (st) => {
+          setLiveStatus(st);
+          if (st === "off") phCapture("live_transcript_unavailable");
+        },
+      });
+      liveRef.current = live;
+      live.start();
+      phCapture("live_transcript_started", { channels: rec.liveStreams.call ? 2 : 1 });
       setRecSeconds(0); setRecording(true); setActiveId(null);
       setStatus("recording — share a tab to capture call audio too");
       recTimerRef.current = window.setInterval(() => setRecSeconds((s) => s + 1), 1000);
@@ -612,10 +638,12 @@ export default function InkApp() {
       }
       setStatusKind("error"); setStatus(`microphone access failed: ${e instanceof Error ? e.message : e}`);
     }
-  }, [recording, passLimitGate, cookBlob, session]);
+  }, [recording, passLimitGate, cookBlob, session, language, context, speakers]);
 
   useEffect(() => { onRecToggleRef.current = onRecToggle; }, [onRecToggle]);
-  useEffect(() => () => { window.clearInterval(recTimerRef.current); keepAliveStopRef.current?.(); }, []);
+  useEffect(() => () => {
+    window.clearInterval(recTimerRef.current); keepAliveStopRef.current?.(); void liveRef.current?.stop();
+  }, []);
 
   // ── Undo-delete ─────────────────────────────────────────────────
   const dismissUndo = useCallback((flush = true) => {
@@ -840,6 +868,11 @@ export default function InkApp() {
                     <button type="button" className="i-cancel" onClick={onCancel}>[Cancel]</button>
                   )}
                 </div>
+
+                {/* Остаётся и после неудачной транскрипции: юзер хотя бы видит, что говорилось */}
+                {(liveSegs.length > 0 || (recording && liveStatus !== "off")) && (
+                  <LivePanel segments={liveSegs} status={liveStatus} recording={recording} cooking={cooking} />
+                )}
 
                 {limitHit && !cooking && (
                   <UpgradeCard
