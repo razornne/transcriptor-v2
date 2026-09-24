@@ -3,7 +3,7 @@
 // не горит постоянно). cpal::Stream не Send — живёт на своём потоке до stop().
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, Sample, SizedSample};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -74,6 +74,7 @@ fn build<T>(
     out_rate: u32,
     tx: UnboundedSender<Vec<i16>>,
     level: Arc<AtomicU32>,
+    got: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample,
@@ -95,6 +96,7 @@ where
                 let frames = (data.len() / channels.max(1)).max(1);
                 level.store((sq / frames as f32).sqrt().to_bits(), Ordering::Relaxed);
                 if !out.is_empty() {
+                    got.store(true, Ordering::Relaxed);
                     let _ = tx.send(out);
                 }
             },
@@ -108,7 +110,7 @@ type Pick = Box<dyn FnOnce() -> Result<(cpal::Device, cpal::SupportedStreamConfi
 
 /// Открывает поток (микрофон или loopback) и шлёт куски PCM 16 кГц в `tx`.
 /// Когда Capture остановлен, поток дропается вместе с `tx` — получатель видит конец аудио.
-fn open(pick: Pick, tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Result<Capture, String> {
+fn open(pick: Pick, tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>, got: Arc<AtomicBool>) -> Result<Capture, String> {
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(u32, String), String>>();
     std::thread::Builder::new()
@@ -121,10 +123,10 @@ fn open(pick: Pick, tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Res
                 let config: cpal::StreamConfig = supported.into();
                 let out_rate = TARGET_RATE.min(config.sample_rate.0);
                 let stream = match format {
-                    cpal::SampleFormat::F32 => build::<f32>(&device, &config, out_rate, tx, level),
-                    cpal::SampleFormat::I16 => build::<i16>(&device, &config, out_rate, tx, level),
-                    cpal::SampleFormat::U16 => build::<u16>(&device, &config, out_rate, tx, level),
-                    cpal::SampleFormat::I32 => build::<i32>(&device, &config, out_rate, tx, level),
+                    cpal::SampleFormat::F32 => build::<f32>(&device, &config, out_rate, tx, level, got),
+                    cpal::SampleFormat::I16 => build::<i16>(&device, &config, out_rate, tx, level, got),
+                    cpal::SampleFormat::U16 => build::<u16>(&device, &config, out_rate, tx, level, got),
+                    cpal::SampleFormat::I32 => build::<i32>(&device, &config, out_rate, tx, level, got),
                     f => Err(format!("unsupported sample format {f:?}")),
                 }?;
                 stream.play().map_err(|e| e.to_string())?;
@@ -149,7 +151,12 @@ fn open(pick: Pick, tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Res
 }
 
 /// Микрофон (выбранный в настройках или системный по умолчанию).
-pub fn start(mic: Option<String>, tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Result<Capture, String> {
+pub fn start(
+    mic: Option<String>,
+    tx: UnboundedSender<Vec<i16>>,
+    level: Arc<AtomicU32>,
+    got: Arc<AtomicBool>,
+) -> Result<Capture, String> {
     open(
         Box::new(move || {
             let device = pick_device(mic.as_deref()).ok_or("no microphone found")?;
@@ -158,6 +165,7 @@ pub fn start(mic: Option<String>, tx: UnboundedSender<Vec<i16>>, level: Arc<Atom
         }),
         tx,
         level,
+        got,
     )
 }
 
@@ -173,6 +181,7 @@ pub fn start_loopback(tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> R
         }),
         tx,
         level,
+        Arc::new(AtomicBool::new(false)),
     )
 }
 

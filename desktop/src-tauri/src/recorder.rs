@@ -149,7 +149,7 @@ pub fn start(base: &Path, mic: Option<String>) -> Result<Recording, String> {
     let mic_level = Arc::new(AtomicU32::new(0));
     let sys_level = Arc::new(AtomicU32::new(0));
 
-    let mic_cap = audio::start(mic, mic_tx, mic_level.clone()).map_err(|e| format!("Microphone problem: {e}"))?;
+    let mic_cap = audio::start(mic, mic_tx, mic_level.clone(), Arc::new(AtomicBool::new(false))).map_err(|e| format!("Microphone problem: {e}"))?;
     let sys_cap = match audio::start_loopback(sys_tx, sys_level.clone()) {
         Ok(c) => Some(c),
         Err(e) => {

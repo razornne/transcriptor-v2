@@ -9,6 +9,7 @@ mod dictation;
 mod hotkey;
 #[macro_use]
 mod log;
+mod mic;
 mod overlay;
 mod paste;
 mod recorder;
@@ -251,9 +252,16 @@ async fn sign_out(app: AppHandle, state: State<'_, AppStateArc>) -> Result<(), S
 
 #[tauri::command]
 async fn save_settings(app: AppHandle, state: State<'_, AppStateArc>, settings: Settings) -> Result<(), String> {
+    // Шорткат меняется только через capture/reset_hotkey: окно держит копию
+    // настроек, снятую до смены, и иначе затирало новый шорткат старым.
+    let mut settings = settings;
+    settings.hotkey = state.settings().hotkey;
     let lang_changed = state.settings().language != settings.language;
     state.store.save_settings(&settings);
     apply_autostart(&app, settings.autostart);
+    overlay::set_bar(&app, settings.show_bar);
+    let (warm, mic_name) = (settings.instant_start, settings.mic.clone());
+    std::thread::spawn(move || mic::set_warm(warm, mic_name)); // открытие устройства — не в UI-потоке
     *state.settings.lock().unwrap() = settings;
     if lang_changed {
         api::forget_token(&state).await; // language_hints зашиты в ключ
@@ -350,10 +358,14 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
-            overlay::setup(app.handle());
+            overlay::setup(app.handle(), state.settings().show_bar);
             build_tray(app, state.clone())?;
 
             let settings = state.settings();
+            if settings.instant_start {
+                let m = settings.mic.clone();
+                std::thread::spawn(move || mic::set_warm(true, m));
+            }
             let keys = if hotkey::validate(&settings.hotkey).is_ok() { settings.hotkey.clone() } else { hotkey::DEFAULT_HOTKEY.to_vec() };
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             hotkey::start(tx, &keys);
@@ -378,9 +390,15 @@ pub fn run() {
             if std::env::var_os("SKRIPTLY_DEMO_OVERLAY").is_some() {
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                    overlay::emit(&h, "listening", "Давай встретимся в четверг и обсудим ", "бюджет на рекламу");
+                    // покой (1.2 с, overlay::setup) → «готовлюсь» (5 с) → запись (8 с) → покой (11 с)
+                    tokio::time::sleep(std::time::Duration::from_millis(5000)).await;
+                    overlay::emit(&h, "arming", "", "");
                     let _ = overlay::show(&h);
+                    tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                    overlay::emit(&h, "listening", "", "");
+                    overlay::level(&h, 0.05);
+                    tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                    overlay::rest(&h);
                 });
             }
             Ok(())

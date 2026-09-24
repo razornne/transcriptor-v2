@@ -14,6 +14,10 @@ pub struct Settings {
     pub autostart: bool,
     /// Сочетание для диктовки — виртуальные коды клавиш (hotkey.rs), по умолчанию Ctrl+Win.
     pub hotkey: Vec<u16>,
+    /// Капсула диктовки всегда видна внизу экрана (как у Wispr Flow).
+    pub show_bar: bool,
+    /// Микрофон держится открытым: диктовка стартует мгновенно, с 0.5 с «до нажатия».
+    pub instant_start: bool,
 }
 
 impl Default for Settings {
@@ -24,6 +28,8 @@ impl Default for Settings {
             mic: None,
             autostart: true,
             hotkey: crate::hotkey::DEFAULT_HOTKEY.to_vec(),
+            show_bar: true,
+            instant_start: false,
         }
     }
 }

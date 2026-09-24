@@ -11,8 +11,8 @@
 use crate::api::{self, ApiError};
 use crate::hotkey::{HotkeyEvent, ACTIVE};
 use crate::state::AppState;
-use crate::{audio, overlay, paste, stt};
-use std::sync::atomic::{AtomicU32, Ordering};
+use crate::{mic, overlay, paste, stt};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -36,7 +36,7 @@ enum Mode {
 }
 
 struct Active {
-    capture: Option<audio::Capture>,
+    capture: Option<mic::Session>,
     stt: JoinHandle<Result<stt::Result_, String>>,
     meter: JoinHandle<()>,
     started: Instant,
@@ -116,14 +116,17 @@ async fn start(app: &AppHandle, state: &Arc<AppState>) -> Result<Active, String>
         return Err(ApiError::NotSignedIn.user_message());
     }
     let settings = state.settings();
+    let pressed = Instant::now();
     let (tx, rx) = unbounded_channel::<Vec<i16>>();
-    let level = Arc::new(AtomicU32::new(0));
-    let capture = audio::start(settings.mic.clone(), tx, level.clone()).map_err(|e| {
+    let capture = mic::open(settings.mic.clone(), tx).map_err(|e| {
         crate::log!("[audio] {e}");
         format!("Microphone problem: {e}")
     })?;
     ACTIVE.store(true, Ordering::SeqCst);
-    overlay::emit(app, "listening", "", "");
+    // «arming» — микрофон ещё не отдал звук (BT-гарнитура переключается в режим
+    // звонка); красная точка загорается, только когда звук реально пошёл.
+    let ready = capture.got_audio.load(Ordering::Relaxed);
+    overlay::emit(app, if ready { "listening" } else { "arming" }, "", "");
     let _ = overlay::show(app);
 
     let rate = capture.rate;
@@ -146,14 +149,21 @@ async fn start(app: &AppHandle, state: &Arc<AppState>) -> Result<Active, String>
     });
 
     let a = app.clone();
+    let (level, got) = (capture.level.clone(), capture.got_audio.clone());
     let meter = tauri::async_runtime::spawn(async move {
         let mut t = tokio::time::interval(Duration::from_millis(60));
+        let mut armed = ready;
         loop {
             t.tick().await;
+            if !armed && got.load(Ordering::Relaxed) {
+                armed = true;
+                crate::log!("[dictation] first audio {} ms after the shortcut", pressed.elapsed().as_millis());
+                overlay::emit(&a, "listening", "", "");
+            }
             overlay::level(&a, f32::from_bits(level.load(Ordering::Relaxed)));
         }
     });
-    crate::log!("[dictation] start mic='{}' rate={rate}", capture.device);
+    crate::log!("[dictation] start mic='{}' rate={rate} instant={}", capture.device, mic::is_warm());
     Ok(Active { capture: Some(capture), stt, meter, started: Instant::now() })
 }
 
@@ -166,7 +176,7 @@ fn cancel(app: &AppHandle, active: Option<Active>) {
         a.meter.abort();
     }
     ACTIVE.store(false, Ordering::SeqCst);
-    overlay::hide(app);
+    overlay::rest(app);
 }
 
 fn flash(app: &AppHandle, state: &str, text: &str, ms: u64) {
@@ -175,7 +185,7 @@ fn flash(app: &AppHandle, state: &str, text: &str, ms: u64) {
     let a = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(ms)).await;
-        overlay::hide_if(&a, gen);
+        overlay::rest_if(&a, gen);
     });
 }
 

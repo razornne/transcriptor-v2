@@ -1,25 +1,36 @@
-// Плашка диктовки внизу экрана. Не должна забирать фокус у приложения, куда
-// вставляем текст, и не должна ловить клики: WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-// показ через SetWindowPos(SWP_NOACTIVATE). Появляется на мониторе активного окна.
+// Плашка диктовки внизу экрана. В покое (настройка «Show dictation bar») — маленькая
+// капсула, как у Wispr Flow; на диктовке раскрывается в анимацию записи и
+// переезжает на монитор активного окна. Не забирает фокус у приложения, куда
+// вставляем текст, и не ловит клики: WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+// показ через SetWindowPos(SWP_NOACTIVATE). Поверх полноэкранного окна
+// (видео, игра, презентация) капсула покоя прячется.
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_TOPMOST,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    GetClassNameW, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 
 const LABEL: &str = "overlay";
 
-/// Каждый показ — новое «поколение»: отложенное скрытие от прошлой диктовки
-/// не должно спрятать плашку новой.
+/// Каждый показ — новое «поколение»: отложенный возврат в покой от прошлой
+/// диктовки не должен свернуть плашку новой.
 static GEN: AtomicU64 = AtomicU64::new(0);
+/// Настройка «Show dictation bar».
+static BAR: AtomicBool = AtomicBool::new(true);
+/// Плашка сейчас раскрыта (диктовка/сообщение) — вотчер полноэкранности её не трогает.
+static BUSY: AtomicBool = AtomicBool::new(false);
+/// Видна ли сейчас капсула покоя (чтобы не дёргать окно каждую секунду).
+static RESTING_SHOWN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Clone)]
 pub struct OverlayState<'a> {
-    /// listening | handsfree | finishing | polishing | done | empty | error
+    /// idle | arming | listening | handsfree | finishing | polishing | done | empty | error | hidden
     pub state: &'a str,
     pub text: &'a str,
     pub pending: &'a str,
@@ -31,7 +42,7 @@ fn hwnd(app: &AppHandle) -> Option<HWND> {
     Some(HWND(h.0 as _))
 }
 
-pub fn setup(app: &AppHandle) {
+pub fn setup(app: &AppHandle, bar: bool) {
     if let Some(h) = hwnd(app) {
         unsafe {
             let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
@@ -39,41 +50,136 @@ pub fn setup(app: &AppHandle) {
             SetWindowLongPtrW(h, GWL_EXSTYLE, ex | add);
         }
     }
+    BAR.store(bar, Ordering::SeqCst);
+    let a = app.clone();
+    // Страница плашки грузится асинхронно — капсулу покоя показываем чуть позже.
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        rest(&a);
+    });
+    let a = app.clone();
+    std::thread::Builder::new()
+        .name("skriptly-bar".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(1000));
+            watch(&a);
+        })
+        .expect("bar thread");
 }
 
-pub fn show(app: &AppHandle) -> u64 {
-    let gen = GEN.fetch_add(1, Ordering::SeqCst) + 1;
-    let Some(h) = hwnd(app) else { return gen };
-    let Some(w) = app.get_webview_window(LABEL) else { return gen };
+/// Раз в секунду: капсула покоя прячется над полноэкранным окном и возвращается после.
+fn watch(app: &AppHandle) {
+    if !BAR.load(Ordering::SeqCst) || BUSY.load(Ordering::SeqCst) {
+        return;
+    }
+    let full = foreground_is_fullscreen();
+    let shown = RESTING_SHOWN.load(Ordering::SeqCst);
+    if full && shown {
+        raw_hide(app);
+        RESTING_SHOWN.store(false, Ordering::SeqCst);
+    } else if !full && !shown {
+        emit(app, "idle", "", "");
+        place(app);
+        RESTING_SHOWN.store(true, Ordering::SeqCst);
+    } else if !full {
+        // Другие topmost-окна могли перекрыть — возвращаем наверх, не двигая.
+        if let Some(h) = hwnd(app) {
+            unsafe {
+                let _ = SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
+        }
+    }
+}
+
+fn foreground_is_fullscreen() -> bool {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return false;
+        }
+        let mut class = [0u16; 64];
+        let n = GetClassNameW(fg, &mut class) as usize;
+        let class = String::from_utf16_lossy(&class[..n]);
+        if class == "Progman" || class == "WorkerW" || class == "Shell_TrayWnd" {
+            return false; // рабочий стол/панель задач
+        }
+        let mut r = RECT::default();
+        if GetWindowRect(fg, &mut r).is_err() {
+            return false;
+        }
+        let mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(mon, &mut info).as_bool() {
+            return false;
+        }
+        let m = info.rcMonitor;
+        r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
+    }
+}
+
+/// Внизу по центру рабочей области монитора активного окна, поверх всех, без фокуса.
+fn place(app: &AppHandle) {
+    let Some(h) = hwnd(app) else { return };
+    let Some(w) = app.get_webview_window(LABEL) else { return };
     let size = w.outer_size().unwrap_or(tauri::PhysicalSize::new(460, 64));
     unsafe {
         let fg = GetForegroundWindow();
         let mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-        let work: RECT = if GetMonitorInfoW(mon, &mut info).as_bool() { info.rcWork } else { RECT { left: 0, top: 0, right: 1920, bottom: 1040 } };
+        let work: RECT = if GetMonitorInfoW(mon, &mut info).as_bool() {
+            info.rcWork
+        } else {
+            RECT { left: 0, top: 0, right: 1920, bottom: 1040 }
+        };
         let scale = w.scale_factor().unwrap_or(1.0);
         let x = work.left + ((work.right - work.left) - size.width as i32) / 2;
-        let y = work.bottom - size.height as i32 - (28.0 * scale) as i32;
+        let y = work.bottom - size.height as i32 - (6.0 * scale) as i32;
         let _ = SetWindowPos(h, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
-    gen
 }
 
-/// Скрыть, только если с тех пор плашку не показали заново.
-pub fn hide_if(app: &AppHandle, gen: u64) {
-    if GEN.load(Ordering::SeqCst) == gen {
-        hide(app);
-    }
-}
-
-/// Прячем тем же WinAPI, что и показываем: Tauri не знает, что окно показано
-/// через SetWindowPos, и его hide() на «уже скрытом» окне ничего не делает.
-pub fn hide(app: &AppHandle) {
-    emit(app, "hidden", "", "");
+fn raw_hide(app: &AppHandle) {
     if let Some(h) = hwnd(app) {
         unsafe {
             let _ = ShowWindow(h, SW_HIDE);
         }
+    }
+}
+
+/// Раскрыть плашку (диктовка, сообщение). Возвращает «поколение» для rest_if.
+pub fn show(app: &AppHandle) -> u64 {
+    let gen = GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    BUSY.store(true, Ordering::SeqCst);
+    place(app);
+    RESTING_SHOWN.store(false, Ordering::SeqCst);
+    gen
+}
+
+/// Вернуться в покой: капсула (если включена и нет полноэкранного окна) или скрыть совсем.
+pub fn rest(app: &AppHandle) {
+    BUSY.store(false, Ordering::SeqCst);
+    if BAR.load(Ordering::SeqCst) && !foreground_is_fullscreen() {
+        emit(app, "idle", "", "");
+        place(app);
+        RESTING_SHOWN.store(true, Ordering::SeqCst);
+    } else {
+        emit(app, "hidden", "", "");
+        raw_hide(app);
+        RESTING_SHOWN.store(false, Ordering::SeqCst);
+    }
+}
+
+/// В покой, только если с тех пор плашку не раскрыли заново.
+pub fn rest_if(app: &AppHandle, gen: u64) {
+    if GEN.load(Ordering::SeqCst) == gen {
+        rest(app);
+    }
+}
+
+pub fn set_bar(app: &AppHandle, on: bool) {
+    BAR.store(on, Ordering::SeqCst);
+    if !BUSY.load(Ordering::SeqCst) {
+        rest(app);
     }
 }
 

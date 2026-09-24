@@ -227,7 +227,16 @@ soniox_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
     .pip_install("soundfile", "numpy", "requests")
-    .add_local_python_source("merger", "channels", "soniox")
+    .add_local_python_source("merger", "channels", "soniox", "speakers")
+)
+
+# CPU-образ голосовых эмбеддингов для переразметки спикеров Soniox (speakers.py).
+# Только wespeaker (без Whisper/Qwen) — холодный старт секунды, не минута как у GPU.
+embed_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg")
+    .pip_install("torch", "torchaudio", index_url="https://download.pytorch.org/whl/cpu")
+    .pip_install("pyannote.audio", "soundfile", "numpy")
 )
 
 # Длина чанка для длинных записей (сек). 1200 = 20 мин — базовая цель;
@@ -2234,6 +2243,8 @@ def transcribe_soniox(
             mic = soniox.words_to_segments(words[0])
             call = soniox.words_to_segments(words[1])
             mic = drop_echo(mic, call)
+            if num_speakers and num_speakers > 2:
+                call = _voice_relabel(tracks[1], call, num_speakers - 1, first_index=1)
             if num_speakers == 1:
                 merged = interleave(label(mic, "SPEAKER_00"), label(call, "SPEAKER_00"))
             else:
@@ -2242,6 +2253,8 @@ def transcribe_soniox(
             segs = soniox.words_to_segments(words[0])
             if num_speakers == 1:
                 segs = [{**s, "speaker": "SPEAKER_00"} for s in segs]
+            elif num_speakers:
+                segs = _voice_relabel(tracks[0], segs, num_speakers, first_index=0)
             merged = interleave(strip_words(relabel(segs)))
         pp.done("diarization")
 
@@ -2271,6 +2284,88 @@ def transcribe_soniox(
                 os.remove(p)
             except OSError:
                 pass
+
+
+@app.cls(
+    image=embed_image,
+    cpu=8.0,
+    memory=4096,
+    secrets=[hf_secret],
+    volumes={MODELS_DIR: volume},
+    timeout=900,
+    scaledown_window=60,
+)
+class SpeakerEmbedder:
+    """Эмбеддинги голоса (wespeaker, как в GPU-пайплайне) для реплик одной дорожки.
+    ~0.2 с на реплику на CPU: часовой звонок (~300 реплик) — меньше минуты."""
+
+    @modal.enter()
+    def load(self):
+        import torch
+        from pyannote.audio import Inference, Model
+
+        torch.set_num_threads(8)
+        name = os.environ.get("EMBEDDING_MODEL", "pyannote/wespeaker-voxceleb-resnet34-LM")
+        model = Model.from_pretrained(name, token=os.environ["HF_TOKEN"], cache_dir=f"{MODELS_DIR}/pyannote")
+        self.inference = Inference(model, window="whole", device=torch.device("cpu"))
+
+    @modal.method()
+    def embed(self, audio_bytes: bytes, spans: list) -> list:
+        """spans: [(start, end) | None] → [вектор | None]. Аудио — любой формат ffmpeg."""
+        import numpy as np
+        import soundfile as sf
+        import torch
+
+        src, wav = _tmp_path(".bin"), _tmp_path(".wav")
+        try:
+            with open(src, "wb") as f:
+                f.write(audio_bytes)
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", src, "-ac", "1", "-ar", "16000", wav], check=True)
+            audio, sr = sf.read(wav, dtype="float32")
+        finally:
+            for p in (src, wav):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        out = []
+        for span in spans:
+            if not span:
+                out.append(None)
+                continue
+            a, b = int(span[0] * sr), int(span[1] * sr)
+            chunk = audio[a:b]
+            if len(chunk) < sr // 2:
+                out.append(None)
+                continue
+            v = self.inference({"waveform": torch.from_numpy(chunk).unsqueeze(0), "sample_rate": sr})
+            out.append([float(x) for x in np.asarray(v).reshape(-1)])
+        return out
+
+
+def _voice_relabel(track_path: str, segs: list[dict], k: int | None, first_index: int) -> list[dict]:
+    """Soniox путает похожие голоса (звонок 24.09: двое под одной меткой, третий
+    расщеплён). Если юзер задал число спикеров — переразмечаем реплики дорожки
+    по голосу ровно на k (speakers.relabel). Любой сбой — метки Soniox как есть."""
+    import speakers
+
+    if not k or k < 2 or len(segs) < 2 * k:
+        return segs
+    try:
+        spans = []
+        for s in segs:
+            a, b = float(s["start"]), float(s["end"])
+            spans.append((a, min(b, a + speakers.MAX_EMBED_S)) if b - a >= speakers.MIN_EMBED_S else None)
+        with open(track_path, "rb") as f:
+            audio = f.read()
+        t0 = time.time()
+        embs = SpeakerEmbedder().embed.remote(audio, spans)
+        labels, info = speakers.relabel(segs, embs, k, first_index)
+        print(f"[speakers] voice relabel k={k}: {info} in {time.time() - t0:.1f}s", flush=True)
+        return [{**s, "speaker": lab} for s, lab in zip(segs, labels)]
+    except Exception as e:
+        print(f"[speakers] voice relabel failed, keeping Soniox labels: {e}", flush=True)
+        return segs
 
 
 @app.function(

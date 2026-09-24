@@ -8,15 +8,28 @@
        Всегда тёмная — читается поверх любого окна. */
     html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
     body { display: grid; place-items: center; font: 13px/1 "Segoe UI Variable Text", "Segoe UI", sans-serif; user-select: none; }
+    /* Размеры задаём явно по состояниям — так ширина/высота анимируются
+       (капсула покоя «раскрывается» в плашку записи и обратно). */
     .pill {
       position: relative; display: flex; align-items: center; justify-content: center; gap: 10px;
-      height: 38px; min-width: 112px; padding: 0 16px; border-radius: 19px;
+      width: 128px; height: 38px; padding: 0 16px; border-radius: 19px; overflow: hidden;
       background: rgba(16, 15, 12, 0.92); color: #F2EFE7;
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.30), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
       opacity: 0; transform: translateY(8px) scale(.94);
-      transition: opacity .18s ease, transform .22s cubic-bezier(.2, .9, .3, 1.2), min-width .25s ease;
+      transition: opacity .18s ease, transform .22s cubic-bezier(.2, .9, .3, 1.2),
+        width .32s cubic-bezier(.2, .9, .3, 1.1), height .32s cubic-bezier(.2, .9, .3, 1.1),
+        padding .32s ease, background .25s ease, box-shadow .25s ease;
     }
     .pill.on { opacity: 1; transform: none; }
+    .pill.lock { width: 150px; }
+    .pill.busy { width: 108px; }
+    .pill.done { width: 52px; }
+    .pill.msgw { width: auto; max-width: 452px; }
+    /* Покой: тонкая капсула с белой обводкой, всегда внизу экрана */
+    .pill.idle { width: 44px; height: 9px; padding: 0; border-radius: 6px; background: rgba(16, 15, 12, 0.72);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), inset 0 0 0 1.5px rgba(242, 239, 231, 0.55); }
+    .pill.idle > * { display: none !important; }
+    .pill.arming .dot { background: #8C877B; animation: none; }
     .pill.out { opacity: 0; transform: translateY(4px) scale(.96); transition: opacity .25s ease, transform .25s ease; }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: #F0593A; flex: none; box-shadow: 0 0 0 0 rgba(240, 89, 58, .5); }
     .pill.rec .dot { animation: ping 1.6s ease-out infinite; }
@@ -83,7 +96,8 @@
           h = 2.5 + breath * 2.5 * (0.4 + 0.6 * center) + voice * 17;
         }
         h = Math.min(20, h);
-        ctx.globalAlpha = mode === "busy" ? 0.55 + 0.45 * Math.sin(phase * 1.6 - i * 0.55) ** 2 : 0.92;
+        const dim = pill.classList.contains("arming") ? 0.45 : 0.92; // микрофон ещё не отдал звук
+        ctx.globalAlpha = mode === "busy" ? 0.55 + 0.45 * Math.sin(phase * 1.6 - i * 0.55) ** 2 : dim;
         ctx.beginPath();
         ctx.roundRect(x - 1.25, 11 - h / 2, 2.5, h, 1.25);
         ctx.fill();
@@ -112,35 +126,49 @@
       pill.classList.add("on");
     }
 
+    const SHAPES = ["idle", "rec", "arming", "lock", "busy", "done", "msgw"];
+    function shape(...cls) {
+      pill.classList.remove(...SHAPES);
+      pill.classList.add(...cls);
+    }
+
     function reset() {
-      pill.classList.remove("on", "out", "rec"); stopWave(); handsfree = false; level = target = 0;
+      pill.classList.remove("on", "out", ...SHAPES); stopWave(); handsfree = false; level = target = 0;
     }
 
     listen("overlay", ({ payload: p }) => {
       if (p.state === "hidden") { reset(); return; } // окно прячет Rust — не крутим анимацию впустую
       reveal();
       switch (p.state) {
+        case "idle":
+          stopWave(); handsfree = false; level = target = 0;
+          shape("idle");
+          break;
+        case "arming":
         case "listening":
         case "handsfree":
           if (p.state === "handsfree") handsfree = true;
-          mode = "rec"; pill.classList.add("rec");
+          mode = "rec";
+          shape("rec", ...(p.state === "arming" ? ["arming"] : []), ...(handsfree ? ["lock"] : []));
           show({ dot: true, wave: true, lock: handsfree });
           startWave();
           break;
         case "finishing":
         case "polishing":
-          mode = "busy"; pill.classList.remove("rec"); target = 0;
+          mode = "busy"; target = 0;
+          shape("busy");
           show({ wave: true, lock: false });
           startWave();
           break;
         case "done":
-          handsfree = false; stopWave(); pill.classList.remove("rec");
+          handsfree = false; stopWave();
+          shape("done");
           show({ check: true });
-          outTimer = setTimeout(() => pill.classList.add("out"), 380); // плавно гаснет до скрытия окна
           break;
         case "empty":
         case "error":
-          handsfree = false; stopWave(); pill.classList.remove("rec");
+          handsfree = false; stopWave();
+          shape("msgw");
           $("msg").textContent = p.text || (p.state === "empty" ? "Didn't catch that" : "Something went wrong");
           $("msg").className = "msg" + (p.state === "error" ? " err" : "");
           show({ msg: true });

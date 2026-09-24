@@ -20,6 +20,7 @@ Tauri 2 app: the Rust side does the work, `ui/` is two static pages (settings wi
 | Sign-in | `src-tauri/src/auth.rs` — system browser + PKCE, loopback `http://127.0.0.1:53682/callback`; the app gets its own Supabase session |
 | Pill overlay | `src-tauri/src/overlay.rs` + `ui/overlay.html` — animation only (no words), never takes focus, click-through |
 | Shortcut | `hotkey.rs`: 1–3 keys; in multi-key combos left/right modifiers are equal, a single key is side-exact (Right Alt); "Change" records the next combo in the hook |
+| Dictation bar / instant start | `overlay.rs` idle pill (hidden over full-screen windows); `mic.rs` keeps the mic open with 0.5 s pre-roll when "Instant start" is on |
 | Call recording | `recorder.rs` (mixer on wall clock — loopback sends nothing during silence; WAV on disk, flushed every 5 s, survives crashes; Ogg Vorbis ~22 MB/h) + `calls.rs` (upload → poll job → insert into `transcripts` → LLM title) |
 
 Settings/session live in `%APPDATA%\io.skriptly.desktop\` (`settings.json`, `session.json`, `skriptly.log`).

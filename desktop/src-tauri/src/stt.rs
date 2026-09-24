@@ -42,6 +42,9 @@ pub async fn run(
         "sample_rate": sample_rate,
         "num_channels": 1,
         "language_hints": token.language_hints,
+        // Язык выбран явно → строго он: иначе подсказка лишь «склоняет» модель, и
+        // русскую речь с украинскими словами она записывала по-украински.
+        "language_hints_strict": !token.language_hints.is_empty(),
         "enable_language_identification": true,
         "enable_endpoint_detection": false,
     });
