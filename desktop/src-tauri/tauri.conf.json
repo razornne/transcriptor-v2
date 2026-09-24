@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Skriptly",
+  "version": "0.1.0",
+  "identifier": "io.skriptly.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Skriptly",
+        "url": "index.html",
+        "width": 420,
+        "height": 600,
+        "resizable": false,
+        "maximizable": false,
+        "visible": false,
+        "center": true
+      },
+      {
+        "label": "overlay",
+        "title": "Skriptly dictation",
+        "url": "overlay.html",
+        "width": 460,
+        "height": 64,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

@@ -1,0 +1,46 @@
+[package]
+name = "skriptly"
+version = "0.1.0"
+description = "Skriptly — voice dictation for Windows"
+edition = "2021"
+
+[lib]
+name = "skriptly_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time", "macros", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+cpal = "0.15"
+arboard = "3"
+tiny_http = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+urlencoding = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_LibraryLoader",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

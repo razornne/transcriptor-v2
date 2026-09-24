@@ -143,6 +143,7 @@ Supabase Postgres
 - **`011_capture_stats.sql`** — `public.capture_stats`: телеметрия захвата на каждую запись (есть ли звук вкладки, уровни, секунды тишины по каналам, отвалы/переключения микрофона в `events` JSONB, браузер/ОС). `recording_id` — связь с сохранённым аудио того же звонка. Пишется с клиента после Stop.
 - **`012_recordings.sql`** — `public.recordings`: индекс архива аудио в Cloudflare R2 (`storage_key`), метаданные записи, **сырой** результат пайплайна (`segments`, до правок юзера) или `error`. `id` = `recording_id` (= `capture_stats.recording_id`). Только service role (RLS без политик).
 - **`013_recordings_corrections.sql`** — `recordings.corrections` (что поменяла LLM-коррекция) + `recordings.channel_mode`.
+- **`015_dictation_usage.sql`** — `user_profiles.dictation_seconds_pending/total` + RPC `add_dictation_seconds(p_user_id, p_secs)` (только service role): секунды диктовки копятся, каждые полные 60 с уходят в `minutes_used`.
 - **`014_user_emails.sql`** — email рядом с id для чтения таблиц в дашборде: `user_profiles/transcripts/capture_stats.user_email`, `workspaces.owner_email`. Заполняет триггер `fill_user_email` из `auth.users` (клиент не подделает), `sync_user_email` на `auth.users` обновляет копии при смене email. Приложение эти колонки не читает.
 
 ### STT: Soniox — основной путь (с 2026-09-24)
@@ -160,6 +161,13 @@ Supabase Postgres
 - Эхо собеседника в микрофоне режется на клиенте (`dropEcho`): как `channels.drop_echo` + вырезание фраз эха (≥2 совпавших слов подряд) внутри реплик.
 - Обрыв → новый ключ, новый MediaRecorder, до 5 неудачных попыток подряд, потом `off`. 402/403/503 от `/api/live/token` = не повторять (Privacy Mode → 403: звук не должен уходить третьим лицам). Выключатель: env `LIVE_TRANSCRIPT=off` на flask_app.
 - Стоимость: Soniox RT биллит длительность потока — $0.12/ч на сессию, т.е. до $0.24/ч при стерео, поверх $0.10/ч batch. PostHog: `live_transcript_started` / `_unavailable` / `_stopped {reconnects, words, channels, status}`.
+
+### Диктовка — приложение для Windows (`desktop/`, с 2026-09-24)
+- Tauri 2 (Rust + два статичных HTML в `desktop/ui/`), живёт в трее. **Держишь Ctrl+Win — говоришь — отпустил → текст вставлен в активное окно.** Двойной тап — hands-free (ещё раз Ctrl+Win — закончить), Esc — отмена, Ctrl+Win+другая клавиша (системные шорткаты) — отмена. Подробности и сборка — `desktop/README.md`.
+- Звук идёт **из приложения прямо в Soniox** (`stt-rt-v5`, pcm_s16le 16 кГц) по временному ключу `/api/live/token` с `purpose=dictation` (ключ живёт час и кэшируется — диктовка не ждёт холодный старт Flask). Бэкенд видит только: `POST /api/dictation/usage {seconds}` (→ RPC `add_dictation_seconds`, миграция 015: секунды копятся и по 60 уходят в общий `minutes_used`) и `POST /api/dictation/cleanup {text}` (переключатель «Polish with AI»: Gemini 2.5 Flash прямо из Flask, `thinkingBudget=0`, ~0.5–1 с; убирает паразиты и применяет самоисправления, словарь юзера как термины; модель ответила/перевела вместо чистки → `_cleanup_is_sane` вернёт исходный текст). Privacy Mode: ключ не выдаётся (403), чистки нет.
+- Вход: системный браузер + PKCE, loopback `http://127.0.0.1:53682/callback` — **должен быть в Supabase Auth → Redirect URLs**. У приложения своя сессия Supabase (не общая с вебом).
+- Gotchas: хук `WH_KEYBOARD_LL` игнорирует синтетические нажатия (LLKHF_INJECTED) — автотестом хоткей не нажать; отпускание Win глотается и перевбрасывается после `vkE8`, иначе открывается «Пуск». Плашка — `WS_EX_NOACTIVATE|WS_EX_TRANSPARENT`, показ через `SetWindowPos(SWP_NOACTIVATE)`: фокус не уходит из приложения, куда вставляем. Состояние Tauri регистрируется на билдере, а не в `setup()` — окна из конфига грузятся раньше setup. Вставка: буфер обмена + Ctrl+V после отпускания модификаторов (Win+Ctrl+V = системная панель звука), старый буфер (текст/картинка) возвращается.
+- Установщик неподписанный (NSIS, per-user) — для своих; SmartScreen: «Подробнее» → «Выполнить в любом случае». Тесты: `cargo test` (ресемплер), `cargo test -- --ignored` (живой прогон stt.rs против Soniox с `SKRIPTLY_TEST_KEY`/`SKRIPTLY_TEST_PCM`).
 
 ### Двухканальные записи (L = микрофон, R = звонок)
 - `_prepare_audio` (modal_app.py) декодирует запись в 16k стерео и по `channels.ChannelStats` решает: `dual` (каналы разные → два wav), `left_only`/`right_only` (звучит один канал → он), `mono` (моно-файл или dual-mono → даунмикс как раньше). Моно-путь не изменился.
@@ -866,6 +874,7 @@ git push origin main  # Vercel сразу собирает и катит на sk
 - `migrations/012_recordings.sql` — recordings (индекс архива аудио в R2)
 - `migrations/013_recordings_corrections.sql` — recordings.corrections + channel_mode
 - `migrations/014_user_emails.sql` — email-колонки рядом с user_id (триггеры из auth.users)
+- `migrations/015_dictation_usage.sql` — учёт секунд диктовки (Windows-приложение) в общем лимите
 
 Миграции **не идемпотентны через какой-то фреймворк** — каждая написана с `IF NOT EXISTS` чтобы безопасно перезапустить, но фиксить руками тоже окей.
 

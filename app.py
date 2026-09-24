@@ -3428,7 +3428,9 @@ def live_token_endpoint():
     предпросмотр: финальный транскрипт после Stop по-прежнему делает
     /api/transcribe, минуты списываются там же (здесь не списываем).
 
-    Body (JSON): recording_id — связь с архивом записи и usage-логами Soniox.
+    Body (JSON): recording_id — связь с архивом записи и usage-логами Soniox;
+      purpose="dictation" — Windows-приложение: ключ живёт час и переиспользуется
+      на много коротких диктовок (не ждать сервер на каждом нажатии клавиши).
     Returns: {api_key, expires_at, model, language_hints, context, diarize, max_session_s}
       403 {live_disabled} — Privacy Mode (звук не должен уходить третьим лицам)
       402 — минуты кончились
@@ -3448,6 +3450,7 @@ def live_token_endpoint():
     language = body.get("language") or None
     if language not in ALLOWED_LANGUAGES:
         language = None
+    dictation = body.get("purpose") == "dictation"
 
     diarize = True
     terms: list[str] = []
@@ -3473,7 +3476,9 @@ def live_token_endpoint():
     max_session_s = int(remaining_min * 60) + 300  # запас: запись может чуть перебрать лимит
     try:
         key = soniox.create_temporary_key(
-            api_key, client_reference_id=f"live:{g.user_id}:{recording_id}", max_session_s=max_session_s,
+            api_key, max_session_s=max_session_s,
+            client_reference_id=f"dict:{g.user_id}" if dictation else f"live:{g.user_id}:{recording_id}",
+            expires_in_s=3600 if dictation else 120,
         )
     except Exception as e:
         print(f"[live] temporary key failed: {e}", flush=True)
@@ -3486,6 +3491,117 @@ def live_token_endpoint():
         "diarize": diarize,
         "max_session_s": max_session_s,
     })
+
+
+# ── Dictation (Windows app, desktop/) ───────────────────────────
+# Звук диктовки идёт из приложения прямо в Soniox по ключу /api/live/token
+# (purpose=dictation). Сюда приходят только учёт секунд и (опционально) чистка текста.
+
+DICTATION_CLEANUP_MODEL = os.environ.get("DICTATION_CLEANUP_MODEL", "gemini-2.5-flash")
+DICTATION_MAX_CHARS = 8000
+
+DICTATION_CLEANUP_PROMPT = """You clean up dictated text before it is typed into the user's app.
+
+Rules:
+- Keep the user's language(s) exactly; never translate. Mixed-language text stays mixed.
+- Remove filler words and hesitations (um, uh, ну, типу, ее, эм, like, you know, znaczy, jakby, prostě) when they carry no meaning.
+- Apply self-corrections: "on Wednesday, no, Thursday" -> "on Thursday". Drop false starts and stutters.
+- Fix punctuation and capitalization. Keep the user's wording, tone and meaning; do not add, summarize or answer anything.
+- If the text is a list the user dictated ("first..., second..."), you may format it as a list.
+- Spell these user terms exactly when they occur: {terms}
+- Output ONLY the cleaned text, nothing else.
+
+Dictated text:
+<<<
+{text}
+>>>"""
+
+
+def _gemini_quick(prompt: str, timeout: float = 8.0) -> str:
+    """Короткий синхронный вызов Gemini из Flask (без Modal spawn): чистка диктовки
+    должна уложиться в ~1с, cold start отдельной функции её бы съел."""
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY not set")
+    r = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{DICTATION_CLEANUP_MODEL}:generateContent",
+        params={"key": key}, timeout=timeout,
+        json={"contents": [{"role": "user", "parts": [{"text": prompt}]}],
+              "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4096,
+                                   "thinkingConfig": {"thinkingBudget": 0}}},
+    )
+    if not r.ok:
+        raise RuntimeError(f"gemini {r.status_code}: {r.text[:200]}")
+    cands = r.json().get("candidates") or []
+    parts = (cands[0].get("content") or {}).get("parts") or [] if cands else []
+    return "".join(p.get("text", "") for p in parts).strip()
+
+
+def _cleanup_is_sane(raw: str, cleaned: str) -> bool:
+    """Чистка только укорачивает и правит: заметно длиннее или почти пусто → модель
+    отсебятничала (ответила на вопрос, перевела), вставляем исходный текст."""
+    if not cleaned:
+        return False
+    ratio = len(cleaned) / max(1, len(raw))
+    return 0.35 <= ratio <= 1.25 or len(raw) < 20
+
+
+@app.route("/api/dictation/cleanup", methods=["POST"])
+def dictation_cleanup_endpoint():
+    """Body: {text, language?}. Returns {text, cleaned: bool}. Никогда не падает
+    ошибкой из-за LLM — в худшем случае возвращает исходный текст."""
+    body = request.get_json(silent=True) or {}
+    raw = str(body.get("text") or "")[:DICTATION_MAX_CHARS].strip()
+    if not raw or len(raw.split()) < 3:
+        return jsonify({"text": raw, "cleaned": False})
+    terms: list[str] = []
+    if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
+        try:
+            profile = _get_user_profile(g.user_id)
+            if _privacy_mode_active(profile, _get_effective_plan(g.user_id, g.user_email, profile)):
+                return jsonify({"text": raw, "cleaned": False})  # текст не уходит третьим лицам
+            vocab = profile.get("vocabulary") or []
+            if isinstance(vocab, list):
+                terms = [v.get("term") for v in sorted(vocab, key=lambda x: -int(x.get("freq", 1)))
+                         if isinstance(v, dict) and v.get("term")][:40]
+        except Exception as e:
+            print(f"[dictation] profile failed: {e}")
+    t0 = time.time()
+    try:
+        cleaned = _gemini_quick(DICTATION_CLEANUP_PROMPT.replace("{terms}", ", ".join(terms) or "(none)")
+                                .replace("{text}", raw))
+    except Exception as e:
+        print(f"[dictation] cleanup failed: {e}", flush=True)
+        return jsonify({"text": raw, "cleaned": False})
+    ok = _cleanup_is_sane(raw, cleaned)
+    print(f"[dictation] cleanup {len(raw)}->{len(cleaned)} chars in {time.time() - t0:.2f}s ok={ok}", flush=True)
+    return jsonify({"text": cleaned if ok else raw, "cleaned": ok})
+
+
+@app.route("/api/dictation/usage", methods=["POST"])
+def dictation_usage_endpoint():
+    """Body: {seconds}. Секунды диктовки → общий лимит минут (RPC из migrations/015).
+    Returns {minutes_used, minutes_limit} для счётчика в приложении."""
+    body = request.get_json(silent=True) or {}
+    try:
+        secs = max(0.0, min(float(body.get("seconds") or 0), 900.0))  # одна диктовка ≤ 15 мин
+    except (TypeError, ValueError):
+        return jsonify({"error": "seconds must be a number"}), 400
+    if not (SUPABASE_SERVICE_ROLE_KEY and g.user_id):
+        return jsonify({"ok": True})
+    if secs:
+        try:
+            _sb_admin("rpc/add_dictation_seconds", method="POST",
+                      data={"p_user_id": g.user_id, "p_secs": round(secs, 2)})
+        except Exception as e:
+            print(f"[dictation] usage not recorded (migration 015 applied?): {e}", flush=True)
+    try:
+        profile = _get_user_profile(g.user_id)
+        plan = _get_effective_plan(g.user_id, g.user_email, profile)
+        limit = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])["minutes"] + int(profile.get("bonus_minutes") or 0)
+        return jsonify({"ok": True, "minutes_used": profile.get("minutes_used", 0), "minutes_limit": limit})
+    except Exception:
+        return jsonify({"ok": True})
 
 
 @app.route("/api/transcribe", methods=["POST"])

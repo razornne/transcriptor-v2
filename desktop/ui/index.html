@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Skriptly</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">S</div>
+      <span class="brand-name">Skriptly</span>
+      <span class="brand-ver" id="version"></span>
+    </div>
+
+    <!-- ── Signed out ─────────────────────────────── -->
+    <section id="signedOut" class="stack" hidden>
+      <div>
+        <h1>Say it <em>messy</em>.<br />Get clean text anywhere.</h1>
+        <p class="sub">Sign in with your Skriptly account to start dictating.</p>
+      </div>
+      <button class="btn primary block" id="google">Continue with Google</button>
+      <div class="or">or</div>
+      <input class="field" id="email" type="email" placeholder="you@company.com" autocomplete="email" />
+      <button class="btn block" id="magic">Email me a sign-in link</button>
+      <p class="status" id="authStatus" role="status"></p>
+    </section>
+
+    <!-- ── Signed in ──────────────────────────────── -->
+    <section id="signedIn" class="stack" hidden>
+      <div class="card howto">
+        <div class="keys"><kbd>Ctrl</kbd>+<kbd>Win</kbd><span class="howto-main">&nbsp;hold and speak</span></div>
+        <div class="howto-sub">Release to paste the text where your cursor is. Tap twice for hands-free, press again to finish. <kbd>Esc</kbd> cancels.</div>
+      </div>
+
+      <div class="card" id="usageCard" hidden>
+        <div class="usage-row"><span><b id="plan"></b> plan</span><span id="minutes"></span></div>
+        <div class="bar" id="bar"><i id="barFill"></i></div>
+      </div>
+
+      <div class="card rows">
+        <label class="row">
+          <div class="row-text">
+            <div class="row-title">Language</div>
+            <div class="row-desc">Auto handles mixed languages</div>
+          </div>
+          <select class="field" id="language">
+            <option value="">Auto</option>
+            <option value="en">English</option>
+            <option value="uk">Українська</option>
+            <option value="ru">Русский</option>
+            <option value="pl">Polski</option>
+            <option value="cs">Čeština</option>
+          </select>
+        </label>
+        <label class="row">
+          <div class="row-text">
+            <div class="row-title">Polish with AI</div>
+            <div class="row-desc">Removes “um”, repeats and self-corrections</div>
+          </div>
+          <span class="switch"><input type="checkbox" id="cleanup" /><span></span></span>
+        </label>
+        <label class="row">
+          <div class="row-text">
+            <div class="row-title">Microphone</div>
+          </div>
+          <select class="field" id="mic"></select>
+        </label>
+        <label class="row">
+          <div class="row-text">
+            <div class="row-title">Start with Windows</div>
+          </div>
+          <span class="switch"><input type="checkbox" id="autostart" /><span></span></span>
+        </label>
+      </div>
+    </section>
+
+    <div class="footer" id="footer" hidden>
+      <span class="email" id="who"></span>
+      <button class="link" id="web">Open web app</button>
+      <button class="link" id="logs">Logs</button>
+      <button class="link" id="signout">Sign out</button>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

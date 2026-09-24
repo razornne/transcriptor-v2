@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Skriptly dictation</title>
+  <style>
+    /* Плашка диктовки: всегда тёмная (читается поверх любого окна). */
+    html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+    body { display: grid; place-items: center; font: 13.5px/1 "Segoe UI Variable Text", "Segoe UI", sans-serif; user-select: none; }
+    .pill {
+      display: flex; align-items: center; gap: 12px;
+      height: 44px; max-width: 452px; min-width: 150px; padding: 0 18px 0 14px;
+      border-radius: 22px; background: rgba(16, 15, 12, 0.94); color: #F2EFE7;
+      box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+      transform: translateY(6px); opacity: 0; transition: opacity .14s ease, transform .14s ease;
+    }
+    .pill.on { opacity: 1; transform: none; }
+    .bars { display: flex; align-items: center; gap: 3px; height: 18px; flex: none; }
+    .bars i { width: 3px; height: 4px; border-radius: 2px; background: #F0593A; transition: height .06s linear; }
+    .spin {
+      width: 14px; height: 14px; flex: none; border-radius: 50%;
+      border: 2px solid rgba(242, 239, 231, .25); border-top-color: #F2EFE7; animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .icon { flex: none; width: 16px; text-align: center; font-weight: 700; }
+    .icon.ok { color: #7BC59A; }
+    .icon.err { color: #F0593A; }
+    .text { white-space: nowrap; overflow: hidden; min-width: 0; }
+    .text .pending { color: rgba(242, 239, 231, .55); }
+    .text.muted { color: rgba(242, 239, 231, .7); }
+    [hidden] { display: none !important; }
+    @media (prefers-reduced-motion: reduce) { .pill, .bars i { transition: none; } .spin { animation: none; } }
+  </style>
+</head>
+<body>
+  <div class="pill" id="pill">
+    <div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="spin" id="spin" hidden></div>
+    <div class="icon" id="icon" hidden></div>
+    <div class="text" id="text"></div>
+  </div>
+  <script>
+    const { listen } = window.__TAURI__.event;
+    const pill = document.getElementById("pill");
+    const bars = [...document.querySelectorAll("#bars i")];
+    const textEl = document.getElementById("text");
+    const MAX_CHARS = 50;
+    let handsfree = false;
+
+    // Показываем хвост фразы — начало уходит за левый край.
+    const tail = (s) => (s.length > MAX_CHARS ? "…" + s.slice(-MAX_CHARS + 1) : s);
+
+    function mode(kind) {
+      document.getElementById("bars").hidden = kind !== "bars";
+      document.getElementById("spin").hidden = kind !== "spin";
+      document.getElementById("icon").hidden = kind !== "ok" && kind !== "err";
+      const icon = document.getElementById("icon");
+      icon.className = "icon " + (kind === "ok" ? "ok" : "err");
+      icon.textContent = kind === "ok" ? "✓" : "!";
+    }
+
+    function setText(main, pending = "", muted = false) {
+      textEl.classList.toggle("muted", muted);
+      const full = main + pending;
+      const shown = tail(full);
+      const cut = full.length - shown.length + (shown.startsWith("…") ? 1 : 0);
+      const mainPart = main.slice(Math.min(main.length, cut));
+      const pendPart = full.slice(Math.max(cut, main.length));
+      textEl.textContent = (shown.startsWith("…") ? "…" : "") + mainPart;
+      if (pendPart) {
+        const span = document.createElement("span");
+        span.className = "pending";
+        span.textContent = pendPart;
+        textEl.append(span);
+      }
+    }
+
+    listen("overlay", ({ payload: p }) => {
+      pill.classList.add("on");
+      switch (p.state) {
+        case "listening":
+          mode("bars");
+          if (p.text || p.pending) setText(p.text, p.pending);
+          else setText(handsfree ? "Hands-free · Ctrl+Win to finish" : "Listening…", "", true);
+          break;
+        case "handsfree":
+          handsfree = true;
+          mode("bars");
+          setText("Hands-free · Ctrl+Win to finish", "", true);
+          break;
+        case "finishing":
+          mode("spin");
+          if (!textEl.textContent || textEl.classList.contains("muted")) setText("Finishing…", "", true);
+          break;
+        case "polishing":
+          mode("spin");
+          setText("Polishing…", "", true);
+          break;
+        case "done":
+          handsfree = false;
+          mode("ok");
+          setText("Pasted", "", true);
+          break;
+        case "empty":
+          handsfree = false;
+          mode("err");
+          setText(p.text || "Didn't catch that", "", true);
+          break;
+        case "error":
+          handsfree = false;
+          mode("err");
+          setText(p.text || "Something went wrong", "", false);
+          break;
+      }
+    });
+
+    listen("overlay-level", ({ payload: level }) => {
+      // RMS речи ~0.02–0.3 → высота полосок 4–18px, у каждой свой множитель.
+      const v = Math.min(1, Math.sqrt(level) * 2.2);
+      const k = [0.55, 0.85, 1, 0.8, 0.5];
+      bars.forEach((b, i) => { b.style.height = `${4 + v * 14 * k[i]}px`; });
+    });
+
+    // Окно прячет Rust; сбрасываем состояние, когда плашку снова покажут с нуля.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) { pill.classList.remove("on"); handsfree = false; textEl.textContent = ""; }
+    });
+  </script>
+</body>
+</html>
