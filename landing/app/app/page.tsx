@@ -321,7 +321,15 @@ export default function InkApp() {
       ph()?.reset?.();
       return;
     }
-    void fetchHistory().then(setEntries).catch(() => setEntries([]));
+    void fetchHistory().then((list) => {
+      setEntries(list);
+      // ?entry=<id> — ссылка «Open transcript» из Windows-приложения (desktop/)
+      const wanted = new URLSearchParams(window.location.search).get("entry");
+      if (wanted) {
+        if (list.some((e) => e.id === wanted)) setActiveId(wanted);
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    }).catch(() => setEntries([]));
     void fetchProfile().then((p) => {
       setProfile(p);
       // PostHog identify with plan info

@@ -7,8 +7,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    GetForegroundWindow, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, HWND_TOPMOST,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
 
 const LABEL: &str = "overlay";
@@ -66,9 +66,14 @@ pub fn hide_if(app: &AppHandle, gen: u64) {
     }
 }
 
+/// Прячем тем же WinAPI, что и показываем: Tauri не знает, что окно показано
+/// через SetWindowPos, и его hide() на «уже скрытом» окне ничего не делает.
 pub fn hide(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window(LABEL) {
-        let _ = w.hide();
+    emit(app, "hidden", "", "");
+    if let Some(h) = hwnd(app) {
+        unsafe {
+            let _ = ShowWindow(h, SW_HIDE);
+        }
     }
 }
 

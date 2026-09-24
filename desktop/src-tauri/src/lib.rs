@@ -3,6 +3,7 @@
 mod api;
 mod audio;
 mod auth;
+mod calls;
 mod config;
 mod dictation;
 mod hotkey;
@@ -10,6 +11,7 @@ mod hotkey;
 mod log;
 mod overlay;
 mod paste;
+mod recorder;
 mod state;
 mod stt;
 mod store;
@@ -44,7 +46,168 @@ async fn get_state(state: State<'_, AppStateArc>) -> Result<Value, String> {
         "mics": audio::list_devices(),
         "version": env!("CARGO_PKG_VERSION"),
         "redirect_url": auth::redirect_url(),
+        "hotkey": hotkey::label(&state.settings().hotkey),
+        "call": call_status(&state),
+        "pending": pending_calls(&state),
     }))
+}
+
+// ── Шорткат диктовки ─────────────────────────────────────────────────────
+
+fn tray_tooltip(state: &AppState) -> String {
+    if state.call.lock().unwrap().is_some() {
+        "Skriptly — recording a call".into()
+    } else {
+        format!("Skriptly — hold {} to dictate", hotkey::label(&state.settings().hotkey))
+    }
+}
+
+fn refresh_tray(app: &AppHandle, state: &AppState) {
+    let recording = state.call.lock().unwrap().is_some();
+    if let Some(item) = state.tray_call_item.lock().unwrap().as_ref() {
+        let _ = item.set_text(if recording { "Stop call recording" } else { "Record a call" });
+    }
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(tray_tooltip(state)));
+    }
+}
+
+fn apply_hotkey(app: &AppHandle, state: &AppState, keys: Vec<u16>) -> Value {
+    hotkey::set_combo(&keys);
+    let mut s = state.settings();
+    s.hotkey = keys;
+    state.store.save_settings(&s);
+    *state.settings.lock().unwrap() = s;
+    refresh_tray(app, state);
+    json!({ "hotkey": hotkey::label(&state.settings().hotkey) })
+}
+
+/// Ждёт, пока юзер нажмёт новое сочетание (клавиши в это время никуда не уходят).
+#[tauri::command]
+async fn capture_hotkey(app: AppHandle, state: State<'_, AppStateArc>) -> Result<Value, String> {
+    let keys = tauri::async_runtime::spawn_blocking(|| hotkey::capture(std::time::Duration::from_secs(15)))
+        .await
+        .map_err(|e| e.to_string())??;
+    crate::log!("[hotkey] new shortcut {}", hotkey::label(&keys));
+    Ok(apply_hotkey(&app, &state, keys))
+}
+
+#[tauri::command]
+fn cancel_hotkey_capture() {
+    hotkey::cancel_capture();
+}
+
+#[tauri::command]
+fn reset_hotkey(app: AppHandle, state: State<'_, AppStateArc>) -> Value {
+    apply_hotkey(&app, &state, hotkey::DEFAULT_HOTKEY.to_vec())
+}
+
+// ── Запись созвона ───────────────────────────────────────────────────────
+
+fn call_status(state: &AppState) -> Value {
+    match state.call.lock().unwrap().as_ref() {
+        Some(r) => json!({ "recording": true, "seconds": r.started.elapsed().as_secs_f64(), "system_audio": r.has_system_audio }),
+        None => json!({ "recording": false }),
+    }
+}
+
+fn pending_calls(state: &AppState) -> Value {
+    if state.call.lock().unwrap().is_some() {
+        return json!([]); // файл идущей записи — ещё не «неотправленный»
+    }
+    json!(recorder::pending(state.store.dir())
+        .into_iter()
+        .map(|f| json!({ "id": f.id, "seconds": f.seconds }))
+        .collect::<Vec<_>>())
+}
+
+fn process_call(app: &AppHandle, state: &AppStateArc, f: recorder::Finished) {
+    let (app, state) = (app.clone(), state.clone());
+    tauri::async_runtime::spawn(async move {
+        let id = f.id.clone();
+        match calls::process(app.clone(), state.clone(), f).await {
+            Ok(tid) => calls::emit(&app, "done", json!({ "id": id, "transcript_id": tid })),
+            Err(e) => {
+                crate::log!("[call] {id} failed: {e}");
+                calls::emit(&app, "error", json!({ "id": id, "message": e }));
+            }
+        }
+    });
+}
+
+pub fn start_call(app: &AppHandle, state: &AppStateArc) -> Result<(), String> {
+    if state.store.session().is_none() {
+        show_main(app);
+        return Err("Sign in to Skriptly first".into());
+    }
+    let mut call = state.call.lock().unwrap();
+    if call.is_some() {
+        return Ok(());
+    }
+    let rec = recorder::start(state.store.dir(), state.settings().mic)?;
+    let (mic, sys, started, system_audio) = (rec.mic_level.clone(), rec.sys_level.clone(), rec.started, rec.has_system_audio);
+    *call = Some(rec);
+    drop(call);
+    refresh_tray(app, state);
+    calls::emit(app, "recording", json!({ "seconds": 0, "system_audio": system_audio }));
+    let (a, st) = (app.clone(), state.clone());
+    tauri::async_runtime::spawn(async move {
+        use std::sync::atomic::Ordering;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            if st.call.lock().unwrap().is_none() {
+                break;
+            }
+            let _ = a.emit("call-level", json!({
+                "mic": f32::from_bits(mic.load(Ordering::Relaxed)),
+                "sys": f32::from_bits(sys.load(Ordering::Relaxed)),
+                "seconds": started.elapsed().as_secs_f64(),
+            }));
+        }
+    });
+    Ok(())
+}
+
+pub async fn stop_call(app: &AppHandle, state: &AppStateArc, process: bool) -> Result<(), String> {
+    let rec = state.call.lock().unwrap().take();
+    let Some(rec) = rec else { return Ok(()) };
+    refresh_tray(app, state);
+    let f = tauri::async_runtime::spawn_blocking(move || rec.stop()).await.map_err(|e| e.to_string())??;
+    if process {
+        process_call(app, state, f);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn call_start(app: AppHandle, state: State<'_, AppStateArc>) -> Result<(), String> {
+    start_call(&app, &state)
+}
+
+#[tauri::command]
+async fn call_stop(app: AppHandle, state: State<'_, AppStateArc>) -> Result<(), String> {
+    stop_call(&app, &state, true).await
+}
+
+#[tauri::command]
+fn call_retry(app: AppHandle, state: State<'_, AppStateArc>, id: String) -> Result<(), String> {
+    let f = recorder::pending(state.store.dir()).into_iter().find(|f| f.id == id).ok_or("recording not found")?;
+    process_call(&app, &state, f);
+    Ok(())
+}
+
+#[tauri::command]
+fn call_discard(state: State<'_, AppStateArc>, id: String) {
+    let dir = recorder::recordings_dir(state.store.dir());
+    for ext in ["wav", "ogg"] {
+        let _ = std::fs::remove_file(dir.join(format!("call-{id}.{ext}")));
+    }
+    crate::log!("[call] discarded {id}");
+}
+
+#[tauri::command]
+fn open_transcript(id: String) {
+    let _ = tauri_plugin_opener::open_url(format!("{}?entry={}", config::WEB_APP, urlencoding::encode(&id)), None::<&str>);
 }
 
 #[tauri::command]
@@ -120,18 +283,38 @@ fn apply_autostart(app: &AppHandle, on: bool) {
 
 fn build_tray(app: &tauri::App, state: AppStateArc) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Settings", true, None::<&str>)?;
+    let call = MenuItem::with_id(app, "call", "Record a call", true, None::<&str>)?;
     let copy = MenuItem::with_id(app, "copy_last", "Copy last dictation", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Skriptly", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &copy, &quit])?;
+    let menu = Menu::with_items(app, &[&call, &open, &copy, &quit])?;
+    *state.tray_call_item.lock().unwrap() = Some(call);
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().cloned().expect("icon"))
-        .tooltip("Skriptly — hold Ctrl + Win to dictate")
+        .tooltip(tray_tooltip(&state))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "open" => show_main(app),
+            "call" => {
+                let (app, st) = (app.clone(), state.clone());
+                tauri::async_runtime::spawn(async move {
+                    let recording = st.call.lock().unwrap().is_some();
+                    let res = if recording { stop_call(&app, &st, true).await } else { start_call(&app, &st) };
+                    if let Err(e) = res {
+                        calls::emit(&app, "error", json!({ "message": e }));
+                        show_main(&app);
+                    }
+                });
+            }
             "copy_last" => paste::copy(&state.last_text.lock().unwrap()),
-            "quit" => app.exit(0),
+            "quit" => {
+                // Идущую запись не теряем: файл остаётся, отправить можно после перезапуска.
+                let (app, st) = (app.clone(), state.clone());
+                tauri::async_runtime::spawn(async move {
+                    let _ = stop_call(&app, &st, false).await;
+                    app.exit(0);
+                });
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -170,11 +353,12 @@ pub fn run() {
             overlay::setup(app.handle());
             build_tray(app, state.clone())?;
 
+            let settings = state.settings();
+            let keys = if hotkey::validate(&settings.hotkey).is_ok() { settings.hotkey.clone() } else { hotkey::DEFAULT_HOTKEY.to_vec() };
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            hotkey::start(tx);
+            hotkey::start(tx, &keys);
             dictation::spawn(app.handle().clone(), state.clone(), rx);
 
-            let settings = state.settings();
             apply_autostart(app.handle(), settings.autostart);
 
             // Автозапуск с Windows (--hidden) — тихо в трей; ручной запуск или
@@ -218,7 +402,15 @@ pub fn run() {
             sign_out,
             save_settings,
             open_web,
-            open_log_folder
+            open_log_folder,
+            capture_hotkey,
+            cancel_hotkey_capture,
+            reset_hotkey,
+            call_start,
+            call_stop,
+            call_retry,
+            call_discard,
+            open_transcript
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skriptly");

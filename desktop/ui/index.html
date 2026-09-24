@@ -28,9 +28,62 @@
 
     <!-- ── Signed in ──────────────────────────────── -->
     <section id="signedIn" class="stack" hidden>
+      <!-- ── Запись созвона ─────────────────────── -->
+      <div class="card call" id="callCard">
+        <div class="call-idle" id="callIdle">
+          <div class="call-head">
+            <div>
+              <div class="card-title">Record a call</div>
+              <div class="howto-sub">Your mic and the call's sound from any app — Zoom, Teams, Meet, Telegram.</div>
+            </div>
+          </div>
+          <button class="btn primary block" id="callStart"><span class="rec-dot"></span>Start recording</button>
+        </div>
+
+        <div class="call-live" id="callLive" hidden>
+          <div class="call-head">
+            <span class="rec-dot live"></span>
+            <span class="card-title">Recording</span>
+            <span class="timer" id="callTimer">0:00</span>
+          </div>
+          <div class="meters">
+            <div class="meter"><span>You</span><div class="bar"><i id="lvlMic"></i></div></div>
+            <div class="meter"><span>Call</span><div class="bar"><i id="lvlSys"></i></div></div>
+          </div>
+          <p class="status err" id="callWarn" hidden>No computer audio found — only your mic is recorded.</p>
+          <button class="btn block" id="callStop">Stop &amp; transcribe</button>
+        </div>
+
+        <div class="call-busy" id="callBusy" hidden>
+          <div class="call-head"><span class="spinner"></span><span id="callBusyText">Preparing…</span></div>
+          <div class="howto-sub">You can close this window — the transcript will appear in your history on skriptly.io.</div>
+        </div>
+
+        <div class="call-done" id="callDone" hidden>
+          <div class="call-head"><span class="ok">✓</span><span class="card-title">Transcript ready</span></div>
+          <button class="btn primary block" id="callOpen">Open transcript</button>
+          <button class="link" id="callAgain">Record another call</button>
+        </div>
+
+        <div class="call-error" id="callError" hidden>
+          <p class="status err" id="callErrorText"></p>
+          <button class="link" id="callErrorOk">OK</button>
+        </div>
+
+        <div class="pending" id="pending"></div>
+      </div>
+
+      <!-- ── Диктовка ───────────────────────────── -->
       <div class="card howto">
-        <div class="keys"><kbd>Ctrl</kbd>+<kbd>Win</kbd><span class="howto-main">&nbsp;hold and speak</span></div>
-        <div class="howto-sub">Release to paste the text where your cursor is. Tap twice for hands-free, press again to finish. <kbd>Esc</kbd> cancels.</div>
+        <div class="keys">
+          <span id="hotkeyKeys"></span>
+          <span class="howto-main">&nbsp;hold and speak</span>
+          <button class="link change" id="hotkeyChange">Change</button>
+          <button class="link" id="hotkeyReset" hidden>Reset</button>
+        </div>
+        <div class="howto-sub" id="hotkeyHint">Release to paste the text where your cursor is. Tap twice for hands-free, press again to finish. <kbd>Esc</kbd> cancels.</div>
+        <div class="howto-sub capture" id="hotkeyCapture" hidden>Press and release the new shortcut… <kbd>Esc</kbd> cancels</div>
+        <p class="status err" id="hotkeyErr" hidden></p>
       </div>
 
       <div class="card" id="usageCard" hidden>

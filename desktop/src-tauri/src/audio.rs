@@ -104,18 +104,19 @@ where
         .map_err(|e| e.to_string())
 }
 
-/// Открывает микрофон и шлёт куски PCM в `tx`. Когда Capture остановлен,
-/// поток дропается вместе с `tx` — получатель видит конец аудио.
-pub fn start(mic: Option<String>, tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Result<Capture, String> {
+type Pick = Box<dyn FnOnce() -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> + Send>;
+
+/// Открывает поток (микрофон или loopback) и шлёт куски PCM 16 кГц в `tx`.
+/// Когда Capture остановлен, поток дропается вместе с `tx` — получатель видит конец аудио.
+fn open(pick: Pick, tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Result<Capture, String> {
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(u32, String), String>>();
     std::thread::Builder::new()
         .name("skriptly-audio".into())
         .spawn(move || {
             let res = (|| {
-                let device = pick_device(mic.as_deref()).ok_or("no microphone found")?;
+                let (device, supported) = pick()?;
                 let name = device.name().unwrap_or_default();
-                let supported = device.default_input_config().map_err(|e| e.to_string())?;
                 let format = supported.sample_format();
                 let config: cpal::StreamConfig = supported.into();
                 let out_rate = TARGET_RATE.min(config.sample_rate.0);
@@ -143,8 +144,36 @@ pub fn start(mic: Option<String>, tx: UnboundedSender<Vec<i16>>, level: Arc<Atom
         .map_err(|e| e.to_string())?;
     let (rate, device) = ready_rx
         .recv_timeout(std::time::Duration::from_secs(5))
-        .map_err(|_| "microphone didn't start".to_string())??;
+        .map_err(|_| "audio device didn't start".to_string())??;
     Ok(Capture { stop: stop_tx, rate, device })
+}
+
+/// Микрофон (выбранный в настройках или системный по умолчанию).
+pub fn start(mic: Option<String>, tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Result<Capture, String> {
+    open(
+        Box::new(move || {
+            let device = pick_device(mic.as_deref()).ok_or("no microphone found")?;
+            let cfg = device.default_input_config().map_err(|e| e.to_string())?;
+            Ok((device, cfg))
+        }),
+        tx,
+        level,
+    )
+}
+
+/// Звук компьютера (всё, что играет в колонки/наушники по умолчанию): WASAPI loopback —
+/// input-поток на устройстве вывода. Пока ничего не играет, данных нет вовсе —
+/// тишину досыпает микшер записи (recorder.rs).
+pub fn start_loopback(tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Result<Capture, String> {
+    open(
+        Box::new(|| {
+            let device = cpal::default_host().default_output_device().ok_or("no output device")?;
+            let cfg = device.default_output_config().map_err(|e| e.to_string())?;
+            Ok((device, cfg))
+        }),
+        tx,
+        level,
+    )
 }
 
 #[cfg(test)]

@@ -4,127 +4,155 @@
   <meta charset="utf-8" />
   <title>Skriptly dictation</title>
   <style>
-    /* Плашка диктовки: всегда тёмная (читается поверх любого окна). */
+    /* Плашка диктовки: только анимация записи, без текста (текст — лишь для ошибок).
+       Всегда тёмная — читается поверх любого окна. */
     html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
-    body { display: grid; place-items: center; font: 13.5px/1 "Segoe UI Variable Text", "Segoe UI", sans-serif; user-select: none; }
+    body { display: grid; place-items: center; font: 13px/1 "Segoe UI Variable Text", "Segoe UI", sans-serif; user-select: none; }
     .pill {
-      display: flex; align-items: center; gap: 12px;
-      height: 44px; max-width: 452px; min-width: 150px; padding: 0 18px 0 14px;
-      border-radius: 22px; background: rgba(16, 15, 12, 0.94); color: #F2EFE7;
-      box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.07);
-      transform: translateY(6px); opacity: 0; transition: opacity .14s ease, transform .14s ease;
+      position: relative; display: flex; align-items: center; justify-content: center; gap: 10px;
+      height: 38px; min-width: 112px; padding: 0 16px; border-radius: 19px;
+      background: rgba(16, 15, 12, 0.92); color: #F2EFE7;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.30), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      opacity: 0; transform: translateY(8px) scale(.94);
+      transition: opacity .18s ease, transform .22s cubic-bezier(.2, .9, .3, 1.2), min-width .25s ease;
     }
     .pill.on { opacity: 1; transform: none; }
-    .bars { display: flex; align-items: center; gap: 3px; height: 18px; flex: none; }
-    .bars i { width: 3px; height: 4px; border-radius: 2px; background: #F0593A; transition: height .06s linear; }
-    .spin {
-      width: 14px; height: 14px; flex: none; border-radius: 50%;
-      border: 2px solid rgba(242, 239, 231, .25); border-top-color: #F2EFE7; animation: spin .8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .icon { flex: none; width: 16px; text-align: center; font-weight: 700; }
-    .icon.ok { color: #7BC59A; }
-    .icon.err { color: #F0593A; }
-    .text { white-space: nowrap; overflow: hidden; min-width: 0; }
-    .text .pending { color: rgba(242, 239, 231, .55); }
-    .text.muted { color: rgba(242, 239, 231, .7); }
+    .pill.out { opacity: 0; transform: translateY(4px) scale(.96); transition: opacity .25s ease, transform .25s ease; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #F0593A; flex: none; box-shadow: 0 0 0 0 rgba(240, 89, 58, .5); }
+    .pill.rec .dot { animation: ping 1.6s ease-out infinite; }
+    @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(240, 89, 58, .55); } 80%, 100% { box-shadow: 0 0 0 7px rgba(240, 89, 58, 0); } }
+    canvas { width: 76px; height: 22px; display: block; }
+    .lock { font-size: 11px; opacity: .7; }
+    .check { width: 18px; height: 18px; }
+    .check path { stroke: #7BC59A; stroke-width: 2.4; fill: none; stroke-linecap: round; stroke-linejoin: round;
+      stroke-dasharray: 22; stroke-dashoffset: 22; animation: draw .3s ease forwards; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+    .msg { max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: rgba(242, 239, 231, .9); }
+    .msg.err::before { content: "!"; display: inline-grid; place-items: center; width: 16px; height: 16px; margin-right: 8px;
+      border-radius: 50%; background: #F0593A; color: #100F0C; font-weight: 700; font-size: 11px; vertical-align: -3px; }
     [hidden] { display: none !important; }
-    @media (prefers-reduced-motion: reduce) { .pill, .bars i { transition: none; } .spin { animation: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .pill, .pill.out { transition: none; } .pill.rec .dot { animation: none; } .check path { animation: none; stroke-dashoffset: 0; }
+    }
   </style>
 </head>
 <body>
   <div class="pill" id="pill">
-    <div class="bars" id="bars"><i></i><i></i><i></i><i></i><i></i></div>
-    <div class="spin" id="spin" hidden></div>
-    <div class="icon" id="icon" hidden></div>
-    <div class="text" id="text"></div>
+    <span class="dot" id="dot"></span>
+    <canvas id="wave" width="152" height="44"></canvas>
+    <span class="lock" id="lock" hidden title="Hands-free">🔒</span>
+    <svg class="check" id="check" viewBox="0 0 18 18" hidden><path d="M4 9.5l3.2 3.2L14 5.8" /></svg>
+    <span class="msg" id="msg" hidden></span>
   </div>
   <script>
     const { listen } = window.__TAURI__.event;
-    const pill = document.getElementById("pill");
-    const bars = [...document.querySelectorAll("#bars i")];
-    const textEl = document.getElementById("text");
-    const MAX_CHARS = 50;
-    let handsfree = false;
+    const $ = (id) => document.getElementById(id);
+    const pill = $("pill"), canvas = $("wave"), ctx = canvas.getContext("2d");
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    // Показываем хвост фразы — начало уходит за левый край.
-    const tail = (s) => (s.length > MAX_CHARS ? "…" + s.slice(-MAX_CHARS + 1) : s);
+    // ── Волна: 15 столбиков, амплитуда = сглаженный уровень микрофона ────
+    // Атака быстрая, спад медленный — волна не дёргается. В тишине — лёгкое
+    // «дыхание», чтобы было видно, что запись идёт.
+    const BARS = 15;
+    let target = 0, level = 0, phase = 0, mode = "idle", raf = 0;
 
-    function mode(kind) {
-      document.getElementById("bars").hidden = kind !== "bars";
-      document.getElementById("spin").hidden = kind !== "spin";
-      document.getElementById("icon").hidden = kind !== "ok" && kind !== "err";
-      const icon = document.getElementById("icon");
-      icon.className = "icon " + (kind === "ok" ? "ok" : "err");
-      icon.textContent = kind === "ok" ? "✓" : "!";
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(76 * dpr); canvas.height = Math.round(22 * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resize();
+
+    function draw() {
+      raf = requestAnimationFrame(draw);
+      level += (target - level) * (target > level ? 0.35 : 0.08);
+      phase += mode === "busy" ? 0.12 : 0.07;
+      ctx.clearRect(0, 0, 76, 22);
+      ctx.fillStyle = "#F2EFE7";
+      const gap = 76 / BARS;
+      for (let i = 0; i < BARS; i++) {
+        const x = i * gap + gap / 2;
+        const center = 1 - Math.abs(i - (BARS - 1) / 2) / ((BARS - 1) / 2); // выше в середине
+        let h;
+        if (mode === "busy") {
+          // обработка: мягкая бегущая волна одинаковой высоты
+          h = 3 + 5 * (0.5 + 0.5 * Math.sin(phase * 1.6 - i * 0.55));
+        } else {
+          const breath = 0.5 + 0.5 * Math.sin(phase - i * 0.45);
+          const voice = level * (0.55 + 0.45 * Math.sin(phase * 2.3 + i * 1.7)) * (0.35 + 0.65 * center);
+          h = 2.5 + breath * 2.5 * (0.4 + 0.6 * center) + voice * 17;
+        }
+        h = Math.min(20, h);
+        ctx.globalAlpha = mode === "busy" ? 0.55 + 0.45 * Math.sin(phase * 1.6 - i * 0.55) ** 2 : 0.92;
+        ctx.beginPath();
+        ctx.roundRect(x - 1.25, 11 - h / 2, 2.5, h, 1.25);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    function stopWave() { cancelAnimationFrame(raf); raf = 0; }
+    function startWave() {
+      if (reduced) { stopWave(); level = 0.3; draw(); stopWave(); return; } // один статичный кадр
+      if (!raf) draw();
     }
 
-    function setText(main, pending = "", muted = false) {
-      textEl.classList.toggle("muted", muted);
-      const full = main + pending;
-      const shown = tail(full);
-      const cut = full.length - shown.length + (shown.startsWith("…") ? 1 : 0);
-      const mainPart = main.slice(Math.min(main.length, cut));
-      const pendPart = full.slice(Math.max(cut, main.length));
-      textEl.textContent = (shown.startsWith("…") ? "…" : "") + mainPart;
-      if (pendPart) {
-        const span = document.createElement("span");
-        span.className = "pending";
-        span.textContent = pendPart;
-        textEl.append(span);
-      }
+    function show(parts) {
+      $("dot").hidden = !parts.dot;
+      canvas.hidden = !parts.wave;
+      $("lock").hidden = !parts.lock;
+      $("check").hidden = !parts.check;
+      $("msg").hidden = !parts.msg;
+      if (parts.check) { const c = $("check"); c.replaceWith(c.cloneNode(true)); } // перезапуск анимации галочки
+    }
+
+    let handsfree = false, outTimer = 0;
+    function reveal() {
+      clearTimeout(outTimer);
+      pill.classList.remove("out");
+      pill.classList.add("on");
+    }
+
+    function reset() {
+      pill.classList.remove("on", "out", "rec"); stopWave(); handsfree = false; level = target = 0;
     }
 
     listen("overlay", ({ payload: p }) => {
-      pill.classList.add("on");
+      if (p.state === "hidden") { reset(); return; } // окно прячет Rust — не крутим анимацию впустую
+      reveal();
       switch (p.state) {
         case "listening":
-          mode("bars");
-          if (p.text || p.pending) setText(p.text, p.pending);
-          else setText(handsfree ? "Hands-free · Ctrl+Win to finish" : "Listening…", "", true);
-          break;
         case "handsfree":
-          handsfree = true;
-          mode("bars");
-          setText("Hands-free · Ctrl+Win to finish", "", true);
+          if (p.state === "handsfree") handsfree = true;
+          mode = "rec"; pill.classList.add("rec");
+          show({ dot: true, wave: true, lock: handsfree });
+          startWave();
           break;
         case "finishing":
-          mode("spin");
-          if (!textEl.textContent || textEl.classList.contains("muted")) setText("Finishing…", "", true);
-          break;
         case "polishing":
-          mode("spin");
-          setText("Polishing…", "", true);
+          mode = "busy"; pill.classList.remove("rec"); target = 0;
+          show({ wave: true, lock: false });
+          startWave();
           break;
         case "done":
-          handsfree = false;
-          mode("ok");
-          setText("Pasted", "", true);
+          handsfree = false; stopWave(); pill.classList.remove("rec");
+          show({ check: true });
+          outTimer = setTimeout(() => pill.classList.add("out"), 380); // плавно гаснет до скрытия окна
           break;
         case "empty":
-          handsfree = false;
-          mode("err");
-          setText(p.text || "Didn't catch that", "", true);
-          break;
         case "error":
-          handsfree = false;
-          mode("err");
-          setText(p.text || "Something went wrong", "", false);
+          handsfree = false; stopWave(); pill.classList.remove("rec");
+          $("msg").textContent = p.text || (p.state === "empty" ? "Didn't catch that" : "Something went wrong");
+          $("msg").className = "msg" + (p.state === "error" ? " err" : "");
+          show({ msg: true });
           break;
       }
     });
 
-    listen("overlay-level", ({ payload: level }) => {
-      // RMS речи ~0.02–0.3 → высота полосок 4–18px, у каждой свой множитель.
-      const v = Math.min(1, Math.sqrt(level) * 2.2);
-      const k = [0.55, 0.85, 1, 0.8, 0.5];
-      bars.forEach((b, i) => { b.style.height = `${4 + v * 14 * k[i]}px`; });
+    listen("overlay-level", ({ payload: v }) => {
+      target = Math.min(1, Math.sqrt(v) * 2.4); // RMS речи 0.02–0.3 → 0.35–1
     });
 
-    // Окно прячет Rust; сбрасываем состояние, когда плашку снова покажут с нуля.
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) { pill.classList.remove("on"); handsfree = false; textEl.textContent = ""; }
-    });
+    matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener?.("change", resize);
   </script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Skriptly",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "io.skriptly.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -14,7 +14,7 @@
         "title": "Skriptly",
         "url": "index.html",
         "width": 420,
-        "height": 600,
+        "height": 700,
         "resizable": false,
         "maximizable": false,
         "visible": false,

@@ -12,11 +12,19 @@ pub struct Settings {
     /// Имя микрофона; None = системный по умолчанию.
     pub mic: Option<String>,
     pub autostart: bool,
+    /// Сочетание для диктовки — виртуальные коды клавиш (hotkey.rs), по умолчанию Ctrl+Win.
+    pub hotkey: Vec<u16>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { language: String::new(), cleanup: true, mic: None, autostart: true }
+        Self {
+            language: String::new(),
+            cleanup: true,
+            mic: None,
+            autostart: true,
+            hotkey: crate::hotkey::DEFAULT_HOTKEY.to_vec(),
+        }
     }
 }
 

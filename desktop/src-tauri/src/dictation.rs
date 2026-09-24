@@ -137,8 +137,8 @@ async fn start(app: &AppHandle, state: &Arc<AppState>) -> Result<Active, String>
             overlay::emit(&a, "error", &msg, ""); // сразу, а не после отпускания клавиш
             msg
         })?;
-        let a2 = a.clone();
-        let res = stt::run(token, rate, rx, move |fin, pen| overlay::emit(&a2, "listening", fin, pen)).await;
+        // Слова на плашке не показываем — только анимация записи.
+        let res = stt::run(token, rate, rx, |_, _| {}).await;
         if res.is_err() {
             api::forget_token(&st).await; // ключ мог протухнуть/отозваться — следующий раз возьмём новый
         }
@@ -228,7 +228,7 @@ fn finish(
                 report(&state, &app, r.audio_seconds);
                 match pasted {
                     Ok(Ok(())) => {
-                        flash(&app, "done", "", 600);
+                        flash(&app, "done", "", 700);
                         Internal::Finished
                     }
                     _ => {
