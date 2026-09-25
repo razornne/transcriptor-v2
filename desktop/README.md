@@ -14,7 +14,7 @@ Tauri 2 app: the Rust side does the work, `ui/` is two static pages (settings wi
 
 | Piece | Where |
 |---|---|
-| Global hotkey (hold Ctrl+Win, Start-menu suppression) | `src-tauri/src/hotkey.rs` — `WH_KEYBOARD_LL` hook |
+| Global shortcuts: hold + hands-free (Start-menu/Alt-menu suppression) | `src-tauri/src/hotkey.rs` — `WH_KEYBOARD_LL` hook; sequences unit-tested through `handle()` |
 | Microphone → mono 16 kHz s16le | `src-tauri/src/audio.rs` (cpal/WASAPI, opened only while dictating) |
 | Streaming to Soniox `stt-rt-v5` | `src-tauri/src/stt.rs` — WebSocket straight to Soniox |
 | Temporary Soniox key, usage, AI polish | `src-tauri/src/api.rs` → Flask `/api/live/token` (purpose=dictation, 1 h key), `/api/dictation/usage`, `/api/dictation/cleanup` |
@@ -23,6 +23,9 @@ Tauri 2 app: the Rust side does the work, `ui/` is two static pages (settings wi
 | Pill overlay | `src-tauri/src/overlay.rs` + `ui/overlay.html` — animation only (no words), never takes focus, click-through |
 | Shortcut | `hotkey.rs`: 1–3 keys; in multi-key combos left/right modifiers are equal, a single key is side-exact (Right Alt); "Change" records the next combo in the hook |
 | Dictation bar / instant start | `overlay.rs` idle pill (hidden over full-screen windows); `mic.rs` keeps the mic open with 0.5 s pre-roll when "Instant start" is on |
+| Dictionary | `lib.rs` `get_vocabulary`/`save_vocabulary` → `/api/profile`, `/api/vocabulary` (same list as the web app; terms go to Soniox `context.terms` and to AI polish) |
+| Pause media while dictating | `src-tauri/src/media.rs` — Windows media sessions (SMTC): pauses only what is playing, resumes after paste |
+| Settings file | `store.rs` — tmp + rename, direct-write fallback, errors logged (0.1–0.3 never persisted settings) |
 | Call recording | `recorder.rs` (mixer on wall clock — loopback sends nothing during silence; WAV on disk, flushed every 5 s, survives crashes; Ogg Vorbis ~22 MB/h) + `calls.rs` (upload → poll job → insert into `transcripts` → LLM title) |
 
 Settings/session live in `%APPDATA%\io.skriptly.desktop\` (`settings.json`, `session.json`, `skriptly.log`).
@@ -34,6 +37,20 @@ Without it Supabase sends the browser to the site URL after login and the app ne
 
 Migration `migrations/015_dictation_usage.sql` bills dictation seconds into the shared minutes limit.
 Until it is applied, dictation works but isn't counted.
+
+## Testing without touching the installed app
+
+The installed app and a dev build share the single-instance id and `%APPDATA%\io.skriptly.desktop`.
+Build and run a dev copy isolated:
+
+```bash
+TAURI_CONFIG='{"identifier":"io.skriptly.devtest"}' cargo build   # in src-tauri
+APPDATA=/some/scratch/dir target/debug/skriptly.exe
+```
+
+Stop it by path (`Get-Process skriptly | ? Path -like *debug* | Stop-Process`) — `taskkill /IM skriptly.exe`
+also kills the installed app. The keyboard hook ignores injected keys, so shortcuts can't be driven by
+automation; `cargo test` covers the hook logic, `SKRIPTLY_DEMO_OVERLAY=1` (debug builds) cycles the pill states.
 
 ## Build
 

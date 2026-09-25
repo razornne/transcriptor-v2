@@ -8,6 +8,25 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 v1 (`C:\projects\transcriptor\`) — старая Railway-версия на OpenAI API. **Продолжает работать параллельно, намеренно. Не сливать.**
 
+## Текущее состояние (2026-09-25) — читать первым
+
+Схема ниже местами описывает GPU-пайплайн как основной — это история. Сейчас:
+
+| Что | Как устроено |
+|---|---|
+| Транскрипция записей | **Soniox batch** (`transcribe_soniox`, CPU). Стерео (веб/приложение) → 2 дорожки: микрофон = SPEAKER_00, звонок с диаризацией. GPU `Transcriptor` (Whisper+pyannote) — только Privacy Mode и записи > 295 мин |
+| Спикеры | Если задано Speakers — переразметка по голосу (`speakers.py` + `SpeakerEmbedder`, k-means ровно на k). Без Speakers — метки Soniox |
+| Коррекция | Gemini 2.5 Flash, один вызов на запись (ответ ≤ 16k токенов — на часовых звонках хвост не правится) |
+| Саммари / actions | GPT-6 Luna (`openai_generate`), фоллбэк Gemini 2.5 Pro |
+| Заголовки | **LLM выключен** (`TITLE_GENERATION=off`) — первые слова, юзер переименует |
+| Живой транскрипт в вебе | **Выключен** (`FEATURE_LIVE_TRANSCRIPT=false`, env `LIVE_TRANSCRIPT` off) |
+| Диктовка | Приложение для Windows `desktop/` (Tauri): Soniox real-time напрямую по временному ключу, чистка Gemini Flash, словарь общий с вебом |
+| Запись созвонов | Веб (стерео через вкладку) **и** приложение (микрофон + WASAPI loopback) → тот же `/api/transcribe`. Веб — временно, пока нет macOS-приложения |
+| Себестоимость | Час звонка ≈ $0.30, загруженный файл ≈ $0.20, 1 000 слов диктовки ≈ $0.03. Калькулятор: https://claude.ai/artifact/7MdjcE6qfMZ7pVed1wV5TF |
+| Оплата | Сейчас Stripe (live). План — Merchant of Record (Lemon Squeezy или Paddle), Max убрать, Team доработать — см. ROADMAP «Фаза 3» |
+
+План и открытые решения — `ROADMAP.md` → «Next up».
+
 ## Архитектура (Stage 2 — production, после Cutover 2026-06-14)
 
 ```
@@ -76,6 +95,7 @@ Supabase Postgres
 - **Supabase** — Auth (Google + magic link) + Postgres (история транскриптов, RLS)
 - **Vercel** — Next.js landing на `skriptly.io`, rewrite только для `/api/*` (аудио идёт прямо на Modal)
 - **Frontend приложения** — `landing/app/app/` (Next.js, Ink & Halftone Studio). Старый `templates/index.html` в `legacy/` (архив).
+- **Приложение для Windows** — `desktop/` (Tauri 2): диктовка + запись созвонов. См. раздел «Диктовка — приложение для Windows».
 
 **Поток обработки:**
 1. Юзер логинится через Supabase Auth (Google или magic link)
@@ -896,7 +916,8 @@ git push origin main  # Vercel сразу собирает и катит на sk
 - **VRAM 24GB на A10G** держит две модели Whisper + pyannote + wespeaker embedding + Qwen 4-bit одновременно (~13GB used). Если добавим что-то ещё (например Qwen без quantization) — пересмотреть.
 - **Длинные записи** спавнят несколько A10G параллельно (transcribe_chunk на чанк). Стоимость ≈ та же суммарная GPU-минута что serial, но wall-clock сжат. Платим только за реальное время.
 - Supabase free tier: 500MB DB, 50K MAU, 4 magic link emails/hour.
-- **Gemini API**: Pro/Flash в Modal Secret `GEMINI_API_KEY`. Стоимость correction ~$0.015/час (Flash) или ~$0.06 (Pro). Summary стоит столько же (Pro по умолчанию).
+- **Gemini API**: Pro/Flash в Modal Secret `GEMINI_API_KEY`. Коррекция Flash ≈ $0.05/час записи (замер 2026-09-24: ~21k токенов/ч). Саммари — GPT-6 Luna ≈ $0.005.
+- **Soniox**: batch $0.10/ч за дорожку (стерео = 2 дорожки), real-time $0.12/ч за поток (диктовка; живой транскрипт выключен). Лимит 300 мин/файл, 1000 файлов / 2000 транскрипций на аккаунт (удаляем сразу).
 - **PostHog free tier**: 1M events/month + 5K session replays. На наших объёмах хватит надолго.
 - Web-only frontend. Mobile via responsive design, native не планируется.
 - Только NVIDIA GPU в local mode (CUDA).
