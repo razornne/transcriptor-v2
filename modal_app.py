@@ -148,7 +148,6 @@ r2_secret = modal.Secret.from_name("r2-secrets", required_keys=[
 stripe_secret = modal.Secret.from_name("stripe-secrets", required_keys=[
     "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET",
     "STRIPE_PRO_MONTHLY_PRICE", "STRIPE_PRO_ANNUAL_PRICE",
-    "STRIPE_MAX_MONTHLY_PRICE", "STRIPE_MAX_ANNUAL_PRICE",
     "STRIPE_TEAM_MONTHLY_PRICE", "STRIPE_TEAM_ANNUAL_PRICE",
 ])
 
@@ -197,7 +196,7 @@ web_image = (
         "python-dotenv",
         "requests",
         "pyjwt[crypto]",  # для валидации Supabase JWT (включая asymmetric ES256/RS256)
-        "stripe",
+        "stripe>=12",  # API 2025-03-31.basil+ — нужна для managed_payments в Checkout
         "boto3",  # S3 API клиента для архива записей в Cloudflare R2
     )
     .add_local_python_source("app", "soniox")  # soniox — временные ключи живого транскрипта

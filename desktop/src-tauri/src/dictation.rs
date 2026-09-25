@@ -272,8 +272,13 @@ fn report(state: &Arc<AppState>, app: &AppHandle, seconds: f64) {
     }
     let (state, app) = (state.clone(), app.clone());
     tauri::async_runtime::spawn(async move {
-        if let Some((used, limit)) = api::report_usage(&state, seconds).await {
-            let _ = app.emit("usage", serde_json::json!({ "minutes_used": used, "minutes_limit": limit }));
+        if let Some(usage) = api::report_usage(&state, seconds).await {
+            // Ключ Soniox кэшируется на час и лимит проверяется только при выдаче —
+            // квота кончилась → забываем ключ, следующая диктовка получит 402.
+            if api::dictation_exhausted(&usage) {
+                api::forget_token(&state).await;
+            }
+            let _ = app.emit("usage", usage);
         }
     });
 }

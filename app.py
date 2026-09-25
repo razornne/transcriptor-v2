@@ -589,8 +589,6 @@ STRIPE_SECRET_KEY         = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET     = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_PRO_MONTHLY_PRICE  = os.environ.get("STRIPE_PRO_MONTHLY_PRICE", "")
 STRIPE_PRO_ANNUAL_PRICE   = os.environ.get("STRIPE_PRO_ANNUAL_PRICE", "")
-STRIPE_MAX_MONTHLY_PRICE  = os.environ.get("STRIPE_MAX_MONTHLY_PRICE", "")
-STRIPE_MAX_ANNUAL_PRICE   = os.environ.get("STRIPE_MAX_ANNUAL_PRICE", "")
 # Team plan: per-seat pricing. Subscription quantity = workspace.seats
 STRIPE_TEAM_MONTHLY_PRICE = os.environ.get("STRIPE_TEAM_MONTHLY_PRICE", "")
 STRIPE_TEAM_ANNUAL_PRICE  = os.environ.get("STRIPE_TEAM_ANNUAL_PRICE", "")
@@ -598,13 +596,26 @@ STRIPE_TEAM_ANNUAL_PRICE  = os.environ.get("STRIPE_TEAM_ANNUAL_PRICE", "")
 STRIPE_PRICE_MAP = {
     ("pro",  "monthly"): lambda: STRIPE_PRO_MONTHLY_PRICE,
     ("pro",  "annual"):  lambda: STRIPE_PRO_ANNUAL_PRICE,
-    ("max",  "monthly"): lambda: STRIPE_MAX_MONTHLY_PRICE,
-    ("max",  "annual"):  lambda: STRIPE_MAX_ANNUAL_PRICE,
     ("team", "monthly"): lambda: STRIPE_TEAM_MONTHLY_PRICE,
     ("team", "annual"):  lambda: STRIPE_TEAM_ANNUAL_PRICE,
 }
 
 TEAM_MIN_SEATS = 2  # Minimum seats at upgrade (owner + at least 1 invitee)
+
+# Stripe Managed Payments: Stripe (через Link) — merchant of record, сам считает
+# и платит VAT/sales tax. Включается в Dashboard → Settings → Managed Payments;
+# до этого Checkout с флагом падает, поэтому держим за env (on/off).
+# Цены в USD с currency_options UAH (249 ₴ и т.п.) — Checkout сам показывает
+# гривны покупателям из Украины, остальным Adaptive Pricing конвертирует USD.
+STRIPE_MANAGED_PAYMENTS = os.environ.get("STRIPE_MANAGED_PAYMENTS", "off").lower() in ("1", "on", "true")
+
+
+def _checkout_mode_params() -> dict:
+    """Параметры Checkout Session, зависящие от Managed Payments.
+    С MoR Stripe сам выбирает способы оплаты — payment_method_types запрещён."""
+    if STRIPE_MANAGED_PAYMENTS:
+        return {"managed_payments": {"enabled": True}}
+    return {"payment_method_types": ["card"]}
 
 # Admin emails — comma-separated. Used to gate /api/lab/* and any future
 # internal tools. Anyone whose JWT email matches gets through; everyone else
@@ -621,10 +632,11 @@ def _is_admin() -> bool:
     return bool(g.user_email and g.user_email.lower() in ADMIN_EMAILS)
 
 
-# Plans on which Privacy Mode is offered as a feature. Free/Pro users can
-# have the column flipped (no DB-level enforcement) but the UI hides the
-# toggle and the backend ignores their flag.
-PRIVACY_MODE_ALLOWED_PLANS = {"max", "team"}
+# Plans on which Privacy Mode is offered as a feature. The UI hides the toggle
+# and the backend ignores the flag everywhere else.
+# 2026-09-25: Privacy Mode убран из тарифов (решение владельца) — пустой сет
+# выключает его везде. Вернуть: {"team"} + тоггл в SettingsModal.
+PRIVACY_MODE_ALLOWED_PLANS: set[str] = set()
 
 
 def _privacy_mode_active(profile: dict, effective_plan: str) -> bool:
@@ -646,14 +658,18 @@ NOTION_REDIRECT_URI        = os.environ.get(
 )
 NOTION_API_VERSION         = "2022-06-28"
 
+# Тарифы v2 (2026-09-25): Free / Pro $12 ($9 за год, 249 ₴) / Team $14 за место.
+# minutes — звонки и файлы в месяц. dictation_s — диктовка (приложение), секунды
+# речи в месяц, отдельно от минут. У Pro/Team «без лимита» в тарифе, 10 ч — скрытый
+# предел от злоупотреблений. Team: minutes — на место, пул общий на workspace
+# (minutes × seats, workspaces.minutes_used).
 PLAN_LIMITS = {
-    "free": {"minutes": 60,   "diarization": False, "ai": False, "history": 5},
-    "pro":  {"minutes": 600,  "diarization": True,  "ai": True,  "history": None},
-    "max":  {"minutes": 2000, "diarization": True,  "ai": True,  "history": None},
-    # Team: per-seat plan. Each seat gets the same allowance as Pro, billed
-    # to workspace owner (~$14/seat/mo, $11 annual).
-    "team": {"minutes": 600,  "diarization": True,  "ai": True,  "history": None},
+    "free": {"minutes": 60,  "dictation_s": 3600,  "diarization": True, "ai": False, "history": 5},
+    "pro":  {"minutes": 600, "dictation_s": 36000, "diarization": True, "ai": True,  "history": None},
+    "team": {"minutes": 600, "dictation_s": 36000, "diarization": True, "ai": True,  "history": None},
 }
+# Планы, у которых диктовка показывается как «без лимита».
+DICTATION_UNLIMITED_PLANS = {"pro", "team"}
 
 _tracked_jobs: set = set()  # job_ids уже учтённые в minutes_used (in-memory, ок для MVP)
 
@@ -1138,7 +1154,7 @@ def job_status_endpoint(job_id):
             if segments:
                 duration_mins = max(s.get("end", 0) for s in segments) / 60
                 try:
-                    _add_minutes(g.user_id, duration_mins)
+                    _charge_minutes(g.user_id, duration_mins)
                     _tracked_jobs.add(job_id)
                 except Exception as e:
                     print(f"[usage] tracking failed: {e}")
@@ -1330,9 +1346,9 @@ def profile_endpoint():
                         "bonus_minutes": 0, "referral_code": None})
     try:
         profile = _get_user_profile(g.user_id)
-        # Effective plan considers Team workspace membership
-        plan = _get_effective_plan(g.user_id, g.user_email, profile)
-        limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+        # План с учётом Team-воркспейса; у Team минуты — общий пул
+        u = _usage(g.user_id, profile)
+        plan, limits = u["plan"], u["limits"]
         bonus = int(profile.get("bonus_minutes") or 0)
         # Count successful referrals (people who used this user's code)
         ref_count = 0
@@ -1344,10 +1360,15 @@ def profile_endpoint():
             pass
         return jsonify({
             "plan": plan,
-            "minutes_used": profile.get("minutes_used", 0),
-            "minutes_limit": limits["minutes"] + bonus,  # effective limit
+            "minutes_used": u["minutes_used"],
+            "minutes_limit": u["minutes_limit"],  # effective limit (Team: пул на всех)
             "minutes_limit_base": limits["minutes"],
+            "minutes_pooled": bool(u["team_workspace_id"]),
+            "seats": u["seats"],
             "bonus_minutes": bonus,
+            "dictation_used_s": round(u["dictation_used_s"]),
+            "dictation_limit_s": u["dictation_limit_s"],
+            "dictation_unlimited": u["dictation_unlimited"],
             "referral_code": profile.get("referral_code"),
             "referral_count": ref_count,
             "was_referred": bool(profile.get("referred_by")),
@@ -1517,8 +1538,8 @@ def referral_redeem():
 def stripe_checkout():
     """Создаёт Stripe Checkout Session и возвращает URL для редиректа.
 
-    Поддерживает три плана:
-      • pro / max  — личная подписка (quantity=1).
+    Поддерживает два плана:
+      • pro        — личная подписка (quantity=1).
       • team       — командный апселл из пустого экрана Workspace. Юзер ещё НЕ
                      имеет воркспейса: вводит имя, мы кладём его в metadata как
                      `pending_workspace_name`. Вебхук на checkout.session.completed
@@ -1535,12 +1556,12 @@ def stripe_checkout():
     data    = request.get_json(silent=True) or {}
     plan    = (data.get("plan") or "pro").lower()
     billing = (data.get("billing") or "monthly").lower()
-    if plan not in ("pro", "max", "team"):
+    if plan not in ("pro", "team"):  # Max убран 2026-09-25
         plan = "pro"
     if billing not in ("monthly", "annual"):
         billing = "monthly"
 
-    price_id = data.get("price_id") or (STRIPE_PRICE_MAP.get((plan, billing), lambda: "")())
+    price_id = STRIPE_PRICE_MAP.get((plan, billing), lambda: "")()
     if not price_id:
         return jsonify({"error": f"price_id for {plan}/{billing} not configured in secrets"}), 400
 
@@ -1567,7 +1588,7 @@ def stripe_checkout():
         try:
             session = _stripe.checkout.Session.create(
                 mode="subscription",
-                payment_method_types=["card"],
+                **_checkout_mode_params(),
                 line_items=[{"price": price_id, "quantity": TEAM_MIN_SEATS}],
                 success_url=base + "?checkout=success&team=1",
                 cancel_url=base + "?checkout=cancelled",
@@ -1583,11 +1604,11 @@ def stripe_checkout():
             print(f"[stripe] team checkout create failed: {e}", flush=True)
             return jsonify({"error": str(e)}), 500
 
-    # ── Personal Pro / Max subscription ────────────────────────────────────────
+    # ── Personal Pro subscription ──────────────────────────────────────────────
     try:
         session = _stripe.checkout.Session.create(
             mode="subscription",
-            payment_method_types=["card"],
+            **_checkout_mode_params(),
             line_items=[{"price": price_id, "quantity": 1}],
             success_url=base + "?checkout=success",
             cancel_url=base + "?checkout=cancelled",
@@ -2292,28 +2313,30 @@ def _update_stripe_team_seats(workspace_id: str, new_qty: int) -> bool:
         return False
 
 
-def _get_effective_plan(user_id: str, user_email: str | None = None,
-                        own_profile: dict | None = None) -> str:
-    """Return the plan that's actually in effect for this user.
+_TEAM_WS_SELECT = "id,seats,minutes_used,minutes_month"
 
-    Resolution order:
-    1. If user belongs to a Team workspace (owner or active member) → 'team'
-    2. Otherwise → user_profiles.plan (own subscription, default 'free')
+
+def _get_team_workspace(user_id: str) -> dict | None:
+    """Team-воркспейс юзера (владелец или активный участник) или None.
 
     Pending invites do NOT grant team access — only accepted ones do.
+    Returns {id, seats, minutes_used, minutes_month}; колонки пула из миграции 016 —
+    без неё падаем на {id, seats} (пул считается пустым).
     """
-    # Quick path: own paid plan beats workspace if we already know it
-    own_plan = (own_profile or {}).get("plan", "free")
+    def _ws(params: dict) -> dict | None:
+        try:
+            rows = _sb_admin("workspaces", params={**params, "plan": "eq.team",
+                                                   "select": _TEAM_WS_SELECT, "limit": "1"})
+        except Exception:
+            rows = _sb_admin("workspaces", params={**params, "plan": "eq.team",
+                                                   "select": "id,seats", "limit": "1"})
+        return rows[0] if rows else None
 
     # Owner of a Team workspace?
     try:
-        rows = _sb_admin("workspaces", params={
-            "owner_id": f"eq.{user_id}",
-            "plan": "eq.team",
-            "select": "id", "limit": "1",
-        })
-        if rows:
-            return "team"
+        ws = _ws({"owner_id": f"eq.{user_id}"})
+        if ws:
+            return ws
     except Exception as e:
         print(f"[plan] team owner lookup failed: {e}", flush=True)
 
@@ -2325,17 +2348,80 @@ def _get_effective_plan(user_id: str, user_email: str | None = None,
             "select": "workspace_id", "limit": "1",
         })
         if rows:
-            ws_rows = _sb_admin("workspaces", params={
-                "id": f"eq.{rows[0]['workspace_id']}",
-                "plan": "eq.team",
-                "select": "id", "limit": "1",
-            })
-            if ws_rows:
-                return "team"
+            return _ws({"id": f"eq.{rows[0]['workspace_id']}"})
     except Exception as e:
         print(f"[plan] team member lookup failed: {e}", flush=True)
+    return None
 
-    return own_plan
+
+def _normalize_plan(plan: str | None) -> str:
+    """Max убран 2026-09-25 (миграция 016 переводит в pro); неизвестное → free."""
+    plan = (plan or "free").lower()
+    if plan == "max":
+        return "pro"
+    return plan if plan in PLAN_LIMITS else "free"
+
+
+def _get_effective_plan(user_id: str, user_email: str | None = None,
+                        own_profile: dict | None = None) -> str:
+    """Return the plan that's actually in effect for this user.
+
+    Resolution order:
+    1. If user belongs to a Team workspace (owner or active member) → 'team'
+    2. Otherwise → user_profiles.plan (own subscription, default 'free')
+    """
+    if _get_team_workspace(user_id):
+        return "team"
+    return _normalize_plan((own_profile or {}).get("plan"))
+
+
+def _this_month() -> str:
+    """Первое число текущего месяца (UTC) — как date_trunc('month') в RPC миграции 016."""
+    return datetime.utcnow().strftime("%Y-%m-01")
+
+
+def _usage(user_id: str, profile: dict) -> dict:
+    """План и расход за месяц — единая точка для лимитов и счётчиков в UI.
+
+    Returns {plan, limits, minutes_used, minutes_limit, team_workspace_id, seats,
+             dictation_used_s, dictation_limit_s, dictation_unlimited}.
+    Team: минуты — общий пул воркспейса (PLAN_LIMITS minutes × seats), личные
+    бонусные минуты не добавляются. Остальные: личный счётчик + bonus_minutes.
+    """
+    ws = _get_team_workspace(user_id)
+    plan = "team" if ws else _normalize_plan(profile.get("plan"))
+    limits = PLAN_LIMITS[plan]
+    if ws:
+        seats = max(1, int(ws.get("seats") or 1))
+        used = float(ws.get("minutes_used") or 0) if str(ws.get("minutes_month") or "") == _this_month() else 0.0
+        minutes_limit = limits["minutes"] * seats
+    else:
+        seats = 1
+        used = float(profile.get("minutes_used") or 0)
+        minutes_limit = limits["minutes"] + int(profile.get("bonus_minutes") or 0)
+    dict_used = (float(profile.get("dictation_seconds_month") or 0)
+                 if str(profile.get("dictation_month") or "") == _this_month() else 0.0)
+    return {
+        "plan": plan,
+        "limits": limits,
+        "minutes_used": used,
+        "minutes_limit": minutes_limit,
+        "team_workspace_id": ws["id"] if ws else None,
+        "seats": seats,
+        "dictation_used_s": dict_used,
+        "dictation_limit_s": limits["dictation_s"],
+        "dictation_unlimited": plan in DICTATION_UNLIMITED_PLANS,
+    }
+
+
+def _charge_minutes(user_id: str, minutes: float):
+    """Списывает минуты записи: участникам Team — в общий пул воркспейса."""
+    ws = _get_team_workspace(user_id)
+    if ws:
+        _sb_admin("rpc/add_workspace_minutes", method="POST",
+                  data={"p_workspace_id": ws["id"], "p_mins": max(1, int(minutes + 0.5))})
+    else:
+        _add_minutes(user_id, minutes)
 
 
 def _lookup_user_id_by_email(email: str) -> str | None:
@@ -2470,6 +2556,7 @@ def workspace_upgrade_team():
     try:
         session = _stripe.checkout.Session.create(
             mode="subscription",
+            **_checkout_mode_params(),
             line_items=[{"price": price_id, "quantity": qty}],
             success_url=origin + "/app?team_subscribed=1",
             cancel_url=origin + "/app?team_subscribed=0",
@@ -2814,11 +2901,11 @@ def stripe_webhook():
                 print("[webhook] personal_team_create missing owner_id — skipped", flush=True)
             return jsonify({"ok": True})
 
-        # ── Personal subscription (Pro/Max) ──────────────────────────
+        # ── Personal subscription (Pro) ──────────────────────────────
+        # Личная подписка теперь только Pro (Max убран) — metadata.plan от
+        # старых сессий не доверяем.
         user_id = _g(obj, "client_reference_id")
-        plan_name = _meta_get(obj, "plan") or "pro"
-        if plan_name not in ("pro", "max"):
-            plan_name = "pro"
+        plan_name = "pro"
         print(f"[webhook] checkout.session.completed user_id={user_id} plan={plan_name}", flush=True)
         if user_id:
             _sb_admin("user_profiles", method="PATCH",
@@ -2879,7 +2966,7 @@ def stripe_webhook():
                                else data_arr[0].quantity)
                     except Exception:
                         pass
-                    new_plan = "team" if status in ("active", "trialing") else "free"
+                    new_plan = "team" if status in ("active", "trialing", "past_due") else "free"
                     _sb_admin("workspaces", method="PATCH",
                               params={"id": f"eq.{ws_id}"},
                               data={"plan": new_plan, "seats": int(qty)})
@@ -2892,10 +2979,13 @@ def stripe_webhook():
                          params={"stripe_customer_id": f"eq.{customer_id}", "select": "id"})
         if rows:
             uid = rows[0]["id"]
+            # Личная подписка — только Pro (раньше тут любой активной ставился pro,
+            # и Max-покупатель получал Pro; Max убран). past_due — Stripe ещё
+            # повторяет списание, доступ не отбираем до отмены подписки.
             if etype == "customer.subscription.deleted":
                 plan = "free"
             else:
-                plan = "pro" if _g(obj, "status") in ("active", "trialing") else "free"
+                plan = "pro" if _g(obj, "status") in ("active", "trialing", "past_due") else "free"
             _sb_admin("user_profiles", method="PATCH",
                       params={"id": f"eq.{uid}"}, data={"plan": plan})
             print(f"[webhook] {etype} → plan={plan} for {uid}", flush=True)
@@ -3118,7 +3208,9 @@ def generate_endpoint():
     if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
         try:
             profile = _get_user_profile(g.user_id)
-            if PLAN_LIMITS.get(profile.get("plan", "free"), {}).get("ai") is False:
+            # Effective plan: участник Team с личным Free тоже получает AI.
+            eff_plan = _get_effective_plan(g.user_id, g.user_email, profile)
+            if not PLAN_LIMITS.get(eff_plan, PLAN_LIMITS["free"])["ai"]:
                 return jsonify({
                     "error": "AI analysis requires Pro plan.",
                     "upgrade_required": True,
@@ -3149,7 +3241,7 @@ def generate_endpoint():
     # Resolve Privacy Mode — when ON, route summary/actions through
     # self-hosted LabGPTOSS20B instead of Gemini Pro.
     privacy_mode = False
-    if SUPABASE_SERVICE_ROLE_KEY and g.user_id and template_name in GEMINI_TEMPLATES:
+    if PRIVACY_MODE_ALLOWED_PLANS and SUPABASE_SERVICE_ROLE_KEY and g.user_id and template_name in GEMINI_TEMPLATES:
         try:
             profile = _get_user_profile(g.user_id)
             eff_plan = _get_effective_plan(g.user_id, g.user_email, profile)
@@ -3465,18 +3557,24 @@ def live_token_endpoint():
 
     diarize = True
     terms: list[str] = []
-    remaining_min = 60.0
+    remaining_s = 3600.0
     if SUPABASE_SERVICE_ROLE_KEY:
         try:
             profile = _get_user_profile(g.user_id)
-            plan = _get_effective_plan(g.user_id, g.user_email, profile)
-            if _privacy_mode_active(profile, plan):
+            u = _usage(g.user_id, profile)
+            if _privacy_mode_active(profile, u["plan"]):
                 return jsonify({"error": "live transcript is off in Privacy Mode", "live_disabled": True}), 403
-            limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-            remaining_min = limits["minutes"] + int(profile.get("bonus_minutes") or 0) - float(profile.get("minutes_used") or 0)
-            if remaining_min <= 0:
-                return jsonify({"error": "Monthly limit reached", "upgrade_required": True}), 402
-            diarize = bool(limits["diarization"])
+            if dictation:
+                # Диктовка — своя квота в секундах речи, минуты звонков не трогает
+                remaining_s = u["dictation_limit_s"] - u["dictation_used_s"]
+                if remaining_s <= 0:
+                    return jsonify({"error": "Monthly dictation limit reached", "upgrade_required": True,
+                                    "dictation_limit": True}), 402
+            else:
+                remaining_s = (u["minutes_limit"] - u["minutes_used"]) * 60
+                if remaining_s <= 0:
+                    return jsonify({"error": "Monthly limit reached", "upgrade_required": True}), 402
+            diarize = bool(u["limits"]["diarization"])
             vocab = profile.get("vocabulary") or []
             if isinstance(vocab, list):
                 terms = [v.get("term") for v in sorted(vocab, key=lambda x: -int(x.get("freq", 1)))
@@ -3484,7 +3582,7 @@ def live_token_endpoint():
         except Exception as e:
             print(f"[live] profile check failed: {e}")
 
-    max_session_s = int(remaining_min * 60) + 300  # запас: запись может чуть перебрать лимит
+    max_session_s = int(remaining_s) + 300  # запас: запись может чуть перебрать лимит
     try:
         key = soniox.create_temporary_key(
             api_key, max_session_s=max_session_s,
@@ -3569,7 +3667,8 @@ def dictation_cleanup_endpoint():
     if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
         try:
             profile = _get_user_profile(g.user_id)
-            if _privacy_mode_active(profile, _get_effective_plan(g.user_id, g.user_email, profile)):
+            if (PRIVACY_MODE_ALLOWED_PLANS  # без Privacy Mode не тратим запросы на план
+                    and _privacy_mode_active(profile, _get_effective_plan(g.user_id, g.user_email, profile))):
                 return jsonify({"text": raw, "cleaned": False})  # текст не уходит третьим лицам
             vocab = profile.get("vocabulary") or []
             if isinstance(vocab, list):
@@ -3591,8 +3690,9 @@ def dictation_cleanup_endpoint():
 
 @app.route("/api/dictation/usage", methods=["POST"])
 def dictation_usage_endpoint():
-    """Body: {seconds}. Секунды диктовки → общий лимит минут (RPC из migrations/015).
-    Returns {minutes_used, minutes_limit} для счётчика в приложении."""
+    """Body: {seconds}. Секунды диктовки → своя месячная квота (RPC из migrations/016).
+    Returns {minutes_used, minutes_limit} (звонки — счётчик в приложении 0.4.x) +
+    dictation_used_s / dictation_limit_s / dictation_unlimited."""
     body = request.get_json(silent=True) or {}
     try:
         secs = max(0.0, min(float(body.get("seconds") or 0), 900.0))  # одна диктовка ≤ 15 мин
@@ -3605,12 +3705,15 @@ def dictation_usage_endpoint():
             _sb_admin("rpc/add_dictation_seconds", method="POST",
                       data={"p_user_id": g.user_id, "p_secs": round(secs, 2)})
         except Exception as e:
-            print(f"[dictation] usage not recorded (migration 015 applied?): {e}", flush=True)
+            print(f"[dictation] usage not recorded (migration 016 applied?): {e}", flush=True)
     try:
         profile = _get_user_profile(g.user_id)
-        plan = _get_effective_plan(g.user_id, g.user_email, profile)
-        limit = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])["minutes"] + int(profile.get("bonus_minutes") or 0)
-        return jsonify({"ok": True, "minutes_used": profile.get("minutes_used", 0), "minutes_limit": limit})
+        u = _usage(g.user_id, profile)
+        return jsonify({"ok": True, "plan": u["plan"],
+                        "minutes_used": u["minutes_used"], "minutes_limit": u["minutes_limit"],
+                        "dictation_used_s": round(u["dictation_used_s"]),
+                        "dictation_limit_s": u["dictation_limit_s"],
+                        "dictation_unlimited": u["dictation_unlimited"]})
     except Exception:
         return jsonify({"ok": True})
 
@@ -3670,21 +3773,19 @@ def transcribe_endpoint():
     if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
         try:
             profile = _get_user_profile(g.user_id)
-            plan = _get_effective_plan(g.user_id, g.user_email, profile)
-            limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-            effective_limit = limits["minutes"] + int(profile.get("bonus_minutes") or 0)
-            if profile.get("minutes_used", 0) >= effective_limit:
+            u = _usage(g.user_id, profile)
+            limits = u["limits"]
+            effective_limit = u["minutes_limit"]
+            if u["minutes_used"] >= effective_limit:
                 return jsonify({
                     "error": f"Monthly limit reached ({effective_limit} min). Upgrade to continue.",
                     "upgrade_required": True,
                 }), 402
             if not limits["diarization"]:
                 num_speakers = 1  # Free: транскрипция без разделения по спикерам
-            # Best Quality (large-v3) — только для Max плана. Effective Team plan
-            # ≠ Max, but personal Max subscription always overrides.
-            own_plan = profile.get("plan", "free")
-            if quality == "best" and plan != "max" and own_plan != "max":
-                quality = "fast"
+            # Best Quality (large-v3) был фичей Max — тариф убран 2026-09-25.
+            # large-v3 остаётся только для FORCE_BEST_QUALITY_LANGUAGES (ниже).
+            quality = "fast"
             # Personal vocabulary — у всех залогиненных юзеров.
             # Правые формы → в Whisper prompt; пары wrong→right → в Gemini hints.
             vocab_items = profile.get("vocabulary") or []
@@ -3734,7 +3835,7 @@ def transcribe_endpoint():
         # correction entirely (falls back to local Qwen on the same GPU)
         privacy_mode = False
         try:
-            if g.user_id and SUPABASE_SERVICE_ROLE_KEY:
+            if PRIVACY_MODE_ALLOWED_PLANS and g.user_id and SUPABASE_SERVICE_ROLE_KEY:
                 profile = _get_user_profile(g.user_id)
                 eff_plan = _get_effective_plan(g.user_id, g.user_email, profile)
                 privacy_mode = _privacy_mode_active(profile, eff_plan)

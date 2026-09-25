@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import type { Profile, WorkspaceInfo, VocabTerm } from "@/lib/ink/api";
 import {
-  setPrivacyMode, saveVocabulary, UpgradeRequiredError, StripeCustomerInvalidError,
+  saveVocabulary, StripeCustomerInvalidError,
   createWorkspace as apiCreateWorkspace,
   inviteMember as apiInviteMember,
   removeMember as apiRemoveMember,
@@ -38,6 +38,10 @@ const DICT = {
     upgrade: "Upgrade →", redirecting: "Redirecting…",
     downgrade: "Downgrade", opening: "Opening…",
     billingErrFallback: "Could not open billing portal.",
+    monthly: "Monthly", annual: "Yearly", annualSave: "save up to 25%",
+    setUpTeam: "Set up team →", manageInWorkspace: "Billing is managed in Workspace",
+    priceNote: "Prices in USD. Paying from Ukraine? Checkout shows hryvnias (Pro — 249 ₴ / mo).",
+    dictation: "Dictation", unlimited: "unlimited", teamPool: "team pool",
     // Workspace — empty state
     wsEmptyTitle: "Create a workspace",
     wsEmptyBody: "Share transcripts with teammates and collaborate together.",
@@ -46,7 +50,7 @@ const DICT = {
     wsUpgradeCreate: "Upgrade to Team & Create",
     wsCreating: "Creating…",
     wsRedirecting: "Redirecting…",
-    wsUpgradeNote: "$14 / seat / mo · 600 min per seat · shared history. Your workspace is created automatically right after checkout.",
+    wsUpgradeNote: "$14 / seat / mo ($11 billed yearly) · 600 min per seat in one team pool · shared history. Your workspace is created automatically right after checkout.",
     // Workspace — manage
     wsTitle: "Workspace",
     wsInviteByEmail: "Invite by email",
@@ -60,10 +64,6 @@ const DICT = {
     // Settings pane
     recDefaults: "Recording defaults",
     fieldLanguage: "Language", fieldSpeakers: "Speakers", auto: "Auto",
-    bestQuality: "Best Quality", bestQualitySub: "large-v3 — slower but more accurate",
-    requiresMaxTeam: "Requires Max or Team plan.", upgradeArrow: "Upgrade →",
-    privacy: "Privacy", privacyMode: "Privacy Mode",
-    privacySub: "No Gemini — self-hosted models only",
     appearance: "Appearance", theme: "Theme", light: "Light", dark: "Dark",
     interfaceLanguage: "Interface language",
     // Integrations
@@ -106,6 +106,10 @@ const DICT = {
     upgrade: "Оновити →", redirecting: "Перенаправлення…",
     downgrade: "Понизити", opening: "Відкриваємо…",
     billingErrFallback: "Не вдалося відкрити портал оплати.",
+    monthly: "Щомісяця", annual: "Щороку", annualSave: "−20%",
+    setUpTeam: "Створити команду →", manageInWorkspace: "Оплатою керує власник у «Воркспейсі»",
+    priceNote: "Ціни в гривнях — для оплати з України. В інших країнах оплата в доларах (Pro — $12 / міс).",
+    dictation: "Диктовка", unlimited: "без ліміту", teamPool: "пул команди",
     // Workspace — empty state
     wsEmptyTitle: "Створіть командний простір",
     wsEmptyBody: "Діліться транскриптами з колегами та працюйте разом.",
@@ -114,7 +118,7 @@ const DICT = {
     wsUpgradeCreate: "Оновити до Team і створити",
     wsCreating: "Створення…",
     wsRedirecting: "Перенаправлення…",
-    wsUpgradeNote: "$14 / місце / міс · 600 хв на місце · спільна історія. Ваш воркспейс буде створено автоматично одразу після оплати.",
+    wsUpgradeNote: "229 ₴ / місце / міс · 600 хв на місце в спільному пулі команди · спільна історія. Ваш воркспейс буде створено автоматично одразу після оплати.",
     // Workspace — manage
     wsTitle: "Воркспейс",
     wsInviteByEmail: "Запросити за email",
@@ -128,10 +132,6 @@ const DICT = {
     // Settings pane
     recDefaults: "Налаштування запису",
     fieldLanguage: "Мова", fieldSpeakers: "Спікери", auto: "Авто",
-    bestQuality: "Найкраща якість", bestQualitySub: "large-v3 — повільніше, але точніше",
-    requiresMaxTeam: "Потрібен план Max або Team.", upgradeArrow: "Оновити →",
-    privacy: "Приватність", privacyMode: "Режим приватності",
-    privacySub: "Без Gemini — лише власні моделі",
     appearance: "Вигляд", theme: "Тема", light: "Світла", dark: "Темна",
     interfaceLanguage: "Мова інтерфейсу",
     // Integrations
@@ -161,20 +161,38 @@ const DICT = {
   },
 } as const;
 
-const PLAN_DATA = [
-  {
-    id: "free", name: "Free", price: "$0", period: "forever", minutes: "60 min / mo",
-    features: ["Basic transcription", "Speaker detection", "Export .md / .txt"],
-  },
-  {
-    id: "pro", name: "Pro", price: "$15", period: "/mo", minutes: "600 min / mo",
-    features: ["Everything in Free", "AI summary & actions", "Auto-summary after every call"],
-  },
-  {
-    id: "max", name: "Max", price: "$29", period: "/mo", minutes: "1,800 min / mo",
-    features: ["Everything in Pro", "large-v3 model", "Privacy mode", "Priority support"],
-  },
-] as const;
+// Тарифы v2 (2026-09-25). Цены — как в Stripe: USD с UAH currency_options,
+// Checkout сам показывает гривны покупателям из Украины. В гривнях за год:
+// Pro 2 390 ₴ (≈ 199 ₴/міс), Team 2 190 ₴ за місце (≈ 183 ₴/міс).
+type Billing = "monthly" | "annual";
+type PlanId = "free" | "pro" | "team";
+const PLAN_ORDER: PlanId[] = ["free", "pro", "team"];
+
+function planCards(lang: Lang, billing: Billing) {
+  const yearly = billing === "annual";
+  if (lang === "ua") {
+    return [
+      { id: "free" as const, name: "Free", price: "0 ₴", period: "назавжди", minutes: "60 хв дзвінків / міс",
+        features: ["Розділення за спікерами", "1 год диктовки / міс", "Останні 5 записів"] },
+      { id: "pro" as const, name: "Pro", price: yearly ? "199 ₴" : "249 ₴",
+        period: yearly ? "/ міс, 2 390 ₴ на рік" : "/ міс", minutes: "600 хв дзвінків / міс",
+        features: ["Усе з Free", "AI-підсумок і задачі", "Диктовка без ліміту", "Уся історія"] },
+      { id: "team" as const, name: "Team", price: yearly ? "183 ₴" : "229 ₴",
+        period: yearly ? "/ місце / міс, щороку" : "/ місце / міс", minutes: "600 хв на місце, спільний пул",
+        features: ["Усе з Pro", "Спільний воркспейс", "Один рахунок на команду"] },
+    ];
+  }
+  return [
+    { id: "free" as const, name: "Free", price: "$0", period: "forever", minutes: "60 min of calls / mo",
+      features: ["Speaker labels", "1 h of dictation / mo", "Last 5 recordings"] },
+    { id: "pro" as const, name: "Pro", price: yearly ? "$9" : "$12",
+      period: yearly ? "/mo, billed yearly" : "/mo", minutes: "600 min of calls / mo",
+      features: ["Everything in Free", "AI summary & action items", "Unlimited dictation", "Unlimited history"] },
+    { id: "team" as const, name: "Team", price: yearly ? "$11" : "$14",
+      period: yearly ? "/seat/mo, billed yearly" : "/seat/mo", minutes: "600 min per seat, shared pool",
+      features: ["Everything in Pro", "Shared workspace", "One invoice for the team"] },
+  ];
+}
 
 // Shared smooth theme helper — dispatches event so InkThemeToggle stays in sync
 function applyThemeSmooth(next: "light" | "dark") {
@@ -203,8 +221,6 @@ function Toggle({
     </label>
   );
 }
-
-function MaxBadge() { return <span className="i-badge">MAX</span>; }
 
 function NavIcon({ id }: { id: NavSection }) {
   const p = {
@@ -253,7 +269,7 @@ export function SettingsModal({
   const t = DICT[uiLang] ?? DICT.en;
   const [nav, setNav] = useState<NavSection>(initialSection);
   const plan = profile?.plan || "free";
-  const isPremium = plan === "max" || plan === "team";
+  const [billing, setBilling] = useState<Billing>("monthly");
 
   // ── Fix 2: Stripe — separate upgrade vs. downgrade flows ──────────
   // Upgrade: createStripeCheckout → new subscription (Checkout Session)
@@ -262,11 +278,11 @@ export function SettingsModal({
   const [loadingPortal, setLoadingPortal] = useState(false);
   const [billingError, setBillingError] = useState("");
 
-  const startCheckout = async (targetPlan: "pro" | "max") => {
+  const startCheckout = async (targetPlan: "pro") => {
     if (checkoutPlan || loadingPortal) return;
     setCheckoutPlan(targetPlan); setBillingError("");
     try {
-      const url = await createStripeCheckout(targetPlan);
+      const url = await createStripeCheckout(targetPlan, billing);
       window.location.href = url;
     } catch (e) {
       setBillingError(e instanceof Error ? e.message : "Checkout failed.");
@@ -287,9 +303,9 @@ export function SettingsModal({
       // already wiped it; restart Checkout for the current paid plan so a fresh,
       // valid customer is created. Free users just see the message.
       if (e instanceof StripeCustomerInvalidError) {
-        if (plan === "pro" || plan === "max") {
+        if (plan === "pro") {
           try {
-            const url = await createStripeCheckout(plan);
+            const url = await createStripeCheckout(plan, billing);
             window.location.href = url;
             return;
           } catch { /* fall through to toast */ }
@@ -355,37 +371,6 @@ export function SettingsModal({
     if (!t || vocab.some((v) => v.term.toLowerCase() === t.toLowerCase())) return;
     setVocabInput("");
     vocabSave([{ term: t, freq: 10 }, ...vocab]);
-  };
-
-  // Best Quality
-  const [qualityError, setQualityError] = useState("");
-  const handleQuality = (v: boolean) => {
-    if (v && !isPremium) { setQualityError(t.requiresMaxTeam); return; }
-    setQualityError("");
-    const next = saveSettings({ quality: v ? "best" : "fast" });
-    onSettingsChange(next);
-  };
-
-  // Privacy Mode
-  const [privMode, setPrivMode] = useState<boolean>(!!profile?.privacy_mode);
-  const [privSaving, setPrivSaving] = useState(false);
-  const [privError, setPrivError] = useState("");
-  useEffect(() => { setPrivMode(!!profile?.privacy_mode); }, [profile?.privacy_mode]);
-
-  const handlePrivMode = async (next: boolean) => {
-    if (privSaving) return;
-    if (next && !isPremium) { setPrivError(t.requiresMaxTeam); return; }
-    setPrivMode(next); setPrivError(""); setPrivSaving(true);
-    try {
-      await setPrivacyMode(next);
-    } catch (e) {
-      setPrivMode(!next);
-      setPrivError(
-        e instanceof UpgradeRequiredError
-          ? t.requiresMaxTeam
-          : (e instanceof Error ? e.message : "save failed"),
-      );
-    } finally { setPrivSaving(false); }
   };
 
   // Theme — syncs with Cmd+D global hotkey via custom event
@@ -531,7 +516,10 @@ export function SettingsModal({
   const filledDots = Math.round(ratio * 16);
 
   // Helper: is the given plan an upgrade from current?
-  const planIdx = (id: string) => PLAN_DATA.findIndex((x) => x.id === id);
+  const planIdx = (id: string) => PLAN_ORDER.indexOf(id as PlanId);
+  const dictUsed = profile?.dictation_used_s || 0;
+  const dictLimit = profile?.dictation_limit_s || 3600;
+  const hours = (sec: number) => Math.round(sec / 360) / 10;
   const isUpgrade = (targetId: string) => planIdx(targetId) > planIdx(plan);
 
   const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
@@ -596,8 +584,14 @@ export function SettingsModal({
                       ))}
                       <span className="i-um-label">
                         {Math.round(used / 60 * 10) / 10} / {Math.round(limit / 60)}h
+                        {profile?.minutes_pooled ? ` · ${t.teamPool}` : ""}
                       </span>
                     </div>
+                    <span className="i-mrow-sub">
+                      {t.dictation}: {profile?.dictation_unlimited
+                        ? `${hours(dictUsed)}h · ${t.unlimited}`
+                        : `${hours(dictUsed)} / ${hours(dictLimit)}h`}
+                    </span>
                   </div>
                 </div>
                 <button type="button" className="i-signout" onClick={() => { onSignOut(); onClose(); }}>
@@ -618,8 +612,17 @@ export function SettingsModal({
                   <div className="i-billing-error" role="alert">{billingError}</div>
                 )}
 
+                <div className="i-seg-toggle" role="group" aria-label="Billing period" style={{ maxWidth: 260 }}>
+                  {(["monthly", "annual"] as const).map((b) => (
+                    <button key={b} type="button" className={billing === b ? "on" : ""} onClick={() => setBilling(b)}>
+                      {b === "monthly" ? t.monthly : t.annual}
+                    </button>
+                  ))}
+                </div>
+                {billing === "annual" && <p className="i-mrow-sub" style={{ marginTop: 6 }}>{t.annualSave}</p>}
+
                 <div className="i-plan-cards">
-                  {PLAN_DATA.map((p) => (
+                  {planCards(uiLang, billing).map((p) => (
                     <div
                       key={p.id}
                       className={["i-plan-card", p.id === plan ? "current" : ""].filter(Boolean).join(" ")}
@@ -637,13 +640,23 @@ export function SettingsModal({
                       </div>
                       {p.id === plan
                         ? <span className="i-plan-current-badge">{t.currentPlan}</span>
+                        : plan === "team"
+                          /* Team: оплата — подписка воркспейса, управляет владелец */
+                          ? <span className="i-mrow-sub">{t.manageInWorkspace}</span>
+                        : p.id === "team"
+                          /* Team покупается из вкладки Workspace — нужно имя воркспейса */
+                          ? (
+                            <button type="button" className="i-plan-cta" onClick={() => setNav("workspace")}>
+                              {t.setUpTeam}
+                            </button>
+                          )
                         : isUpgrade(p.id)
                           ? (
                             <button
                               type="button"
                               className="i-plan-cta"
                               disabled={!!checkoutPlan || loadingPortal}
-                              onClick={() => void startCheckout(p.id as "pro" | "max")}
+                              onClick={() => void startCheckout("pro")}
                             >
                               {checkoutPlan === p.id ? t.redirecting : t.upgrade}
                             </button>
@@ -663,6 +676,7 @@ export function SettingsModal({
                     </div>
                   ))}
                 </div>
+                <p className="i-mrow-sub" style={{ marginTop: 10 }}>{t.priceNote}</p>
               </div>
             )}
 
@@ -883,47 +897,6 @@ export function SettingsModal({
                         <option key={n} value={String(n)}>{n}</option>
                       ))}
                     </select>
-                  </div>
-                  <div className="i-mrow">
-                    <div>
-                      <div className="i-toggle-wrap">
-                        <span className="i-mrow-label">{t.bestQuality}</span>
-                        <MaxBadge />
-                      </div>
-                      <div className="i-mrow-sub">{t.bestQualitySub}</div>
-                      {qualityError && (
-                        <div className="i-toggle-nudge">
-                          {qualityError}{" "}
-                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>{t.upgradeArrow}</button>
-                        </div>
-                      )}
-                    </div>
-                    <Toggle id="s-quality" checked={settings.quality === "best"} onChange={handleQuality} />
-                  </div>
-                </div>
-
-                <p className="i-msect-title" style={{ marginTop: 14 }}>{t.privacy}</p>
-                <div className="i-msect-card">
-                  <div className="i-mrow">
-                    <div>
-                      <div className="i-toggle-wrap">
-                        <span className="i-mrow-label">{t.privacyMode}</span>
-                        <MaxBadge />
-                      </div>
-                      <div className="i-mrow-sub">{t.privacySub}</div>
-                      {privError && (
-                        <div className="i-toggle-nudge">
-                          {privError}{" "}
-                          <button type="button" className="i-link" onClick={() => setNav("subscription")}>{t.upgradeArrow}</button>
-                        </div>
-                      )}
-                    </div>
-                    <Toggle
-                      id="s-privacy"
-                      checked={privMode}
-                      onChange={(v) => void handlePrivMode(v)}
-                      disabled={privSaving}
-                    />
                   </div>
                 </div>
 

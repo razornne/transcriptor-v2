@@ -37,7 +37,7 @@ impl ApiError {
     pub fn user_message(&self) -> String {
         match self {
             ApiError::NotSignedIn => "Sign in to Skriptly to dictate".into(),
-            ApiError::NoMinutes => "Your minutes are used up — upgrade on skriptly.io".into(),
+            ApiError::NoMinutes => "This month's dictation is used up — upgrade on skriptly.io".into(),
             ApiError::PrivacyMode => "Dictation is off while Privacy Mode is on".into(),
             ApiError::Unavailable => "Dictation is temporarily unavailable".into(),
             ApiError::Other(e) => format!("Couldn't reach Skriptly: {e}"),
@@ -94,13 +94,24 @@ pub async fn forget_token(state: &AppState) {
     *state.token.lock().await = None;
 }
 
-/// Секунды диктовки → общий лимит минут. Возвращает (использовано, лимит).
-pub async fn report_usage(state: &AppState, seconds: f64) -> Option<(f64, f64)> {
+/// Секунды диктовки → своя месячная квота (не минуты звонков, с тарифов v2).
+/// Возвращает ответ бэкенда: minutes_used/minutes_limit (звонки) и
+/// dictation_used_s/dictation_limit_s/dictation_unlimited.
+pub async fn report_usage(state: &AppState, seconds: f64) -> Option<Value> {
     let r = post(state, "/api/dictation/usage", json!({ "seconds": seconds }), Duration::from_secs(20))
         .await
         .ok()?;
     let v: Value = r.json().await.ok()?;
-    Some((v.get("minutes_used")?.as_f64()?, v.get("minutes_limit")?.as_f64()?))
+    v.get("minutes_limit")?;
+    Some(v)
+}
+
+/// Квота диктовки на месяц кончилась (у Pro — скрытый предел).
+pub fn dictation_exhausted(v: &Value) -> bool {
+    match (v.get("dictation_used_s").and_then(Value::as_f64), v.get("dictation_limit_s").and_then(Value::as_f64)) {
+        (Some(used), Some(limit)) => used >= limit,
+        _ => false,
+    }
 }
 
 /// Чистка текста LLM. Любая ошибка → исходный текст (вставка важнее полировки).

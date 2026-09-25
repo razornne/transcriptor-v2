@@ -27,10 +27,18 @@ function renderUsage(p) {
   $("plan").textContent = p.plan || "";
   const used = Math.round(p.minutes_used || 0);
   const limit = Math.round(p.minutes_limit || 0);
-  $("minutes").textContent = `${used} / ${limit} min this month`;
+  $("minutes").textContent = `${used} / ${limit} min of calls this month`;
   const share = limit > 0 ? Math.min(1, used / limit) : 0;
   $("barFill").style.width = `${share * 100}%`;
   $("bar").classList.toggle("warn", share > 0.9);
+  // Диктовка — своя квота (часы речи в месяц); у Pro/Team «без лимита»
+  if (p.dictation_limit_s != null) {
+    const h = (s) => Math.round((s || 0) / 360) / 10;
+    $("dictRow").hidden = false;
+    $("dictation").textContent = p.dictation_unlimited
+      ? `${h(p.dictation_used_s)} h · unlimited`
+      : `${h(p.dictation_used_s)} / ${h(p.dictation_limit_s)} h this month`;
+  }
 }
 
 // ── Шорткаты: «удерживать» и «закрепить» ──────────────────────────────────

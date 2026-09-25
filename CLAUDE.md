@@ -23,7 +23,8 @@ v1 (`C:\projects\transcriptor\`) — старая Railway-версия на Open
 | Диктовка | Приложение для Windows `desktop/` (Tauri): Soniox real-time напрямую по временному ключу, чистка Gemini Flash, словарь общий с вебом |
 | Запись созвонов | Веб (стерео через вкладку) **и** приложение (микрофон + WASAPI loopback) → тот же `/api/transcribe`. Веб — временно, пока нет macOS-приложения |
 | Себестоимость | Час звонка ≈ $0.30, загруженный файл ≈ $0.20, 1 000 слов диктовки ≈ $0.03. Калькулятор: https://claude.ai/artifact/7MdjcE6qfMZ7pVed1wV5TF |
-| Оплата | Сейчас Stripe (live). План — Merchant of Record (Lemon Squeezy или Paddle), Max убрать, Team доработать — см. ROADMAP «Фаза 3» |
+| Тарифы (v2, 2026-09-25) | **Free** 60 мин звонков + спикеры, без AI, 1 ч диктовки · **Pro** $12 ($9 за год) / 249 ₴ (2 390 ₴ за год): 600 мин, AI, диктовка «без лимита» (скрытый предел 10 ч) · **Team** $14 ($11) / 229 ₴ (2 190 ₴) за место: **общий пул** 600 мин × мест на воркспейс. **Max и Privacy Mode убраны** (Privacy Mode выключен пустым `PRIVACY_MODE_ALLOWED_PLANS`, код оставлен). Лимиты — `PLAN_LIMITS` + `_usage()` в app.py, тесты `tests/test_plans.py` |
+| Оплата | Stripe (live), переход на **Stripe Managed Payments** (MoR: Stripe/Link продаёт и платит VAT; владелец — физлицо в Чехии). Флаг `STRIPE_MANAGED_PAYMENTS=on` в `stripe-secrets` включает `managed_payments` в Checkout. Цены — USD с `currency_options` UAH (Checkout сам берёт ₴ с Украины); создаются `scripts/stripe_plans_v2.py`. Запасной вариант — Paddle |
 
 План и открытые решения — `ROADMAP.md` → «Next up».
 
@@ -163,7 +164,8 @@ Supabase Postgres
 - **`011_capture_stats.sql`** — `public.capture_stats`: телеметрия захвата на каждую запись (есть ли звук вкладки, уровни, секунды тишины по каналам, отвалы/переключения микрофона в `events` JSONB, браузер/ОС). `recording_id` — связь с сохранённым аудио того же звонка. Пишется с клиента после Stop.
 - **`012_recordings.sql`** — `public.recordings`: индекс архива аудио в Cloudflare R2 (`storage_key`), метаданные записи, **сырой** результат пайплайна (`segments`, до правок юзера) или `error`. `id` = `recording_id` (= `capture_stats.recording_id`). Только service role (RLS без политик).
 - **`013_recordings_corrections.sql`** — `recordings.corrections` (что поменяла LLM-коррекция) + `recordings.channel_mode`.
-- **`015_dictation_usage.sql`** — `user_profiles.dictation_seconds_pending/total` + RPC `add_dictation_seconds(p_user_id, p_secs)` (только service role): секунды диктовки копятся, каждые полные 60 с уходят в `minutes_used`.
+- **`015_dictation_usage.sql`** — `user_profiles.dictation_seconds_pending/total` + RPC `add_dictation_seconds(p_user_id, p_secs)` (только service role): секунды диктовки копятся, каждые полные 60 с уходят в `minutes_used`. **Заменено миграцией 016.**
+- **`016_plans_v2.sql`** — тарифы v2: диктовка — своя квота (`dictation_seconds_month` + `dictation_month`, RPC `add_dictation_seconds` больше не трогает `minutes_used`); пул минут Team (`workspaces.minutes_used/minutes_month` + RPC `add_workspace_minutes`); Max → Pro. Счётчики с меткой месяца: RPC обнуляет их в новом месяце, Flask считает счётчик прошлого месяца нулём.
 - **`014_user_emails.sql`** — email рядом с id для чтения таблиц в дашборде: `user_profiles/transcripts/capture_stats.user_email`, `workspaces.owner_email`. Заполняет триггер `fill_user_email` из `auth.users` (клиент не подделает), `sync_user_email` на `auth.users` обновляет копии при смене email. Приложение эти колонки не читает.
 
 ### STT: Soniox — основной путь (с 2026-09-24)
@@ -485,6 +487,8 @@ runner; merger-тесты идут на голом Python, остальным н
 - **History в Postgres** хранит `segments` JSONB целиком. Не ломать формат без миграции схемы.
 
 ## Privacy Mode (Max + Team plans)
+
+> **Убран из тарифов 2026-09-25** (решение владельца, «если что — восстановим»): `PRIVACY_MODE_ALLOWED_PLANS = set()`, тоггл удалён из SettingsModal. Вернуть: `{"team"}` + тоггл. Описание ниже — как было.
 
 Toggle в Settings → Subscription tab. Видим только Max и Team plan'ам. Когда включён, **никакая часть пайплайна не идёт в Google/OpenAI**:
 
@@ -905,6 +909,7 @@ git push origin main  # Vercel сразу собирает и катит на sk
 - `migrations/013_recordings_corrections.sql` — recordings.corrections + channel_mode
 - `migrations/014_user_emails.sql` — email-колонки рядом с user_id (триггеры из auth.users)
 - `migrations/015_dictation_usage.sql` — учёт секунд диктовки (Windows-приложение) в общем лимите
+- `migrations/016_plans_v2.sql` — тарифы v2: своя квота диктовки, пул минут Team, Max → Pro
 
 Миграции **не идемпотентны через какой-то фреймворк** — каждая написана с `IF NOT EXISTS` чтобы безопасно перезапустить, но фиксить руками тоже окей.
 

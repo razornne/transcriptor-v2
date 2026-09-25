@@ -29,7 +29,12 @@ export type Profile = {
   minutes_used: number;
   minutes_limit: number;
   minutes_limit_base?: number;
+  minutes_pooled?: boolean;   // Team: минуты — общий пул воркспейса
+  seats?: number;
   bonus_minutes?: number;
+  dictation_used_s?: number;  // диктовка (приложение для Windows) — своя квота
+  dictation_limit_s?: number;
+  dictation_unlimited?: boolean;
   referral_code?: string;
   privacy_mode?: boolean;
   privacy_mode_available?: boolean;
@@ -501,7 +506,7 @@ export async function leaveWorkspace(): Promise<void> {
 // a name, and we pass it as `pending_workspace_name`. Stripe's webhook reads it on
 // checkout.session.completed and auto-creates the workspace right after payment.
 export async function createStripeCheckout(
-  plan: "pro" | "max" | "team",
+  plan: "pro" | "team",
   billing: "monthly" | "annual" = "monthly",
   pendingWorkspaceName?: string,
 ): Promise<string> {

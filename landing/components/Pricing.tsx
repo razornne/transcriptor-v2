@@ -4,7 +4,7 @@ import type { Copy } from "@/lib/content";
 import { useTween } from "@/lib/hooks";
 import { SegToggle } from "./SegToggle";
 
-// 4 плана + sliding-pill переключатель Monthly/Annual.
+// 3 плана (Free / Pro / Team) + sliding-pill переключатель Monthly/Annual.
 // Цена плавно интерполируется через useTween.
 
 function TweenedPrice({ target }: { target: number }) {
@@ -15,14 +15,17 @@ function TweenedPrice({ target }: { target: number }) {
 type Billing = "monthly" | "annual";
 
 // Map plan name → /app URL with upgrade intent.
-// Free → just /app (sign up, no checkout). Team → mailto (no Stripe product yet).
-// Pro/Max → /app?upgrade=<plan>&billing=<period> — picked up after sign-in
-// to auto-trigger Stripe Checkout.
+// Free → just /app (sign up, no checkout).
+// Pro → /app?upgrade=pro&billing=<period>: после входа page.tsx сразу открывает Checkout.
+// Team → /app?upgrade=team: открывается Settings → Workspace (нужно имя воркспейса).
 function planHref(name: string, billing: Billing): string {
   const n = name.toLowerCase();
   if (n === "free") return "/app";
-  if (n === "team") return "mailto:hello@skriptly.io?subject=Team plan inquiry";
   return `/app?upgrade=${n}&billing=${billing}`;
+}
+
+function Money({ value, currency }: { value: React.ReactNode; currency: "$" | "₴" }) {
+  return currency === "$" ? <>${value}</> : <>{value} ₴</>;
 }
 
 export function Pricing({ t }: { t: Copy }) {
@@ -68,9 +71,9 @@ export function Pricing({ t }: { t: Copy }) {
                   <div className="tagline">{p.tagline}</div>
                 </div>
                 <div className="price">
-                  <span className="amt">$<TweenedPrice target={price} /></span>
+                  <span className="amt"><Money value={<TweenedPrice target={price} />} currency={p.currency} /></span>
                   <span className="per">{p.per}</span>
-                  {showStrike && <span className="strike">${p.monthly}</span>}
+                  {showStrike && <span className="strike"><Money value={p.monthly} currency={p.currency} /></span>}
                 </div>
                 <ul>
                   {p.features.map((f, j) => (

@@ -23,8 +23,9 @@ export type PricingPlan = {
   name: string;
   featured?: boolean;
   badge?: string;
-  monthly: number;      // долл/мес (при monthly billing)
-  annual: number;       // долл/мес при annual billing (умножается на 12 при оплате)
+  monthly: number;      // цена/мес (при monthly billing), в валюте currency
+  annual: number;       // цена/мес при annual billing (умножается на 12 при оплате)
+  currency: "$" | "₴";  // $ перед числом, ₴ после
   per: string;          // "/month", "/user / month", "/forever"
   tagline: string;
   features: string[];
@@ -97,76 +98,65 @@ export type Copy = {
   };
 };
 
-// Цены — monthly/annual.
-// Free $0 · Pro $15→$12 annual · Max $29→$23 annual · Team $14→$11 annual / user
-// Дисконт ~20% (плейсхолдер до уточнения от owner)
+// Тарифы v2 (2026-09-25), совпадают с Stripe (USD + UAH currency_options):
+// Free · Pro $12 ($9 за год) / 249 ₴ (2 390 ₴ за год ≈ 199) ·
+// Team $14 ($11) / 229 ₴ (2 190 ₴ за год ≈ 183) за место.
+// UA-версия показывает гривны: Checkout сам берёт ₴ с покупателей из Украины.
 const PLANS_EN: PricingPlan[] = [
   {
     name: "Free",
-    monthly: 0, annual: 0, per: "/forever",
+    monthly: 0, annual: 0, currency: "$", per: "/forever",
     tagline: "For trying it out",
-    features: ["60 minutes / month", "100+ languages", "Inline editing", "Markdown export"],
+    features: ["60 minutes of calls / month", "Speaker separation", "1 hour of dictation / month", "Last 5 recordings", "Markdown export"],
     cta: "Start free",
     ctaKind: "ghost",
   },
   {
     name: "Pro", featured: true, badge: "Most popular",
-    monthly: 15, annual: 12, per: "/month",
+    monthly: 12, annual: 9, currency: "$", per: "/month",
     tagline: "For one professional",
-    features: ["600 minutes / month", "Speaker separation", "Summary + action items", "Full-text search", "Unlimited history"],
+    features: ["600 minutes of calls / month", "Summary + action items", "Unlimited dictation (Windows app)", "Full-text search", "Unlimited history"],
     cta: "Get Pro",
     ctaKind: "primary",
-  },
-  {
-    name: "Max",
-    monthly: 29, annual: 23, per: "/month",
-    tagline: "For power users",
-    features: ["2 000 minutes / month", "Everything in Pro", "Best Quality (Whisper large-v3)", "Higher concurrency", "Early access to new models"],
-    cta: "Go Max",
-    ctaKind: "ghost",
+    fine: "Paying from Ukraine? 249 ₴ / month.",
   },
   {
     name: "Team",
-    monthly: 14, annual: 11, per: "/user / month",
+    monthly: 14, annual: 11, currency: "$", per: "/user / month",
     tagline: "For small teams",
-    features: ["600 minutes / user", "Shared workspace", "Per-user search", "Billing in one invoice", "Priority support"],
-    cta: "Start team trial",
+    features: ["Everything in Pro", "600 minutes per user in one team pool", "Shared workspace", "One invoice for the team"],
+    cta: "Set up a team",
     ctaKind: "ghost",
+    fine: "From 2 seats.",
   },
 ];
 
 const PLANS_UA: PricingPlan[] = [
   {
     name: "Free",
-    monthly: 0, annual: 0, per: "/назавжди",
+    monthly: 0, annual: 0, currency: "₴", per: "/назавжди",
     tagline: "Спробувати",
-    features: ["60 хвилин / місяць", "100+ мов", "Редагування транскрипту", "Експорт у Markdown"],
+    features: ["60 хвилин дзвінків / місяць", "Розділення спікерів", "1 година диктовки / місяць", "Останні 5 записів", "Експорт у Markdown"],
     cta: "Спробувати безкоштовно",
     ctaKind: "ghost",
   },
   {
     name: "Pro", featured: true, badge: "Найпопулярніший",
-    monthly: 15, annual: 12, per: "/місяць",
+    monthly: 249, annual: 199, currency: "₴", per: "/місяць",
     tagline: "Для однієї людини",
-    features: ["600 хвилин / місяць", "Розділення спікерів", "Підсумок + дії", "Повнотекстовий пошук", "Безлімітна історія"],
+    features: ["600 хвилин дзвінків / місяць", "Підсумок + дії", "Диктовка без ліміту (застосунок для Windows)", "Повнотекстовий пошук", "Безлімітна історія"],
     cta: "Обрати Pro",
     ctaKind: "primary",
-  },
-  {
-    name: "Max",
-    monthly: 29, annual: 23, per: "/місяць",
-    tagline: "Для активних користувачів",
-    features: ["2 000 хвилин / місяць", "Все з Pro", "Найкраща якість (Whisper large-v3)", "Більше паралельних обробок", "Ранній доступ до нових моделей"],
-    cta: "Обрати Max",
-    ctaKind: "ghost",
+    fine: "Ціна в гривнях — для оплати з України.",
   },
   {
     name: "Team",
-    monthly: 14, annual: 11, per: "/користувач / міс.",
+    monthly: 229, annual: 183, currency: "₴", per: "/користувач / міс.",
     tagline: "Для малих команд",
-    features: ["600 хвилин на користувача", "Спільний робочий простір", "Пошук по користувачах", "Один рахунок", "Пріоритетна підтримка"],
-    cta: "Спробувати для команди",
+    features: ["Усе з Pro", "600 хвилин на користувача в спільному пулі", "Спільний робочий простір", "Один рахунок на команду"],
+    cta: "Створити команду",
     ctaKind: "ghost",
+    fine: "Від 2 місць.",
   },
 ];
 
@@ -233,11 +223,11 @@ export const COPY: Record<Lang, Copy> = {
     },
     pricing: {
       eyebrow: "Pricing",
-      title: "Honest pricing. No seats minimum.",
+      title: "Honest pricing. Cheaper than the big names.",
       sub: "Start on Free. Upgrade when you outgrow it. Cancel from the app in two clicks.",
       monthly: "Monthly",
       annual: "Annual",
-      save: "Save ~20%",
+      save: "Save up to 25%",
       plans: PLANS_EN,
     },
     final: {
@@ -415,7 +405,7 @@ export const COPY: Record<Lang, Copy> = {
     },
     pricing: {
       eyebrow: "Тарифи",
-      title: "Чесні тарифи. Без мінімальних місць.",
+      title: "Чесні тарифи. У гривнях.",
       sub: "Почни з Free. Перейди далі, коли переростеш. Скасування — у два кліки із застосунку.",
       monthly: "Помісячно",
       annual: "Річно",

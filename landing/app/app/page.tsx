@@ -16,7 +16,7 @@ import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
-  transcribe, generate, fetchProfile, fetchWorkspace, cancelJob,
+  transcribe, generate, fetchProfile, fetchWorkspace, cancelJob, createStripeCheckout,
   CancelledError, type CancelToken, type Profile, type JobProgress, type WorkspaceInfo,
   type PipelineSteps,
   type Project, loadProjects, saveProjects,
@@ -118,7 +118,7 @@ const DEMO_ENTRY: HistoryEntry = {
     { speaker: "SPEAKER_01", start: 10.1, end: 19.5, text: "Does it separate speakers automatically? No training needed?" },
     { speaker: "SPEAKER_00", start: 19.8, end: 31.2, text: "Exactly — Whisper plus pyannote diarization. About a minute for a 30-minute call. Try the tabs above." },
     { speaker: "SPEAKER_01", start: 31.5, end: 42.0, text: "And AI summary and action items just work out of the box?" },
-    { speaker: "SPEAKER_00", start: 42.3, end: 55.8, text: "All built in. Gemini processes the full transcript — no cutoffs. Max plan unlocks large-v3 and privacy mode." },
+    { speaker: "SPEAKER_00", start: 42.3, end: 55.8, text: "All built in. Gemini processes the full transcript — no cutoffs. Pro also gives you unlimited dictation in the Windows app." },
   ],
 };
 
@@ -210,7 +210,7 @@ export default function InkApp() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sbOpen, setSbOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"account" | "subscription">("account");
+  const [settingsSection, setSettingsSection] = useState<"account" | "subscription" | "workspace">("account");
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [team, setTeam] = useState(false);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
@@ -333,8 +333,20 @@ export default function InkApp() {
         window.history.replaceState({}, "", window.location.pathname);
       }
     }).catch(() => setEntries([]));
+    // ?upgrade=pro|team&billing=monthly|annual — кнопки тарифов на лендинге
+    const params = new URLSearchParams(window.location.search);
+    const upgrade = params.get("upgrade");
+    const upBilling = params.get("billing") === "annual" ? "annual" : "monthly";
+    if (upgrade) window.history.replaceState({}, "", window.location.pathname);
     void fetchProfile().then((p) => {
       setProfile(p);
+      if (upgrade === "pro" && (p?.plan || "free") === "free") {
+        void createStripeCheckout("pro", upBilling)
+          .then((url) => { window.location.href = url; })
+          .catch(() => { setSettingsSection("subscription"); setSettingsOpen(true); });
+      } else if (upgrade === "team" && p?.plan !== "team") {
+        setSettingsSection("workspace"); setSettingsOpen(true);
+      }
       // PostHog identify with plan info
       if (session.user) {
         ph()?.identify?.(session.user.id, {
