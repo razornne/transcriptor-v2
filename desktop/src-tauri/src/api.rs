@@ -126,6 +126,17 @@ pub async fn cleanup(state: &AppState, text: &str, language: &str) -> String {
     }
 }
 
+/// Весь словарь целиком (как Settings → Vocabulary в вебе): POST /api/vocabulary.
+pub async fn save_vocabulary(state: &AppState, vocabulary: Value) -> Result<(), String> {
+    let r = post(state, "/api/vocabulary", json!({ "vocabulary": vocabulary }), Duration::from_secs(20))
+        .await
+        .map_err(|e| e.user_message())?;
+    if !r.status().is_success() {
+        return Err(format!("Couldn't save the dictionary (HTTP {})", r.status().as_u16()));
+    }
+    Ok(())
+}
+
 pub async fn profile(state: &AppState) -> Option<Value> {
     let token = auth::access_token(state).await.ok()?;
     let r = state.http.get(format!("{API_BASE}/api/profile")).bearer_auth(token).send().await.ok()?;

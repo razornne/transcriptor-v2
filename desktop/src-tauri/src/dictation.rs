@@ -1,9 +1,10 @@
 // Контроллер диктовки.
 //
-//   Держишь Ctrl+Win — говоришь — отпустил — текст вставлен в активное окно.
-//   Короткий тап и сразу второй — режим без удержания (hands-free); закончить —
-//   ещё раз Ctrl+Win. Один случайный короткий тап — отмена. Esc — отмена.
-//   Ctrl+Win+другая клавиша — это системный шорткат, отмена.
+//   Держишь «удерживать» (Ctrl+Win) — говоришь — отпустил — текст вставлен.
+//   «Закрепить» (Ctrl+Win+Space, или своё — например Alt+Z) — диктовка без
+//   удержания; ещё раз «закрепить» или «удерживать» — закончить. Во время удержания
+//   нажатие «закрепить» переводит диктовку в закреплённую. Касание короче 0.3 с,
+//   Esc или чужой шорткат (Ctrl+Win+→) — отмена.
 //
 // Микрофон и соединение с Soniox стартуют сразу на нажатии (параллельно),
 // аудио копится, пока сокет поднимается. После отпускания: финальные токены →
@@ -19,10 +20,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 use tauri::async_runtime::JoinHandle;
 
-/// Удержание короче этого — «тап», а не диктовка.
+/// Удержание короче этого — случайное касание: ничего не распознаём и не вставляем.
 const TAP_MS: u128 = 300;
-/// Окно для второго тапа (включает hands-free).
-const DOUBLE_TAP_MS: u128 = 450;
 /// Потолок одной диктовки.
 const MAX_DICTATION: Duration = Duration::from_secs(10 * 60);
 
@@ -30,7 +29,6 @@ const MAX_DICTATION: Duration = Duration::from_secs(10 * 60);
 enum Mode {
     Idle,
     Hold(Instant),
-    TapPending(Instant),
     Locked,
     Finishing,
 }
@@ -64,23 +62,36 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>, mut keys: UnboundedReceiver<H
                                 Err(msg) => flash(&app, "error", &msg, 2500),
                             }
                         }
-                        (HotkeyEvent::Down, Mode::TapPending(_)) => {
+                        // «Закрепить»: с нуля — сразу без удержания; во время удержания —
+                        // «защёлкнуть» (Alt → Alt+Z); в закреплённом — закончить.
+                        (HotkeyEvent::Lock, Mode::Idle) => {
+                            match start(&app, &state).await {
+                                Ok(a) => {
+                                    active = Some(a);
+                                    mode = Mode::Locked;
+                                    overlay::emit(&app, "handsfree", "", "");
+                                }
+                                Err(msg) => flash(&app, "error", &msg, 2500),
+                            }
+                        }
+                        (HotkeyEvent::Lock, Mode::Hold(_)) => {
                             mode = Mode::Locked;
                             overlay::emit(&app, "handsfree", "", "");
                         }
-                        (HotkeyEvent::Down, Mode::Locked) => {
+                        (HotkeyEvent::Down | HotkeyEvent::Lock, Mode::Locked) => {
                             mode = Mode::Finishing;
                             finish(&app, &state, active.take(), done_tx.clone());
                         }
                         (HotkeyEvent::Up, Mode::Hold(since)) => {
                             if since.elapsed().as_millis() < TAP_MS {
-                                mode = Mode::TapPending(Instant::now());
+                                cancel(&app, active.take());
+                                mode = Mode::Idle;
                             } else {
                                 mode = Mode::Finishing;
                                 finish(&app, &state, active.take(), done_tx.clone());
                             }
                         }
-                        (HotkeyEvent::Other | HotkeyEvent::Escape, Mode::Hold(_) | Mode::TapPending(_) | Mode::Locked) => {
+                        (HotkeyEvent::Other | HotkeyEvent::Escape, Mode::Hold(_) | Mode::Locked) => {
                             cancel(&app, active.take());
                             mode = Mode::Idle;
                         }
@@ -94,10 +105,6 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>, mut keys: UnboundedReceiver<H
                 }
                 _ = tick.tick() => {
                     match mode {
-                        Mode::TapPending(t) if t.elapsed().as_millis() > DOUBLE_TAP_MS => {
-                            cancel(&app, active.take());
-                            mode = Mode::Idle;
-                        }
                         Mode::Hold(_) | Mode::Locked if active.as_ref().map(|a| a.started.elapsed() > MAX_DICTATION).unwrap_or(false) => {
                             mode = Mode::Finishing;
                             finish(&app, &state, active.take(), done_tx.clone());

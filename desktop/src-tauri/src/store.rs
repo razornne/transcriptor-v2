@@ -12,8 +12,10 @@ pub struct Settings {
     /// Имя микрофона; None = системный по умолчанию.
     pub mic: Option<String>,
     pub autostart: bool,
-    /// Сочетание для диктовки — виртуальные коды клавиш (hotkey.rs), по умолчанию Ctrl+Win.
+    /// «Удерживать» — виртуальные коды клавиш (hotkey.rs), по умолчанию Ctrl+Win.
     pub hotkey: Vec<u16>,
+    /// «Закрепить» (диктовка без удержания), по умолчанию Ctrl+Win+Space.
+    pub lock_hotkey: Vec<u16>,
     /// Капсула диктовки всегда видна внизу экрана (как у Wispr Flow).
     pub show_bar: bool,
     /// Микрофон держится открытым: диктовка стартует мгновенно, с 0.5 с «до нажатия».
@@ -30,6 +32,7 @@ impl Default for Settings {
             mic: None,
             autostart: true,
             hotkey: crate::hotkey::DEFAULT_HOTKEY.to_vec(),
+            lock_hotkey: crate::hotkey::DEFAULT_LOCK_HOTKEY.to_vec(),
             show_bar: true,
             instant_start: false,
             pause_media: true,
@@ -66,11 +69,21 @@ impl Store {
         serde_json::from_str(&s).ok()
     }
 
+    /// Через временный файл + переименование (не оставить полузаписанный JSON).
+    /// Если переименование не прошло — пишем напрямую; любая ошибка — в лог
+    /// (раньше молча терялась: настройки 0.1–0.3 так ни разу и не сохранились).
     fn write<T: Serialize>(&self, name: &str, v: &T) {
-        if let Ok(s) = serde_json::to_string_pretty(v) {
-            let tmp = self.dir.join(format!("{name}.tmp"));
-            if std::fs::write(&tmp, s).is_ok() {
-                let _ = std::fs::rename(tmp, self.dir.join(name));
+        let s = match serde_json::to_string_pretty(v) {
+            Ok(s) => s,
+            Err(e) => return crate::log!("[store] {name}: serialize failed: {e}"),
+        };
+        let (tmp, dst) = (self.dir.join(format!("{name}.tmp")), self.dir.join(name));
+        let res = std::fs::write(&tmp, &s).and_then(|_| std::fs::rename(&tmp, &dst));
+        if let Err(e) = res {
+            crate::log!("[store] {name}: atomic write failed ({e}), writing directly");
+            let _ = std::fs::remove_file(&tmp);
+            if let Err(e) = std::fs::write(&dst, &s) {
+                crate::log!("[store] {name}: write failed: {e}");
             }
         }
     }

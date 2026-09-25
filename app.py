@@ -566,8 +566,12 @@ LONG_AUDIO_THRESHOLD_S = float(os.environ.get("LONG_AUDIO_THRESHOLD_S", "1800"))
 STT_PROVIDER = os.environ.get("STT_PROVIDER", "soniox")
 SONIOX_MAX_S = 295 * 60
 # Живой транскрипт во время записи (Soniox real-time из браузера, /api/live/token).
-# LIVE_TRANSCRIPT=off — выключатель: фронт тогда пишет как раньше, без живого текста.
-LIVE_TRANSCRIPT = os.environ.get("LIVE_TRANSCRIPT", "on").lower() not in ("off", "0", "false")
+# Выключен по умолчанию с 2026-09-25: два потока real-time удваивали стоимость часа
+# записи ($0.24/ч сверху), а финальный транскрипт всё равно приходит после Stop.
+# Диктовку (purpose=dictation) не затрагивает. LIVE_TRANSCRIPT=on — вернуть.
+LIVE_TRANSCRIPT = os.environ.get("LIVE_TRANSCRIPT", "off").lower() in ("on", "1", "true")
+# Генерация заголовков LLM (Qwen на GPU) — выключена, см. /api/title.
+TITLE_GENERATION = os.environ.get("TITLE_GENERATION", "off").lower() in ("on", "1", "true")
 
 
 # ── Supabase JWT validation ─────────────────────────────────────
@@ -2914,7 +2918,14 @@ def title_endpoint():
       language: "ru" | "uk" | "en" — на каком языке писать заголовок (опционально)
 
     Returns: {"title": "..."}
+
+    Отключено 2026-09-25 (TITLE_GENERATION=off по умолчанию): каждый заголовок
+    поднимал GPU-контейнер Transcriptor (33 с холодного старта + 150 с простоя ≈
+    $0.06 — дороже Soniox за получасовой звонок). Название пишет юзер; до этого
+    стоит авто-заголовок из первых слов. Эндпоинт оставлен для старых клиентов.
     """
+    if not TITLE_GENERATION:
+        return jsonify({"title": None})
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     if not text:
@@ -3440,9 +3451,9 @@ def live_token_endpoint():
     import soniox
 
     api_key = os.environ.get("SONIOX_API_KEY", "").strip()
-    if not LIVE_TRANSCRIPT or not api_key or not g.user_id:
-        return jsonify({"error": "live transcript unavailable"}), 503
     body = request.get_json(silent=True) or {}
+    if not api_key or not g.user_id or (body.get("purpose") != "dictation" and not LIVE_TRANSCRIPT):
+        return jsonify({"error": "live transcript unavailable"}), 503
     try:
         recording_id = str(uuid.UUID(str(body.get("recording_id") or "")))
     except ValueError:

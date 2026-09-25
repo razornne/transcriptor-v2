@@ -2,13 +2,18 @@
 // RegisterHotKey не умеет сочетания из одних модификаторов и не видит отпускание,
 // поэтому WH_KEYBOARD_LL на отдельном потоке с message loop.
 //
-// Сочетание настраивается (по умолчанию Ctrl+Win): 1–3 клавиши. В сочетании из
-// нескольких клавиш левый/правый Ctrl/Alt/Shift/Win не различаются; одиночная
-// клавиша — строго та (Right Alt ≠ Left Alt), иначе обычный Ctrl+C запускал бы запись.
+// Два настраиваемых сочетания (1–3 клавиши каждое):
+//   • «удерживать» (по умолчанию Ctrl+Win) — говоришь, пока держишь;
+//   • «закрепить» (по умолчанию Ctrl+Win+Space) — диктовка без удержания, повторное
+//     нажатие заканчивает. Если оно шире «удерживать» (Alt → Alt+Z, как в Wispr Flow),
+//     можно начать удержанием и «защёлкнуть» нажатием Z.
+// В сочетании из нескольких клавиш левый/правый Ctrl/Alt/Shift/Win не различаются;
+// одиночная клавиша — строго та (Right Alt ≠ Left Alt), иначе обычный Ctrl+C
+// запускал бы запись.
 //
-// События наружу: Down (сочетание зажато), Up (отпущено), Other (при зажатом
-// сочетании нажали ещё клавишу — это чужой шорткат вроде Ctrl+Win+→, отмена),
-// Escape (только пока идёт диктовка; сам Esc тогда глотаем).
+// События наружу: Down/Up (удерживать), Lock (нажато «закрепить»), Other (при
+// зажатом сочетании нажали чужую клавишу — это системный шорткат вроде
+// Ctrl+Win+→, отмена), Escape (только пока идёт диктовка; сам Esc тогда глотаем).
 //
 // Не-модификатор из сочетания (Space в Ctrl+Shift+Space) глотаем, чтобы он не
 // напечатался. Отпускание Win/Alt после сочетания глотаем и вбрасываем заново
@@ -31,11 +36,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub enum HotkeyEvent {
     Down,
     Up,
+    Lock,
     Other,
     Escape,
 }
 
 pub const DEFAULT_HOTKEY: [u16; 2] = [VK_LCONTROL, VK_LWIN];
+pub const DEFAULT_LOCK_HOTKEY: [u16; 3] = [VK_LCONTROL, VK_LWIN, 0x20];
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Kind {
+    Hold,
+    Lock,
+}
 
 const VK_SHIFT: u16 = 0x10;
 const VK_CONTROL: u16 = 0x11;
@@ -55,10 +68,12 @@ static SENDER: OnceLock<UnboundedSender<HotkeyEvent>> = OnceLock::new();
 /// Идёт диктовка — тогда Esc отменяет её и не доходит до приложения.
 pub static ACTIVE: AtomicBool = AtomicBool::new(false);
 
-static COMBO_KEYS: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+static HOLD_KEYS: Mutex<Vec<u16>> = Mutex::new(Vec::new());
+static LOCK_KEYS: Mutex<Vec<u16>> = Mutex::new(Vec::new());
 static DOWN: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
 static SWALLOWED: [AtomicBool; 256] = [const { AtomicBool::new(false) }; 256];
-static COMBO: AtomicBool = AtomicBool::new(false);
+static HOLD_ACTIVE: AtomicBool = AtomicBool::new(false);
+static LOCK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MASK_WIN_UP: AtomicBool = AtomicBool::new(false);
 static MASK_ALT_UP: AtomicBool = AtomicBool::new(false);
 
@@ -178,17 +193,45 @@ pub fn label(keys: &[u16]) -> String {
     ks.iter().map(|k| key_name(*k, keys.len() == 1)).collect::<Vec<_>>().join(" + ")
 }
 
-pub fn set_combo(keys: &[u16]) {
-    *COMBO_KEYS.lock().unwrap() = keys.to_vec();
-    COMBO.store(false, Ordering::SeqCst);
+pub fn set_combo(kind: Kind, keys: &[u16]) {
+    match kind {
+        Kind::Hold => {
+            *HOLD_KEYS.lock().unwrap() = keys.to_vec();
+            HOLD_ACTIVE.store(false, Ordering::SeqCst);
+        }
+        Kind::Lock => {
+            *LOCK_KEYS.lock().unwrap() = keys.to_vec();
+            LOCK_ACTIVE.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+/// «Закрепить» не может совпадать с «удерживать» или быть его частью: иначе
+/// каждое удержание сразу становилось бы закреплением.
+pub fn validate_pair(hold: &[u16], lock: &[u16]) -> Result<(), String> {
+    let n = |ks: &[u16]| {
+        let mut v: Vec<u16> = ks.iter().map(|k| if ks.len() > 1 { normalize(*k) } else { *k }).collect();
+        v.sort();
+        v
+    };
+    let (h, l) = (n(hold), n(lock));
+    if l.iter().all(|k| h.contains(k)) {
+        return Err("The hands-free shortcut must add a key to the hold shortcut or be different".into());
+    }
+    Ok(())
 }
 
 /// Ждёт, пока юзер нажмёт и отпустит новое сочетание (Esc — отмена).
 pub fn capture(timeout: std::time::Duration) -> Result<Vec<u16>, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     *CAPTURE.lock().unwrap() = Some(Capture { keys: Vec::new(), done: tx });
+    crate::log!("[hotkey] capture started");
     let res = rx.recv_timeout(timeout).unwrap_or_else(|_| Err("timed out".into()));
     *CAPTURE.lock().unwrap() = None;
+    match &res {
+        Ok(k) => crate::log!("[hotkey] captured {}", label(k)),
+        Err(e) => crate::log!("[hotkey] capture ended: {e}"),
+    }
     res
 }
 
@@ -250,25 +293,40 @@ fn handle(vk: u16, down: bool) -> bool {
         }
     }
 
-    let combo = COMBO_KEYS.lock().unwrap().clone();
-    let sat = satisfied(&combo);
-    let active = COMBO.load(Ordering::SeqCst);
+    let hold = HOLD_KEYS.lock().unwrap().clone();
+    let lock = LOCK_KEYS.lock().unwrap().clone();
     let mut swallow = false;
-
-    if sat && !active {
-        COMBO.store(true, Ordering::SeqCst);
+    let arm_masks = |combo: &[u16]| {
         if combo.iter().any(|k| normalize(*k) == VK_LWIN) {
             MASK_WIN_UP.store(true, Ordering::SeqCst);
         }
         if combo.iter().any(|k| normalize(*k) == VK_MENU) {
             MASK_ALT_UP.store(true, Ordering::SeqCst);
         }
+    };
+
+    // «Удерживать»: Down при зажатии, Up при отпускании.
+    let hold_sat = satisfied(&hold);
+    if hold_sat && !HOLD_ACTIVE.load(Ordering::SeqCst) {
+        HOLD_ACTIVE.store(true, Ordering::SeqCst);
+        arm_masks(&hold);
         emit(HotkeyEvent::Down);
-    } else if active && !sat {
-        COMBO.store(false, Ordering::SeqCst);
+    } else if !hold_sat && HOLD_ACTIVE.swap(false, Ordering::SeqCst) {
         emit(HotkeyEvent::Up);
-    } else if down && !in_combo(&combo, vk) {
-        if active {
+    }
+    // «Закрепить»: событие только на нажатие (переключатель).
+    let lock_sat = satisfied(&lock);
+    if lock_sat && !LOCK_ACTIVE.load(Ordering::SeqCst) {
+        LOCK_ACTIVE.store(true, Ordering::SeqCst);
+        arm_masks(&lock);
+        emit(HotkeyEvent::Lock);
+    } else if !lock_sat {
+        LOCK_ACTIVE.store(false, Ordering::SeqCst);
+    }
+
+    let any_active = HOLD_ACTIVE.load(Ordering::SeqCst) || LOCK_ACTIVE.load(Ordering::SeqCst);
+    if down && !in_combo(&hold, vk) && !in_combo(&lock, vk) {
+        if any_active {
             emit(HotkeyEvent::Other);
         } else if vk == VK_ESCAPE && ACTIVE.load(Ordering::SeqCst) {
             emit(HotkeyEvent::Escape);
@@ -276,14 +334,16 @@ fn handle(vk: u16, down: bool) -> bool {
         }
     }
 
-    // Не-модификатор из сочетания не должен печататься (и его автоповтор тоже).
-    if in_combo(&combo, vk) && !is_modifier(vk) {
-        let slot = &SWALLOWED[vk as usize & 0xFF];
-        if down && (COMBO.load(Ordering::SeqCst) || slot.load(Ordering::SeqCst)) {
-            slot.store(true, Ordering::SeqCst);
-            swallow = true;
-        } else if !down && slot.swap(false, Ordering::SeqCst) {
-            swallow = true;
+    // Не-модификатор из сочетания (Space, Z) не должен печататься — и его автоповтор тоже.
+    for (combo, active) in [(&hold, &HOLD_ACTIVE), (&lock, &LOCK_ACTIVE)] {
+        if in_combo(combo, vk) && !is_modifier(vk) {
+            let slot = &SWALLOWED[vk as usize & 0xFF];
+            if down && (active.load(Ordering::SeqCst) || slot.load(Ordering::SeqCst)) {
+                slot.store(true, Ordering::SeqCst);
+                swallow = true;
+            } else if !down && slot.swap(false, Ordering::SeqCst) {
+                swallow = true;
+            }
         }
     }
 
@@ -311,9 +371,10 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     CallNextHookEx(HHOOK::default(), code, wparam, lparam)
 }
 
-pub fn start(tx: UnboundedSender<HotkeyEvent>, keys: &[u16]) {
+pub fn start(tx: UnboundedSender<HotkeyEvent>, hold: &[u16], lock: &[u16]) {
     let _ = SENDER.set(tx);
-    set_combo(keys);
+    set_combo(Kind::Hold, hold);
+    set_combo(Kind::Lock, lock);
     std::thread::Builder::new()
         .name("skriptly-hotkey".into())
         .spawn(|| unsafe {
@@ -345,6 +406,81 @@ pub fn modifiers_held() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex as StdMutex;
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+
+    /// Статические таблицы клавиш общие — тесты, которые их трогают, идут по очереди.
+    static SERIAL: StdMutex<()> = StdMutex::new(());
+    static EVENTS: StdMutex<Option<UnboundedReceiver<HotkeyEvent>>> = StdMutex::new(None);
+
+    fn events() -> Vec<HotkeyEvent> {
+        let mut g = EVENTS.lock().unwrap();
+        if g.is_none() {
+            let (tx, rx) = unbounded_channel();
+            let _ = SENDER.set(tx);
+            *g = Some(rx);
+        }
+        let mut out = vec![];
+        while let Ok(e) = g.as_mut().unwrap().try_recv() {
+            out.push(e);
+        }
+        out
+    }
+
+    const Z: u16 = 0x5A;
+
+    #[test]
+    fn hold_then_extra_key_locks_and_the_key_is_not_typed() {
+        let _g = SERIAL.lock().unwrap();
+        events();
+        // Без Alt/Win: их отпускание вбрасывает настоящие клавиши через SendInput.
+        set_combo(Kind::Hold, &[VK_LCONTROL, VK_LSHIFT]);
+        set_combo(Kind::Lock, &[VK_LCONTROL, VK_LSHIFT, Z]);
+        assert!(!handle(VK_LCONTROL, true));
+        assert!(!handle(VK_LSHIFT, true));
+        assert_eq!(events(), vec![HotkeyEvent::Down]);
+        assert!(handle(Z, true), "Z must be swallowed");
+        assert!(handle(Z, true), "auto-repeat swallowed too");
+        assert_eq!(events(), vec![HotkeyEvent::Lock]);
+        assert!(handle(Z, false));
+        handle(VK_LSHIFT, false);
+        handle(VK_LCONTROL, false);
+        assert_eq!(events(), vec![HotkeyEvent::Up]);
+        // Посторонняя клавиша при зажатом «удерживать» — чужой шорткат.
+        handle(VK_LCONTROL, true);
+        handle(VK_LSHIFT, true);
+        handle(0x41, true);
+        assert_eq!(events(), vec![HotkeyEvent::Down, HotkeyEvent::Other]);
+        handle(0x41, false);
+        handle(VK_LSHIFT, false);
+        handle(VK_LCONTROL, false);
+        events();
+    }
+
+    #[test]
+    fn capture_works_repeatedly() {
+        let _g = SERIAL.lock().unwrap();
+        events();
+        for keys in [[VK_LCONTROL, VK_LSHIFT, Z], [VK_RCONTROL, VK_LSHIFT, 0x20]] {
+            let t = std::thread::spawn(|| capture(std::time::Duration::from_secs(3)));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            for k in keys {
+                assert!(handle(k, true), "captured keys are swallowed");
+            }
+            for k in keys.iter().rev() {
+                handle(*k, false);
+            }
+            assert_eq!(t.join().unwrap().unwrap(), keys.to_vec());
+        }
+        assert!(events().is_empty(), "capture must not trigger dictation");
+    }
+
+    #[test]
+    fn hands_free_must_differ_from_hold() {
+        assert!(validate_pair(&[VK_LMENU], &[VK_LMENU, Z]).is_ok());
+        assert!(validate_pair(&[VK_LMENU, Z], &[VK_RMENU, Z]).is_err());
+        assert!(validate_pair(&[VK_LCONTROL, VK_LWIN, 0x20], &[VK_LCONTROL, VK_LWIN]).is_err());
+    }
 
     fn press(vks: &[u16]) {
         for v in 0..256 {
@@ -357,6 +493,7 @@ mod tests {
 
     #[test]
     fn combos_match_either_side_single_keys_exact() {
+        let _g = SERIAL.lock().unwrap();
         press(&[VK_RCONTROL, VK_LWIN]);
         assert!(satisfied(&DEFAULT_HOTKEY));
         press(&[VK_LCONTROL]);

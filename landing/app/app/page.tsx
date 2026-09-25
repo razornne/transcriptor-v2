@@ -6,7 +6,7 @@ import { DotField, type DotFieldHandle } from "@/components/ink/DotField";
 import { InputCard } from "@/components/ink/InputCard";
 import { InkSidebar } from "@/components/ink/InkSidebar";
 import { LoginScreen } from "@/components/ink/LoginScreen";
-import { ResultView, transcriptText, type Tab } from "@/components/ink/ResultView";
+import { ResultView, type Tab } from "@/components/ink/ResultView";
 import { UpgradeCard } from "@/components/ink/UpgradeCard";
 import { SettingsModal } from "@/components/ink/SettingsModal";
 import { LivePanel } from "@/components/ink/LivePanel";
@@ -16,7 +16,7 @@ import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
-  transcribe, generate, generateTitle, fetchProfile, fetchWorkspace, cancelJob,
+  transcribe, generate, fetchProfile, fetchWorkspace, cancelJob,
   CancelledError, type CancelToken, type Profile, type JobProgress, type WorkspaceInfo,
   type PipelineSteps,
   type Project, loadProjects, saveProjects,
@@ -32,6 +32,9 @@ import { loadSettings, saveSettings, type InkSettings } from "@/lib/ink/settings
 // Sprint 6: PostHog (privacy-masked), i18n EN/UA, mobile polish.
 // Sprint 7: Insights removed, workspace-UI isolation fix, Cmd+D theme hotkey, uniform control row.
 // Cutover: /v2 → /app, billing in-app (SettingsModal subscription tab).
+
+// Живой транскрипт во время записи (lib/ink/live.ts) — выключен ради себестоимости.
+const FEATURE_LIVE_TRANSCRIPT = false;
 
 // ── PostHog helper (fire-and-forget, never throws) ────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -414,11 +417,8 @@ export default function InkApp() {
     setLiveSegs([]); // финальный транскрипт заменил предпросмотр
     setStatus("");
     phCapture("transcription_completed", { segments: segments.length, language: lang });
-    void generateTitle(transcriptText(segments, {}), lang).then((t) => {
-      if (!t) return;
-      setEntries((prev) => prev.map((e) => e.id === entry.id && e.titleIsAuto ? { ...e, title: t } : e));
-      void patchEntry(entry.id, { title: t }).catch(() => {});
-    });
+    // LLM-заголовки выключены (2026-09-25): GPU ради заголовка стоил дороже самой
+    // транскрипции. Остаётся авто-заголовок из первых слов — юзер переименует сам.
 
     // Auto-summary right after the call (AI is a paid-plan feature)
     if ((profile?.plan || "free") !== "free") {
@@ -621,20 +621,25 @@ export default function InkApp() {
         onLevels: (mic, sys) => { levelsRef.current = { mic, sys }; },
       });
       keepAliveStopRef.current = await startKeepAlive();
-      setLiveSegs([]); setLiveStatus("connecting");
+      setLiveSegs([]);
       const rec = recorderRef.current;
-      const live = new LiveTranscript({
-        recordingId: rec.recordingId, language, context, numSpeakers: speakers,
-        mic: rec.liveStreams.mic, call: rec.liveStreams.call,
-        onUpdate: setLiveSegs,
-        onStatus: (st) => {
-          setLiveStatus(st);
-          if (st === "off") phCapture("live_transcript_unavailable");
-        },
-      });
-      liveRef.current = live;
-      live.start();
-      phCapture("live_transcript_started", { channels: rec.liveStreams.call ? 2 : 1 });
+      // Живой транскрипт выключен (2026-09-25): два потока Soniox real-time удваивали
+      // стоимость часа записи, а финальный транскрипт приходит после Stop.
+      if (FEATURE_LIVE_TRANSCRIPT) {
+        setLiveStatus("connecting");
+        const live = new LiveTranscript({
+          recordingId: rec.recordingId, language, context, numSpeakers: speakers,
+          mic: rec.liveStreams.mic, call: rec.liveStreams.call,
+          onUpdate: setLiveSegs,
+          onStatus: (st) => {
+            setLiveStatus(st);
+            if (st === "off") phCapture("live_transcript_unavailable");
+          },
+        });
+        liveRef.current = live;
+        live.start();
+        phCapture("live_transcript_started", { channels: rec.liveStreams.call ? 2 : 1 });
+      }
       setRecSeconds(0); setRecording(true); setActiveId(null);
       setStatus("recording — share a tab to capture call audio too");
       recTimerRef.current = window.setInterval(() => setRecSeconds((s) => s + 1), 1000);

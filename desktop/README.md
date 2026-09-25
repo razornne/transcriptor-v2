@@ -1,7 +1,9 @@
 # Skriptly for Windows — dictation
 
-Hold **Ctrl + Win** (changeable in settings), speak, release — the text is pasted where your
-cursor is, in any app. Tap twice for hands-free (press again to finish). **Esc** cancels.
+Hold **Ctrl + Win**, speak, release — the text is pasted where your cursor is, in any app.
+**Ctrl + Win + Space** dictates hands-free (press again to finish). Both shortcuts are
+changeable (e.g. Alt / Alt + Z). **Esc** cancels. The Dictionary (shared with the web app)
+teaches recognition your names and terms.
 
 **Record a call** (settings window or tray menu): your mic (left channel) + everything the
 computer plays (WASAPI loopback, right channel) — same stereo layout as the web recorder, so the

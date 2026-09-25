@@ -75,15 +75,35 @@
 
       <!-- ── Диктовка ───────────────────────────── -->
       <div class="card howto">
-        <div class="keys">
-          <span id="hotkeyKeys"></span>
-          <span class="howto-main">&nbsp;hold and speak</span>
-          <button class="link change" id="hotkeyChange">Change</button>
-          <button class="link" id="hotkeyReset" hidden>Reset</button>
+        <div class="keyrow">
+          <div class="keyrow-text"><div class="row-title">Hold to dictate</div><div class="row-desc">Release to paste where your cursor is</div></div>
+          <span class="keys" id="keys-hold"></span>
+          <button class="link" id="change-hold">Change</button>
+          <button class="link" id="reset-hold" hidden>Reset</button>
         </div>
-        <div class="howto-sub" id="hotkeyHint">Release to paste the text where your cursor is. Tap twice for hands-free, press again to finish. <kbd>Esc</kbd> cancels.</div>
+        <div class="keyrow">
+          <div class="keyrow-text"><div class="row-title">Hands-free</div><div class="row-desc">Press to start, press again to finish</div></div>
+          <span class="keys" id="keys-lock"></span>
+          <button class="link" id="change-lock">Change</button>
+          <button class="link" id="reset-lock" hidden>Reset</button>
+        </div>
+        <div class="howto-sub" id="hotkeyHint">While holding, press the extra hands-free key to keep going without holding. <kbd>Esc</kbd> cancels.</div>
         <div class="howto-sub capture" id="hotkeyCapture" hidden>Press and release the new shortcut… <kbd>Esc</kbd> cancels</div>
         <p class="status err" id="hotkeyErr" hidden></p>
+      </div>
+
+      <!-- ── Словарь ────────────────────────────── -->
+      <div class="card dict">
+        <div class="keyrow-text">
+          <div class="row-title">Dictionary</div>
+          <div class="row-desc">Names and terms Skriptly should always spell right — in dictation and in call transcripts</div>
+        </div>
+        <form class="dict-add" id="dictForm">
+          <input class="field" id="dictInput" placeholder="Add a word, e.g. Kubeflow" autocomplete="off" maxlength="80" />
+          <button class="btn" type="submit">Add</button>
+        </form>
+        <div class="chips" id="dictChips"></div>
+        <p class="status" id="dictStatus"></p>
       </div>
 
       <div class="card" id="usageCard" hidden>

@@ -34,6 +34,7 @@ static BAR: AtomicBool = AtomicBool::new(true);
 static BUSY: AtomicBool = AtomicBool::new(false);
 /// Видна ли сейчас капсула покоя (чтобы не дёргать окно каждую секунду).
 static RESTING_SHOWN: AtomicBool = AtomicBool::new(false);
+static TICK: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Serialize, Clone)]
 pub struct OverlayState<'a> {
@@ -93,11 +94,13 @@ fn watch(app: &AppHandle) {
         emit(app, "idle", "", "");
         place(app, false);
         RESTING_SHOWN.store(true, Ordering::SeqCst);
-    } else if !full {
-        // Другие topmost-окна могли перекрыть — возвращаем наверх, не двигая.
+    } else if !full && TICK.fetch_add(1, Ordering::SeqCst) % 15 == 0 {
+        // Раз в 15 с возвращаем наверх, если перекрыло другое topmost-окно. Не каждую
+        // секунду и без SWP_SHOWWINDOW: ежесекундное «поднятие» сбивало фокус окна
+        // настроек, и запись нового шортката обрывалась.
         if let Some(h) = hwnd(app) {
             unsafe {
-                let _ = SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                let _ = SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
         }
     }

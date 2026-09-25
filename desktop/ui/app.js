@@ -33,41 +33,92 @@ function renderUsage(p) {
   $("bar").classList.toggle("warn", share > 0.9);
 }
 
-// ── Шорткат ──────────────────────────────────────────────────────────────
-function renderHotkey(label) {
-  const box = $("hotkeyKeys");
+// ── Шорткаты: «удерживать» и «закрепить» ──────────────────────────────────
+const DEFAULTS = { hold: "Ctrl + Win", lock: "Ctrl + Win + Space" };
+
+function renderKeys(kind, label) {
+  const box = $(`keys-${kind}`);
   box.innerHTML = "";
   label.split(" + ").forEach((k, i) => {
     if (i) box.append(" + ");
     box.append(Object.assign(document.createElement("kbd"), { textContent: k }));
   });
-  $("hotkeyReset").hidden = label === "Ctrl + Win";
+  $(`reset-${kind}`).hidden = label === DEFAULTS[kind];
+}
+function renderHotkeys(r) {
+  renderKeys("hold", r.hotkey);
+  renderKeys("lock", r.lock_hotkey);
 }
 
-let capturing = false;
-async function captureHotkey() {
+// Запись идёт до нажатия сочетания, Esc, «Cancel» или 15 с. Потерю фокуса окна
+// больше не считаем отменой: из-за неё запись обрывалась сама (0.3.x).
+let capturing = null;
+async function captureHotkey(kind) {
   if (capturing) { invoke("cancel_hotkey_capture"); return; }
-  capturing = true;
+  capturing = kind;
   $("hotkeyErr").hidden = true;
   $("hotkeyHint").hidden = true;
   $("hotkeyCapture").hidden = false;
-  $("hotkeyChange").textContent = "Cancel";
+  $(`change-${kind}`).textContent = "Cancel";
   try {
-    const r = await invoke("capture_hotkey");
-    renderHotkey(r.hotkey);
+    renderHotkeys(await invoke("capture_hotkey", { kind }));
   } catch (e) {
     const msg = String(e);
-    if (msg !== "cancelled") { $("hotkeyErr").textContent = msg; $("hotkeyErr").hidden = false; }
+    if (msg !== "cancelled") { $("hotkeyErr").textContent = msg === "timed out" ? "No keys pressed — try again" : msg; $("hotkeyErr").hidden = false; }
   } finally {
-    capturing = false;
+    capturing = null;
     $("hotkeyHint").hidden = false;
     $("hotkeyCapture").hidden = true;
-    $("hotkeyChange").textContent = "Change";
+    $(`change-${kind}`).textContent = "Change";
   }
 }
-$("hotkeyChange").onclick = captureHotkey;
-$("hotkeyReset").onclick = async () => renderHotkey((await invoke("reset_hotkey")).hotkey);
-window.addEventListener("blur", () => { if (capturing) invoke("cancel_hotkey_capture"); });
+for (const kind of ["hold", "lock"]) {
+  $(`change-${kind}`).onclick = () => captureHotkey(kind);
+  $(`reset-${kind}`).onclick = async () => {
+    try { renderHotkeys(await invoke("reset_hotkey", { kind })); }
+    catch (e) { $("hotkeyErr").textContent = String(e); $("hotkeyErr").hidden = false; }
+  };
+}
+
+// ── Словарь (общий с вебом) ──────────────────────────────────────────────
+let vocab = [];
+function renderVocab() {
+  const box = $("dictChips");
+  box.innerHTML = "";
+  const sorted = [...vocab].sort((a, b) => (b.freq || 1) - (a.freq || 1));
+  for (const item of sorted) {
+    const chip = Object.assign(document.createElement("span"), { className: "chip", textContent: item.term });
+    const del = Object.assign(document.createElement("button"), { type: "button", textContent: "×", title: `Remove ${item.term}` });
+    del.onclick = () => saveVocab(vocab.filter((v) => v !== item), `Removed ${item.term}`);
+    chip.append(del);
+    box.append(chip);
+  }
+}
+async function loadVocab() {
+  try { vocab = (await invoke("get_vocabulary")) || []; renderVocab(); } catch {}
+}
+async function saveVocab(next, done) {
+  const prev = vocab;
+  vocab = next; renderVocab();
+  $("dictStatus").classList.remove("err");
+  try {
+    await invoke("save_vocabulary", { vocabulary: next });
+    $("dictStatus").textContent = done;
+  } catch (e) {
+    vocab = prev; renderVocab();
+    $("dictStatus").textContent = String(e);
+    $("dictStatus").classList.add("err");
+  }
+}
+$("dictForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const term = $("dictInput").value.trim();
+  if (!term) return;
+  $("dictInput").value = "";
+  if (vocab.some((v) => v.term.toLowerCase() === term.toLowerCase())) { $("dictStatus").textContent = `${term} is already there`; return; }
+  // freq=10 — как «+ Add a term» в вебе: ручные термины идут в начало подсказок.
+  saveVocab([{ term, freq: 10 }, ...vocab], `Added ${term}`);
+});
 
 // ── Запись созвона ───────────────────────────────────────────────────────
 let lastTranscriptId = null;
@@ -156,7 +207,7 @@ async function refresh() {
   $("signedIn").hidden = !st.signed_in;
   $("footer").hidden = !st.signed_in;
   $("who").textContent = st.email;
-  renderHotkey(st.hotkey);
+  renderHotkeys(st);
 
   if (st.call.recording) callView("callLive");
   else if ($("callLive").hidden === false) callView("callIdle");
@@ -174,7 +225,10 @@ async function refresh() {
   for (const name of st.mics) mic.append(new Option(name, name));
   mic.value = settings.mic && st.mics.includes(settings.mic) ? settings.mic : "";
 
-  if (st.signed_in) invoke("get_profile").then(renderUsage).catch(() => {});
+  if (st.signed_in) {
+    invoke("get_profile").then(renderUsage).catch(() => {});
+    loadVocab();
+  }
 }
 
 async function save() {

@@ -49,6 +49,7 @@ async fn get_state(state: State<'_, AppStateArc>) -> Result<Value, String> {
         "version": env!("CARGO_PKG_VERSION"),
         "redirect_url": auth::redirect_url(),
         "hotkey": hotkey::label(&state.settings().hotkey),
+        "lock_hotkey": hotkey::label(&state.settings().lock_hotkey),
         "call": call_status(&state),
         "pending": pending_calls(&state),
     }))
@@ -74,24 +75,43 @@ fn refresh_tray(app: &AppHandle, state: &AppState) {
     }
 }
 
-fn apply_hotkey(app: &AppHandle, state: &AppState, keys: Vec<u16>) -> Value {
-    hotkey::set_combo(&keys);
+fn kind_of(kind: &str) -> hotkey::Kind {
+    if kind == "lock" { hotkey::Kind::Lock } else { hotkey::Kind::Hold }
+}
+
+fn hotkeys_json(state: &AppState) -> Value {
+    let s = state.settings();
+    json!({ "hotkey": hotkey::label(&s.hotkey), "lock_hotkey": hotkey::label(&s.lock_hotkey) })
+}
+
+fn apply_hotkey(app: &AppHandle, state: &AppState, kind: hotkey::Kind, keys: Vec<u16>) -> Result<Value, String> {
     let mut s = state.settings();
-    s.hotkey = keys;
+    let (hold, lock) = match kind {
+        hotkey::Kind::Hold => (keys.clone(), s.lock_hotkey.clone()),
+        hotkey::Kind::Lock => (s.hotkey.clone(), keys.clone()),
+    };
+    hotkey::validate_pair(&hold, &lock)?;
+    hotkey::set_combo(kind, &keys);
+    match kind {
+        hotkey::Kind::Hold => s.hotkey = keys,
+        hotkey::Kind::Lock => s.lock_hotkey = keys,
+    }
     state.store.save_settings(&s);
     *state.settings.lock().unwrap() = s;
     refresh_tray(app, state);
-    json!({ "hotkey": hotkey::label(&state.settings().hotkey) })
+    Ok(hotkeys_json(state))
 }
 
 /// Ждёт, пока юзер нажмёт новое сочетание (клавиши в это время никуда не уходят).
+/// kind: "hold" — удерживать, "lock" — закрепить.
 #[tauri::command]
-async fn capture_hotkey(app: AppHandle, state: State<'_, AppStateArc>) -> Result<Value, String> {
+async fn capture_hotkey(app: AppHandle, state: State<'_, AppStateArc>, kind: String) -> Result<Value, String> {
     let keys = tauri::async_runtime::spawn_blocking(|| hotkey::capture(std::time::Duration::from_secs(15)))
         .await
         .map_err(|e| e.to_string())??;
-    crate::log!("[hotkey] new shortcut {}", hotkey::label(&keys));
-    Ok(apply_hotkey(&app, &state, keys))
+    let res = apply_hotkey(&app, &state, kind_of(&kind), keys.clone());
+    crate::log!("[hotkey] {kind} → {}: {}", hotkey::label(&keys), if res.is_ok() { "saved" } else { "rejected" });
+    res
 }
 
 #[tauri::command]
@@ -100,8 +120,27 @@ fn cancel_hotkey_capture() {
 }
 
 #[tauri::command]
-fn reset_hotkey(app: AppHandle, state: State<'_, AppStateArc>) -> Value {
-    apply_hotkey(&app, &state, hotkey::DEFAULT_HOTKEY.to_vec())
+fn reset_hotkey(app: AppHandle, state: State<'_, AppStateArc>, kind: String) -> Result<Value, String> {
+    let keys = match kind_of(&kind) {
+        hotkey::Kind::Hold => hotkey::DEFAULT_HOTKEY.to_vec(),
+        hotkey::Kind::Lock => hotkey::DEFAULT_LOCK_HOTKEY.to_vec(),
+    };
+    apply_hotkey(&app, &state, kind_of(&kind), keys)
+}
+
+// ── Словарь (общий с вебом: user_profiles.vocabulary) ─────────────────────
+
+/// Термины словаря: подсказки распознаванию (context.terms у Soniox) и чистке текста.
+#[tauri::command]
+async fn get_vocabulary(state: State<'_, AppStateArc>) -> Result<Value, String> {
+    Ok(api::profile(&state).await.and_then(|p| p.get("vocabulary").cloned()).unwrap_or(json!([])))
+}
+
+#[tauri::command]
+async fn save_vocabulary(state: State<'_, AppStateArc>, vocabulary: Value) -> Result<(), String> {
+    api::save_vocabulary(&state, vocabulary).await?;
+    api::forget_token(&state).await; // словарь зашит в ключ Soniox (context) — берём новый
+    Ok(())
 }
 
 // ── Запись созвона ───────────────────────────────────────────────────────
@@ -367,9 +406,15 @@ pub fn run() {
                 let m = settings.mic.clone();
                 std::thread::spawn(move || mic::set_warm(true, m));
             }
-            let keys = if hotkey::validate(&settings.hotkey).is_ok() { settings.hotkey.clone() } else { hotkey::DEFAULT_HOTKEY.to_vec() };
+            let valid = |k: &Vec<u16>, d: &[u16]| if hotkey::validate(k).is_ok() { k.clone() } else { d.to_vec() };
+            let hold = valid(&settings.hotkey, &hotkey::DEFAULT_HOTKEY);
+            let mut lock = valid(&settings.lock_hotkey, &hotkey::DEFAULT_LOCK_HOTKEY);
+            if hotkey::validate_pair(&hold, &lock).is_err() {
+                lock = hotkey::DEFAULT_LOCK_HOTKEY.to_vec();
+            }
+            crate::log!("[hotkey] hold={} lock={}", hotkey::label(&hold), hotkey::label(&lock));
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            hotkey::start(tx, &keys);
+            hotkey::start(tx, &hold, &lock);
             dictation::spawn(app.handle().clone(), state.clone(), rx);
 
             apply_autostart(app.handle(), settings.autostart);
@@ -425,6 +470,8 @@ pub fn run() {
             capture_hotkey,
             cancel_hotkey_capture,
             reset_hotkey,
+            get_vocabulary,
+            save_vocabulary,
             call_start,
             call_stop,
             call_retry,

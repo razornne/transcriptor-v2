@@ -146,7 +146,22 @@ select.field { width: auto; min-width: 128px; max-width: 170px; height: 34px; pa
 .pending-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
 .pending-row span { flex: 1; color: var(--graphite); }
 .pending-row .btn { height: 30px; padding: 0 12px; font-size: 12.5px; }
-.keys .change { margin-left: auto; }
+.keyrow { display: flex; align-items: center; gap: 10px; }
+.keyrow-text { flex: 1; min-width: 0; }
+.keyrow .keys { flex: none; }
+.dict { display: flex; flex-direction: column; gap: 12px; }
+.dict-add { display: flex; gap: 8px; }
+.dict-add .field { height: 36px; }
+.dict-add .btn { height: 36px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips:empty { display: none; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px;
+  background: var(--paper); border: 1px solid var(--hairline); font-size: 13px;
+}
+.chip button { border: 0; background: none; color: var(--graphite); cursor: pointer; width: 20px; height: 20px;
+  border-radius: 50%; font-size: 14px; line-height: 1; }
+.chip button:hover { color: var(--danger); background: var(--hairline); }
 .capture { color: var(--accent); font-weight: 500; }
 
 [hidden] { display: none !important; }
@@ -154,3 +169,4 @@ select.field { width: auto; min-width: 128px; max-width: 170px; height: 34px; pa
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+.dict .status:empty { display: none; }

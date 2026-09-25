@@ -1,6 +1,7 @@
 // Созвон после Stop: WAV → Ogg Vorbis → /api/transcribe (тот же путь, что у веба) →
 // поллинг /api/jobs/<id> → транскрипт в Supabase public.transcripts (как
-// landing/lib/ink/db.ts insertEntry) → заголовок через /api/title. После этого
+// landing/lib/ink/db.ts insertEntry); заголовок — из первых слов (LLM-заголовки
+// выключены ради себестоимости, юзер переименует сам). После этого
 // запись видна в истории на skriptly.io/app. Файлы удаляются только после
 // успешного сохранения — при любой ошибке запись остаётся «неотправленной».
 use crate::auth;
@@ -41,18 +42,6 @@ fn auto_title(segments: &[Value]) -> String {
     let words: Vec<&str> = first.split_whitespace().take(6).collect();
     let t = words.join(" ");
     if t.len() > 2 { t } else { "Call recording".into() }
-}
-
-fn transcript_text(segments: &[Value]) -> String {
-    segments
-        .iter()
-        .map(|s| {
-            let spk = s.get("speaker").and_then(Value::as_str).unwrap_or("");
-            let n: u32 = spk.trim_start_matches("SPEAKER_").parse().unwrap_or(0);
-            format!("[Speaker {}]: {}", n + 1, s.get("text").and_then(Value::as_str).unwrap_or(""))
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 pub async fn process(app: AppHandle, state: Arc<AppState>, f: Finished) -> Result<String, String> {
@@ -152,33 +141,5 @@ pub async fn process(app: AppHandle, state: Arc<AppState>, f: Finished) -> Resul
     let _ = tokio::fs::remove_file(&ogg).await;
     crate::log!("[call] saved transcript {id} ({} segments) in {:.0}s", segments.len(), t0.elapsed().as_secs_f64());
 
-    // Заголовок от LLM — как в вебе, в фоне и без влияния на результат.
-    let text: String = transcript_text(&segments).chars().take(12000).collect();
-    let (st, tid, lang) = (state.clone(), id.clone(), settings.language.clone());
-    tauri::async_runtime::spawn(async move {
-        let Ok(token) = auth::access_token(&st).await else { return };
-        let title = st
-            .http
-            .post(format!("{API_BASE}/api/title"))
-            .bearer_auth(&token)
-            .json(&json!({ "text": text, "language": if lang.is_empty() { Value::Null } else { json!(lang) } }))
-            .send()
-            .await
-            .ok();
-        let title = match title {
-            Some(r) => r.json::<Value>().await.ok().and_then(|v| v.get("title").and_then(Value::as_str).map(str::to_string)),
-            None => None,
-        };
-        if let Some(t) = title.filter(|t| !t.is_empty()) {
-            let _ = st
-                .http
-                .patch(format!("{SUPABASE_URL}/rest/v1/transcripts?id=eq.{tid}"))
-                .header("apikey", SUPABASE_ANON_KEY)
-                .bearer_auth(&token)
-                .json(&json!({ "title": t }))
-                .send()
-                .await;
-        }
-    });
     Ok(id)
 }
