@@ -48,13 +48,13 @@ export default function TermsPage() {
 
         <section>
           <h2>5. Subscription and billing</h2>
-          <p>Paid plans are billed monthly or annually via Stripe. Annual plans offer approximately 20% discount. Prices are in USD. Taxes may apply depending on your location.</p>
+          <p>Paid plans are billed monthly or annually. Purchases are sold through <strong>Link</strong> (Stripe), which acts as the merchant of record: it processes the payment, sends receipts and invoices, and calculates and remits sales tax or VAT. Link&apos;s own terms apply to the payment. Annual plans offer approximately 20% discount. Prices are shown in USD, or in UAH for customers in Ukraine, and include applicable taxes.</p>
           <p>Unused minutes do not roll over between billing periods. If you exceed your plan limit, recording is blocked until the next period or you upgrade.</p>
         </section>
 
         <section>
           <h2>6. Cancellation and refunds</h2>
-          <p>You can cancel your subscription at any time from <strong>Settings → Subscription → Cancel</strong>. Cancellation takes effect at the end of the current billing period — you retain access until then. We do not offer pro-rata refunds for partial periods except where required by law.</p>
+          <p>You can cancel your subscription at any time from <strong>Settings → Subscription</strong> in the app or from your account at <strong>link.com</strong>. Cancellation takes effect at the end of the current billing period — you retain access until then. We do not offer pro-rata refunds for partial periods except where required by law.</p>
         </section>
 
         <section>

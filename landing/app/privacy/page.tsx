@@ -37,7 +37,7 @@ export default function PrivacyPage() {
 
         <section>
           <h2>4. Account data</h2>
-          <p>We collect your email address for authentication. We store: email, subscription plan and usage minutes, preferences (language, theme), and auto-learned vocabulary terms. We do not collect payment card data — payments are processed by Stripe.</p>
+          <p>We collect your email address for authentication. We store: email, subscription plan and usage minutes, preferences (language, theme), and auto-learned vocabulary terms. We do not collect payment card data — purchases are sold and processed by Link (Stripe) as the merchant of record.</p>
         </section>
 
         <section>
@@ -51,7 +51,7 @@ export default function PrivacyPage() {
             <li><strong>Modal Labs</strong> — serverless GPU compute (US). Processes audio in-memory, no data persisted after transcription.</li>
             <li><strong>Supabase</strong> — auth and database (EU region).</li>
             <li><strong>Google Gemini API</strong> — AI correction and summaries. Only text is sent, never audio. Google&apos;s data terms apply.</li>
-            <li><strong>Stripe</strong> — payment processing. Card data never touches our servers.</li>
+            <li><strong>Stripe / Link</strong> — merchant of record for purchases: payment, receipts, sales tax and VAT. Card data never touches our servers.</li>
             <li><strong>PostHog</strong> — privacy-masked analytics (EU).</li>
             <li><strong>Vercel</strong> — web hosting (US/EU).</li>
           </ul>
