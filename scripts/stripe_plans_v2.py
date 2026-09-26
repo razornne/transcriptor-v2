@@ -14,19 +14,15 @@
 VAT Stripe вычитает из неё. Продуктам ставится налоговый код SaaS
 (txcd_10103001) — без него Managed Payments не примет Checkout.
 
-Запуск (ключ — live secret key из Stripe Dashboard → Developers → API keys):
-  $env:STRIPE_SECRET_KEY = "sk_live_..."
-  $env:STRIPE_PRO_MONTHLY_PRICE = "price_..."    # текущие, из секрета stripe-secrets:
-  $env:STRIPE_TEAM_MONTHLY_PRICE = "price_..."   # по ним находим продукты Pro и Team
-  python scripts/stripe_plans_v2.py            # сухой прогон: что будет создано
-  python scripts/stripe_plans_v2.py --apply    # создать
+Flask находит новые цены по lookup_key (app.py → _stripe_price_id), секрет
+stripe-secrets менять не нужно.
 
+Запуск в Modal с ключом из секрета stripe-secrets (локально ключ не нужен):
+  modal run scripts/stripe_plans_v2.py            # сухой прогон
+  modal run scripts/stripe_plans_v2.py --apply    # создать
 Повторный запуск безопасен: цена с тем же lookup_key не создаётся второй раз.
 """
 import os
-import sys
-
-import stripe
 
 TAX_CODE = "txcd_10103001"  # Software as a service (SaaS) - business use
 
@@ -38,59 +34,69 @@ PRICES = [
     ("team_annual_v2",  "team", "year",  13200, 219000),
 ]
 
-ENV_NAMES = {
-    "pro_monthly_v2": "STRIPE_PRO_MONTHLY_PRICE",
-    "pro_annual_v2": "STRIPE_PRO_ANNUAL_PRICE",
-    "team_monthly_v2": "STRIPE_TEAM_MONTHLY_PRICE",
-    "team_annual_v2": "STRIPE_TEAM_ANNUAL_PRICE",
-}
 
+def run(apply: bool) -> list[str]:
+    import stripe
 
-def main() -> None:
-    apply = "--apply" in sys.argv
     stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+    out: list[str] = []
+    acct = stripe.Account.retrieve()
+    out.append(f"account {acct.id}: country={acct.country} default_currency={acct.default_currency} "
+               f"livemode_key={stripe.api_key.startswith('sk_live')}")
+    try:
+        banks = stripe.Account.list_external_accounts(acct.id, limit=10).data
+        out.append("payout accounts: " + ", ".join(f"{b.object}:{b.currency}" for b in banks))
+    except Exception as e:
+        out.append(f"payout accounts: n/a ({e})")
+
     products = {
         "pro": stripe.Price.retrieve(os.environ["STRIPE_PRO_MONTHLY_PRICE"]).product,
         "team": stripe.Price.retrieve(os.environ["STRIPE_TEAM_MONTHLY_PRICE"]).product,
     }
     for name, pid in products.items():
         prod = stripe.Product.retrieve(pid)
-        print(f"{name}: product {pid} «{prod.name}» tax_code={prod.get('tax_code')}")
-        if prod.get("tax_code") != TAX_CODE:
-            print(f"  → tax_code {TAX_CODE}")
+        out.append(f"{name}: product {pid} «{prod.name}» tax_code={getattr(prod, 'tax_code', None)}")
+        if getattr(prod, "tax_code", None) != TAX_CODE:
+            out.append(f"  -> tax_code {TAX_CODE}")
             if apply:
                 stripe.Product.modify(pid, tax_code=TAX_CODE)
 
     existing = {p.lookup_key: p for p in
                 stripe.Price.list(lookup_keys=[k for k, *_ in PRICES], limit=10).auto_paging_iter()}
-    ids = {}
     for key, product, interval, usd, uah in PRICES:
         if key in existing:
-            ids[key] = existing[key].id
-            print(f"{key}: already exists ({ids[key]})")
+            out.append(f"{key}: already exists ({existing[key].id})")
             continue
-        print(f"{key}: create ${usd / 100:g} / {interval} + {uah / 100:g} UAH")
-        if not apply:
-            continue
-        price = stripe.Price.create(
-            product=products[product],
-            currency="usd",
-            unit_amount=usd,
-            recurring={"interval": interval},
-            tax_behavior="inclusive",
-            currency_options={"uah": {"unit_amount": uah, "tax_behavior": "inclusive"}},
-            lookup_key=key,
-            nickname=key,
-        )
-        ids[key] = price.id
-
+        out.append(f"{key}: create ${usd / 100:g} / {interval} + {uah / 100:g} UAH")
+        if apply:
+            price = stripe.Price.create(
+                product=products[product],
+                currency="usd",
+                unit_amount=usd,
+                recurring={"interval": interval},
+                tax_behavior="inclusive",
+                currency_options={"uah": {"unit_amount": uah, "tax_behavior": "inclusive"}},
+                lookup_key=key,
+                nickname=key,
+            )
+            out.append(f"  -> {price.id}")
     if not apply:
-        print("\nDry run. Add --apply to create.")
-        return
-    print("\nNew price IDs for the stripe-secrets Modal secret:")
-    for key, env in ENV_NAMES.items():
-        print(f"  {env}={ids[key]}")
+        out.append("Dry run. Add --apply to create.")
+    return out
 
 
-if __name__ == "__main__":
-    main()
+try:
+    import modal
+
+    app = modal.App("skriptly-stripe-plans-v2")
+
+    @app.function(image=modal.Image.debian_slim(python_version="3.11").pip_install("stripe>=12"),
+                  secrets=[modal.Secret.from_name("stripe-secrets")])
+    def remote(apply: bool = False) -> list[str]:
+        return run(apply)
+
+    @app.local_entrypoint()
+    def main(apply: bool = False):
+        print("\n".join(remote.remote(apply)))
+except ImportError:
+    pass

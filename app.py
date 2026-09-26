@@ -602,20 +602,57 @@ STRIPE_PRICE_MAP = {
 
 TEAM_MIN_SEATS = 2  # Minimum seats at upgrade (owner + at least 1 invitee)
 
-# Stripe Managed Payments: Stripe (через Link) — merchant of record, сам считает
-# и платит VAT/sales tax. Включается в Dashboard → Settings → Managed Payments;
-# до этого Checkout с флагом падает, поэтому держим за env (on/off).
-# Цены в USD с currency_options UAH (249 ₴ и т.п.) — Checkout сам показывает
-# гривны покупателям из Украины, остальным Adaptive Pricing конвертирует USD.
-STRIPE_MANAGED_PAYMENTS = os.environ.get("STRIPE_MANAGED_PAYMENTS", "off").lower() in ("1", "on", "true")
+# Цены тарифов v2 ищутся в Stripe по lookup_key (их создаёт scripts/stripe_plans_v2.py),
+# поэтому новые price ID не надо переносить в секрет stripe-secrets. Нет цены с таким
+# ключом (скрипт ещё не запускали) → старый ID из env.
+STRIPE_LOOKUP_KEYS = {
+    ("pro",  "monthly"): "pro_monthly_v2",
+    ("pro",  "annual"):  "pro_annual_v2",
+    ("team", "monthly"): "team_monthly_v2",
+    ("team", "annual"):  "team_annual_v2",
+}
+_stripe_price_cache: dict[str, str] = {}
 
 
-def _checkout_mode_params() -> dict:
-    """Параметры Checkout Session, зависящие от Managed Payments.
+def _stripe_price_id(plan: str, billing: str) -> str:
+    key = STRIPE_LOOKUP_KEYS.get((plan, billing))
+    if key and key not in _stripe_price_cache:
+        try:
+            import stripe as _stripe
+            _stripe.api_key = STRIPE_SECRET_KEY
+            found = _stripe.Price.list(lookup_keys=[key], active=True, limit=1).data
+            if found:  # промах не кэшируем — цену могут создать, пока контейнер жив
+                _stripe_price_cache[key] = found[0].id
+        except Exception as e:
+            print(f"[stripe] price lookup {key} failed: {e}", flush=True)
+    return _stripe_price_cache.get(key or "") or STRIPE_PRICE_MAP.get((plan, billing), lambda: "")()
+
+
+# Stripe Managed Payments: продавец для покупателя — Stripe (через Link), он сам
+# считает и платит VAT/sales tax. Включается владельцем в Dashboard → Settings →
+# Managed Payments (заявка + условия). auto (по умолчанию): пробуем Checkout с
+# managed_payments, а если Stripe его ещё не включил — обычный Checkout, как раньше.
+# on — только MoR (ошибка, если не включён); off — только обычный.
+STRIPE_MANAGED_PAYMENTS = os.environ.get("STRIPE_MANAGED_PAYMENTS", "auto").lower()
+_mp_fallback_notified = False
+
+
+def _create_checkout_session(stripe_mod, **params):
+    """Checkout Session с Managed Payments, если он доступен.
     С MoR Stripe сам выбирает способы оплаты — payment_method_types запрещён."""
-    if STRIPE_MANAGED_PAYMENTS:
-        return {"managed_payments": {"enabled": True}}
-    return {"payment_method_types": ["card"]}
+    global _mp_fallback_notified
+    if STRIPE_MANAGED_PAYMENTS in ("auto", "on"):
+        try:
+            return stripe_mod.checkout.Session.create(managed_payments={"enabled": True}, **params)
+        except getattr(stripe_mod, "InvalidRequestError", Exception) as e:
+            if STRIPE_MANAGED_PAYMENTS == "on":
+                raise
+            print(f"[stripe] managed payments unavailable, plain checkout: {e}", flush=True)
+            if not _mp_fallback_notified:
+                _mp_fallback_notified = True
+                _notify_admin(f"⚠️ Checkout без Managed Payments (Stripe ещё не включил?)\n<code>{str(e)[:300]}</code>")
+    return stripe_mod.checkout.Session.create(payment_method_types=["card"], **params)
+
 
 # Admin emails — comma-separated. Used to gate /api/lab/* and any future
 # internal tools. Anyone whose JWT email matches gets through; everyone else
@@ -779,6 +816,15 @@ def _notify_admin(text: str):
         )
     except Exception as e:
         print(f"[admin-notify] failed: {e}", flush=True)
+
+
+def _stripe_sub_quantity(sub, default: int) -> int:
+    """Число мест первой позиции подписки. stripe-python 15+ — объекты не dict,
+    `.get()` на них бросает AttributeError; индексация работает в любой версии."""
+    try:
+        return int(sub["items"]["data"][0]["quantity"] or default)
+    except Exception:
+        return default
 
 
 def _stripe_session_discount_summary(session_obj) -> str:
@@ -1561,7 +1607,7 @@ def stripe_checkout():
     if billing not in ("monthly", "annual"):
         billing = "monthly"
 
-    price_id = STRIPE_PRICE_MAP.get((plan, billing), lambda: "")()
+    price_id = _stripe_price_id(plan, billing)
     if not price_id:
         return jsonify({"error": f"price_id for {plan}/{billing} not configured in secrets"}), 400
 
@@ -1586,9 +1632,9 @@ def stripe_checkout():
             "billing": billing,
         }
         try:
-            session = _stripe.checkout.Session.create(
+            session = _create_checkout_session(
+                _stripe,
                 mode="subscription",
-                **_checkout_mode_params(),
                 line_items=[{"price": price_id, "quantity": TEAM_MIN_SEATS}],
                 success_url=base + "?checkout=success&team=1",
                 cancel_url=base + "?checkout=cancelled",
@@ -1606,9 +1652,9 @@ def stripe_checkout():
 
     # ── Personal Pro subscription ──────────────────────────────────────────────
     try:
-        session = _stripe.checkout.Session.create(
+        session = _create_checkout_session(
+            _stripe,
             mode="subscription",
-            **_checkout_mode_params(),
             line_items=[{"price": price_id, "quantity": 1}],
             success_url=base + "?checkout=success",
             cancel_url=base + "?checkout=cancelled",
@@ -2544,7 +2590,7 @@ def workspace_upgrade_team():
     billing = (data.get("billing") or "monthly").lower()
     if billing not in ("monthly", "annual"):
         billing = "monthly"
-    price_id = STRIPE_PRICE_MAP.get(("team", billing), lambda: "")()
+    price_id = _stripe_price_id("team", billing)
     if not price_id:
         return jsonify({"error": f"Team {billing} price not configured"}), 500
 
@@ -2554,9 +2600,9 @@ def workspace_upgrade_team():
 
     origin = request.headers.get("Origin", "https://skriptly.io")
     try:
-        session = _stripe.checkout.Session.create(
+        session = _create_checkout_session(
+            _stripe,
             mode="subscription",
-            **_checkout_mode_params(),
             line_items=[{"price": price_id, "quantity": qty}],
             success_url=origin + "/app?team_subscribed=1",
             cancel_url=origin + "/app?team_subscribed=0",
@@ -2795,7 +2841,7 @@ def stripe_webhook():
                 import stripe as _stripe
                 _stripe.api_key = STRIPE_SECRET_KEY
                 sub = _stripe.Subscription.retrieve(sub_id)
-                qty = sub["items"]["data"][0].get("quantity", TEAM_MIN_SEATS)
+                qty = _stripe_sub_quantity(sub, TEAM_MIN_SEATS)
             except Exception as e:
                 print(f"[webhook] team sub retrieve failed: {e}", flush=True)
             if workspace_id:
@@ -2840,7 +2886,7 @@ def stripe_webhook():
             qty = TEAM_MIN_SEATS
             try:
                 sub = _stripe.Subscription.retrieve(sub_id)
-                qty = sub["items"]["data"][0].get("quantity", TEAM_MIN_SEATS)
+                qty = _stripe_sub_quantity(sub, TEAM_MIN_SEATS)
             except Exception as e:
                 print(f"[webhook] personal_team_create sub retrieve failed: {e}", flush=True)
 

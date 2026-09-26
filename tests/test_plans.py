@@ -12,10 +12,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 NAMES = {"PLAN_LIMITS", "DICTATION_UNLIMITED_PLANS", "_TEAM_WS_SELECT",
          "_get_team_workspace", "_normalize_plan", "_get_effective_plan", "_this_month",
-         "_usage", "_charge_minutes", "_checkout_mode_params"}
+         "_usage", "_charge_minutes", "_create_checkout_session", "_mp_fallback_notified"}
 
 
-def _load(db: "FakeDB", managed: bool = False) -> dict:
+def _load(db: "FakeDB", managed: str = "auto") -> dict:
     with open(os.path.join(ROOT, "app.py"), encoding="utf-8") as f:
         tree = ast.parse(f.read())
     body = []
@@ -27,6 +27,7 @@ def _load(db: "FakeDB", managed: bool = False) -> dict:
             if isinstance(t, ast.Name) and t.id in NAMES:
                 body.append(n)
     ns: dict = {"datetime": datetime, "_sb_admin": db, "STRIPE_MANAGED_PAYMENTS": managed,
+                "_notify_admin": lambda text: db.calls.append(("notify", text)),
                 "_add_minutes": lambda uid, m: db.calls.append(("add_minutes", uid, m))}
     exec(compile(ast.Module(body=body, type_ignores=[]), "app.py", "exec"), ns)
     return ns
@@ -134,10 +135,54 @@ def test_charge_minutes_personal():
     assert db.calls == [("add_minutes", "u1", 3.0)]
 
 
-def test_checkout_params():
-    assert _load(FakeDB(), managed=False)["_checkout_mode_params"]() == {"payment_method_types": ["card"]}
+class FakeStripe:
+    """checkout.Session.create записывает параметры; mp_enabled=False — как у
+    аккаунта, где Managed Payments ещё не включён."""
+
+    class InvalidRequestError(Exception):
+        pass
+
+    def __init__(self, mp_enabled: bool):
+        self.created = []
+        outer = self
+
+        class Session:
+            @staticmethod
+            def create(**params):
+                if "managed_payments" in params and not mp_enabled:
+                    raise FakeStripe.InvalidRequestError("managed_payments is not enabled")
+                outer.created.append(params)
+                return params
+
+        self.checkout = type("checkout", (), {"Session": Session})
+
+
+def test_checkout_uses_managed_payments_when_enabled():
+    st = FakeStripe(mp_enabled=True)
+    _load(FakeDB())["_create_checkout_session"](st, mode="subscription")
     # С Managed Payments payment_method_types запрещён — Stripe выбирает сам
-    assert _load(FakeDB(), managed=True)["_checkout_mode_params"]() == {"managed_payments": {"enabled": True}}
+    assert st.created == [{"managed_payments": {"enabled": True}, "mode": "subscription"}]
+
+
+def test_checkout_auto_falls_back_and_notifies_once():
+    db, st = FakeDB(), FakeStripe(mp_enabled=False)
+    ns = _load(db)
+    ns["_create_checkout_session"](st, mode="subscription")
+    ns["_create_checkout_session"](st, mode="subscription")
+    assert st.created == [{"payment_method_types": ["card"], "mode": "subscription"}] * 2
+    assert [c[0] for c in db.calls] == ["notify"]
+
+
+def test_checkout_on_raises_off_skips():
+    st = FakeStripe(mp_enabled=False)
+    try:
+        _load(FakeDB(), managed="on")["_create_checkout_session"](st, mode="subscription")
+        raise AssertionError("expected InvalidRequestError")
+    except FakeStripe.InvalidRequestError:
+        pass
+    st = FakeStripe(mp_enabled=True)
+    _load(FakeDB(), managed="off")["_create_checkout_session"](st, mode="subscription")
+    assert st.created == [{"payment_method_types": ["card"], "mode": "subscription"}]
 
 
 if __name__ == "__main__":
