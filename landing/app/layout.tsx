@@ -5,12 +5,12 @@ import { Analytics } from "@vercel/analytics/react";
 export const metadata: Metadata = {
   title: "Skriptly — Every call, word for word.",
   description:
-    "Accurate Ukrainian and English transcription with automatic speaker separation. Audio is processed and deleted — never stored.",
+    "Accurate call transcription in 60+ languages with automatic speaker separation, AI summaries and a Windows dictation app.",
   metadataBase: new URL("https://skriptly.io"),
   openGraph: {
     title: "Skriptly — Every call, word for word.",
     description:
-      "Accurate Ukrainian and English transcription with automatic speaker separation. Audio is processed and deleted — never stored.",
+      "Accurate call transcription in 60+ languages with automatic speaker separation, AI summaries and a Windows dictation app.",
     url: "https://skriptly.io",
     siteName: "Skriptly",
     type: "website",
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Skriptly — Every call, word for word.",
     description:
-      "Accurate Ukrainian and English transcription with automatic speaker separation. Audio is processed and deleted — never stored.",
+      "Accurate call transcription in 60+ languages with automatic speaker separation, AI summaries and a Windows dictation app.",
   },
 };
 
@@ -45,7 +45,7 @@ const faqJsonLd = {
       name: "Is my audio stored anywhere?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "No. Audio is processed in-memory on our GPU server and deleted within the same request. We have no recording storage — by design. We also don't use your audio for model training.",
+        text: "We keep a copy of each recording for 90 days so we can investigate transcription errors, then it is deleted automatically. Only the founder can access it, and it is never used to train AI models or shared. Deleting your account deletes it immediately. Details are in the Privacy Policy.",
       },
     },
     {
@@ -53,7 +53,7 @@ const faqJsonLd = {
       name: "Which languages are supported?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "Polish, English, Ukrainian, and Russian — all at strong accuracy. The model is Whisper large-v3-turbo with an additional AI correction pass that learns your domain terminology. Language is auto-detected per recording.",
+        text: "Transcription recognizes 60+ languages and detects the language automatically, even when people switch mid-call. Ukrainian, Russian, English, Polish and Czech can also be picked explicitly, and an AI correction pass learns your domain terms.",
       },
     },
     {

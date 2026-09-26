@@ -26,7 +26,7 @@ export default function TermsPage() {
 
         <section>
           <h2>2. The service</h2>
-          <p>Skriptly provides cloud-based audio transcription with speaker diarisation, AI-assisted correction, and related features. We process audio files you provide and return text transcripts. Audio is processed in-memory and discarded immediately — we do not store your recordings.</p>
+          <p>Skriptly provides cloud-based audio transcription with speaker diarisation, AI-assisted correction, and related features. We process audio files you provide and return text transcripts. How audio and transcripts are stored and for how long is described in the <a href="/privacy">Privacy Policy</a>.</p>
         </section>
 
         <section>
@@ -80,7 +80,7 @@ export default function TermsPage() {
 
         <section>
           <h2>11. Termination</h2>
-          <p>We may suspend or terminate accounts that violate these Terms. You may delete your account at any time from <strong>Settings → Danger zone</strong>. Upon termination, your transcripts will be deleted within 30 days.</p>
+          <p>We may suspend or terminate accounts that violate these Terms. You may delete your account at any time from <strong>Settings → Danger zone</strong>. Deleting your account removes your transcripts, profile and our copies of your recordings immediately.</p>
         </section>
 
         <section>

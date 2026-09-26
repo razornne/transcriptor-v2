@@ -209,7 +209,7 @@ Supabase Postgres
 - Тесты: `tests/test_channels.py`. Проверено на GPU на синтетическом стерео-звонке (чешский TTS + эхо 25%/200мс): 2 спикера — 0% ошибок разметки, эхо вычищено, длинный пайплайн так же.
 
 ### Архив записей (работа над ошибками)
-- Каждая транскрипция (запись и upload, **кроме Privacy Mode**) → копия аудио в R2 `recordings/{user_id}/{recording_id}.{ext}` + строка в `public.recordings`. Делает `/api/transcribe` фоновым потоком (`_archive_recording`) после spawn; результат джобы (`segments`/`error`) дописывает `/api/jobs/<id>` (`_archive_job_result`, PATCH по `job_id`). Всё best-effort — сбой архива не ломает транскрипцию.
+- Каждая транскрипция (запись и upload, **кроме Privacy Mode**) → копия аудио в R2 `recordings/{user_id}/{recording_id}.{ext}` + строка в `public.recordings`. Делает `/api/transcribe` фоновым потоком (`_archive_recording`) после spawn; результат джобы (`segments`/`error`) дописывает `/api/jobs/<id>` (`_archive_job_result`, PATCH по `job_id`). Всё best-effort — сбой архива не ломает транскрипцию. **Удаление аккаунта** (`/api/account/delete`) стирает префикс `recordings/{user_id}/` в R2 (`_r2_delete_prefix`); строки `recordings`/`capture_stats` уходят каскадом с `auth.users`. Раскрыто в Privacy Policy (2026-09-26: 90 дней, доступ только у основателя, не для обучения).
 - Фронт шлёт `recording_id` (из `startRecording`, для upload — новый uuid) и `source` (`record`/`upload`) в FormData.
 - Секрет `r2-secrets` (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET; опционально R2_ENDPOINT — только для бакета с юрисдикцией EU) на `flask_app`. Хранение 90 дней: lifecycle-правило бакета в дашборде Cloudflare + `recordings.expires_at`.
 - **`/app/review`** — админка (ADMIN_EMAILS): список записей с флагами проблем, плеер с раздельным прослушиванием каналов (L=микрофон, R=звонок) через ChannelSplitter, телеметрия + журнал событий, сырой транскрипт (клик → перемотка). Аудио проксируется через `/api/admin/recordings/<id>/audio` — CORS на бакете не нужен.
@@ -719,7 +719,7 @@ posthog.setPersonProperties(props);
 ### Session Replay (включён, БЕЗ маскировки)
 `posthog.init` в `landing/app/app/page.tsx`: `session_recording: { maskAllInputs: false, maskTextSelector: null }` — в replay виден весь текст, включая транскрипты. **Решение владельца от 2026-09-23** (работа над ошибками; все пользователи — его знакомые, никто не платит). Пароли маскируются дефолтом rrweb. Маскировку всего текста ещё можно включить на уровне проекта в PostHog UI (Settings → Session replay) — там должна быть выключена.
 
-**Перед публичным запуском:** раскрыть в Privacy Policy (replays + хранение аудио-записей) или вернуть маскировку. Не возвращать маскировку молча — сначала спросить владельца.
+**Раскрыто в Privacy Policy 2026-09-26** (решение владельца: оставить и честно описать; возражение против реплеев — письмом, исключаем вручную). Не возвращать маскировку молча — сначала спросить владельца.
 
 ### Настроенные dashboards / insights (в PostHog UI)
 - **Activation funnel**: `sign_in → transcription_started → transcription_completed → summary_generated|export_clicked` (24h window)

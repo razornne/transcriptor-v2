@@ -1,18 +1,18 @@
 import type { Copy } from "@/lib/content";
 
 const STATS_EN = [
-  { label: "Languages", value: "100+ languages", live: false },
-  { label: "Retention", value: "0 seconds", live: false },
-  { label: "Processing", value: "GPU-hosted", live: true },
+  { label: "Languages", value: "60+ languages", live: false },
+  { label: "Dictation", value: "Windows app", live: false },
+  { label: "Payments", value: "USD or UAH", live: true },
   { label: "Install", value: "None required", live: false },
   { label: "Export", value: "Markdown / .txt", live: false },
   { label: "Speaker ID", value: "Automatic", live: false },
 ];
 
 const STATS_UA = [
-  { label: "Мови", value: "100+ мов", live: false },
-  { label: "Збереження", value: "0 секунд", live: false },
-  { label: "Обробка", value: "GPU-сервер", live: true },
+  { label: "Мови", value: "60+ мов", live: false },
+  { label: "Диктовка", value: "Застосунок для Windows", live: false },
+  { label: "Оплата", value: "Гривні або долари", live: true },
   { label: "Встановлення", value: "Не потрібне", live: false },
   { label: "Експорт", value: "Markdown / .txt", live: false },
   { label: "Спікери", value: "Автоматично", live: false },

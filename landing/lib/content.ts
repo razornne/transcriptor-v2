@@ -164,13 +164,13 @@ export const COPY: Record<Lang, Copy> = {
   en: {
     nav: { features: "Features", pricing: "Pricing", openApp: "Open app" },
     hero: {
-      eyebrow: "Skriptly · v1.0 · GPU-hosted",
-      sub: "Strong accuracy across 100+ languages. Speakers separated automatically. Audio processed and deleted — we never store it.",
+      eyebrow: "Skriptly · calls & dictation",
+      sub: "Strong accuracy across 60+ languages. Speakers separated automatically. Summary and action items in one click.",
       ctaPrimary: "Start free",
       ctaSecondary: "See how it works",
       meta: [
-        ["Languages",  "100+ languages"],
-        ["Retention",  "0 seconds"],
+        ["Languages",  "60+ languages"],
+        ["Speakers",   "Automatic"],
       ],
     },
     social: {
@@ -191,14 +191,14 @@ export const COPY: Record<Lang, Copy> = {
     features: {
       eyebrow: "What's inside",
       title: "Everything a transcript should be.",
-      sub: "Built for individual professionals who don't want to babysit a recording. Multilingual from day one — 100+ languages, auto-detected.",
+      sub: "Built for individual professionals who don't want to babysit a recording. Multilingual from day one — 60+ languages, auto-detected.",
       items: [
-        { tag: "ML", h: "100+ languages",        p: "Whisper large-v3 supports over a hundred languages. AI correction layer learns your domain terms.", accent: true },
-        { tag: "SS", h: "Speaker separation",    p: "pyannote diarization. Knows who said what — even on a phone call with overlap." },
+        { tag: "ML", h: "60+ languages",         p: "Recognizes 60+ languages and handles switching mid-call. The AI correction layer learns your domain terms.", accent: true },
+        { tag: "SS", h: "Speaker separation",    p: "Knows who said what — your voice and the other side are kept apart, and you can name every speaker." },
         { tag: "⚡", h: "Fast turnaround",       p: "Stop the recording, get your transcript in under a minute. No waiting room, no manual steps." },
         { tag: "SM", h: "Summary + action items",p: "Auto-generated at the end. Edit them, ship them — they're plain Markdown." },
         { tag: "FS", h: "Full-text search",      p: "Find anything across every past call. Filter by speaker, language, or date." },
-        { tag: "0",  h: "Zero retention",        p: "Audio is processed and deleted in the same request. We never store it. Not for training. Not at all." },
+        { tag: "PR", h: "Private by default",    p: "Transcripts are visible only to you unless you share a workspace. Your audio is never used to train AI models." },
       ],
     },
     breakout: {
@@ -273,7 +273,7 @@ export const COPY: Record<Lang, Copy> = {
           points: [
             "Record lectures and get a searchable transcript instead of notes",
             "Each voice in a group discussion attributed automatically",
-            "Zero data retention — recordings never leave your session",
+            "Transcripts stay private — visible only to you",
           ],
           quote: "I stopped missing things while writing. The transcript gets everything.",
           author: "Graduate student, linguistics",
@@ -284,7 +284,7 @@ export const COPY: Record<Lang, Copy> = {
           points: [
             "Verbatim quotes ready to paste — no re-listening",
             "Speaker labels survive even noisy phone recordings",
-            "Audio deleted after processing — no storage liability",
+            "Your recordings are never used to train AI models",
           ],
           quote: "I can cite a 90-minute interview in minutes, not hours.",
           author: "Investigative reporter, national paper",
@@ -308,11 +308,11 @@ export const COPY: Record<Lang, Copy> = {
       items: [
         {
           q: "Is my audio stored anywhere?",
-          a: "No. Audio is processed in-memory on our GPU server and deleted within the same request. We have no recording storage — by design. We also don't use your audio for model training.",
+          a: "We keep a copy of each recording for 90 days so we can investigate transcription errors, then it is deleted automatically. Only the founder can access it, and it is never used to train AI models or shared. Deleting your account deletes it immediately. Details are in the Privacy Policy.",
         },
         {
           q: "Which languages are supported?",
-          a: "Whisper large-v3-turbo supports 100+ languages. Polish, English, Ukrainian, and Russian are all at strong accuracy with an AI correction pass that learns your domain terminology. Language is auto-detected per recording.",
+          a: "Transcription recognizes 60+ languages and detects the language automatically, even when people switch mid-call. Ukrainian, Russian, English, Polish and Czech can also be picked explicitly, and an AI correction pass learns your domain terms.",
         },
         {
           q: "How accurate is the transcription?",
@@ -346,13 +346,13 @@ export const COPY: Record<Lang, Copy> = {
   ua: {
     nav: { features: "Можливості", pricing: "Тарифи", openApp: "Відкрити застосунок" },
     hero: {
-      eyebrow: "Skriptly · v1.0 · GPU-сервер",
-      sub: "Висока точність у 100+ мовах. Спікери розділяються автоматично. Аудіо обробляється та видаляється — ми його не зберігаємо.",
+      eyebrow: "Skriptly · дзвінки й диктовка",
+      sub: "Висока точність у 60+ мовах. Спікери розділяються автоматично. Підсумок і задачі — в один клік.",
       ctaPrimary: "Спробувати безкоштовно",
       ctaSecondary: "Як це працює",
       meta: [
-        ["Мови",         "100+ мов"],
-        ["Збереження",   "0 секунд"],
+        ["Мови",         "60+ мов"],
+        ["Спікери",      "Автоматично"],
       ],
     },
     social: {
@@ -373,14 +373,14 @@ export const COPY: Record<Lang, Copy> = {
     features: {
       eyebrow: "Що всередині",
       title: "Все, чим має бути транскрипт.",
-      sub: "Для тих, хто не хоче няньчити запис. Багатомовний від початку — 100+ мов, автовизначення.",
+      sub: "Для тих, хто не хоче няньчити запис. Багатомовний від початку — 60+ мов, автовизначення.",
       items: [
-        { tag: "ML", h: "100+ мов",                p: "Whisper large-v3 підтримує понад сотню мов. AI-корекція вчить твої доменні терміни.", accent: true },
-        { tag: "SS", h: "Розділення спікерів",     p: "pyannote-діаризація. Знає, хто що сказав — навіть у телефонному дзвінку з накладаннями." },
+        { tag: "ML", h: "60+ мов",                 p: "Розпізнає 60+ мов і справляється з перемиканням посеред дзвінка. AI-корекція вчить твої доменні терміни.", accent: true },
+        { tag: "SS", h: "Розділення спікерів",     p: "Знає, хто що сказав — твій голос і співрозмовники не змішуються, кожного спікера можна назвати." },
         { tag: "⚡", h: "Швидкий результат",       p: "Зупини запис — транскрипт готовий менш ніж за хвилину. Без черги, без ручних кроків." },
         { tag: "SM", h: "Підсумок + дії",          p: "Генерується автоматично. Редагуй, надсилай — це звичайний Markdown." },
         { tag: "FS", h: "Повнотекстовий пошук",    p: "Знайди що завгодно у всіх минулих дзвінках. Фільтри за спікером, мовою, датою." },
-        { tag: "0",  h: "Нульове збереження",      p: "Аудіо обробляється і видаляється в межах одного запиту. Не зберігаємо. Не для тренування. Зовсім." },
+        { tag: "PR", h: "Приватно за замовчуванням", p: "Транскрипти бачиш лише ти, поки не поділишся воркспейсом. Твоє аудіо ніколи не використовується для навчання AI." },
       ],
     },
     breakout: {
@@ -466,7 +466,7 @@ export const COPY: Record<Lang, Copy> = {
           points: [
             "Готові цитати для вставки — без переслуховування",
             "Підписи спікерів збережуться навіть у шумних телефонних записах",
-            "Аудіо видаляється після обробки — жодних ризиків зберігання",
+            "Твої записи ніколи не використовуються для навчання AI",
           ],
           quote: "Я можу процитувати 90-хвилинне інтерв'ю за хвилини, не за години.",
           author: "Розслідувач, національне видання",
@@ -490,11 +490,11 @@ export const COPY: Record<Lang, Copy> = {
       items: [
         {
           q: "Чи зберігається моє аудіо?",
-          a: "Ні. Аудіо обробляється в пам'яті на GPU-сервері та видаляється в межах того самого запиту. Ми не маємо сховища записів — це принциповий вибір. Також не використовуємо твоє аудіо для навчання моделей.",
+          a: "Копію кожного запису ми зберігаємо 90 днів, щоб розбирати помилки транскрипції, після чого вона видаляється автоматично. Доступ має лише засновник, аудіо ніколи не використовується для навчання AI і нікому не передається. Видалення акаунта видаляє його одразу. Деталі — в Політиці конфіденційності.",
         },
         {
           q: "Які мови підтримуються?",
-          a: "Whisper large-v3-turbo підтримує 100+ мов. Польська, англійська, українська та російська — з високою точністю, плюс AI-корекція, що вчить твою доменну лексику. Мова визначається автоматично для кожного запису.",
+          a: "Транскрипція розпізнає 60+ мов і визначає мову автоматично, навіть якщо співрозмовники перемикаються посеред дзвінка. Українську, російську, англійську, польську та чеську можна вибрати явно, а AI-корекція вчить твою доменну лексику.",
         },
         {
           q: "Наскільки точна транскрипція?",

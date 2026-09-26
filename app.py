@@ -761,6 +761,17 @@ def _r2():
     return _r2_client
 
 
+def _r2_delete_prefix(prefix: str) -> int:
+    """Удаляет все объекты архива под префиксом (аудио юзера). Возвращает число удалённых."""
+    client, deleted = _r2(), 0
+    for page in client.get_paginator("list_objects_v2").paginate(Bucket=R2_BUCKET, Prefix=prefix):
+        keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+        if keys:  # list отдаёт ≤1000 за страницу — ровно лимит delete_objects
+            client.delete_objects(Bucket=R2_BUCKET, Delete={"Objects": keys, "Quiet": True})
+            deleted += len(keys)
+    return deleted
+
+
 def _archive_recording(audio_bytes: bytes, content_type: str, *, recording_id: str, user_id: str,
                        user_email: str | None, job_id: str, source: str, duration_sec: float,
                        language: str | None, num_speakers: int | None, quality: str):
@@ -2185,7 +2196,9 @@ def account_delete():
     2. Delete transcripts (cascade — RLS only allows the user's own rows)
     3. Leave or delete workspace if owner / member
     4. Delete user_profiles row
-    5. Delete Supabase auth.user (Admin API) — this revokes all sessions
+    5. Delete archived audio in R2 (recordings/{user_id}/…); строки recordings и
+       capture_stats уходят каскадом вместе с auth.user
+    6. Delete Supabase auth.user (Admin API) — this revokes all sessions
 
     No undo. Frontend MUST require explicit confirmation before calling.
     """
@@ -2240,7 +2253,15 @@ def account_delete():
     except Exception as e:
         print(f"[delete-account] profile delete failed: {e}", flush=True)
 
-    # 5. Delete Supabase auth user (revokes all sessions)
+    # 5. Delete archived audio (Privacy Policy обещает удаление вместе с аккаунтом)
+    if R2_BUCKET:
+        try:
+            n = _r2_delete_prefix(f"recordings/{user_id}/")
+            print(f"[delete-account] r2 objects deleted: {n}", flush=True)
+        except Exception as e:
+            print(f"[delete-account] r2 cleanup failed: {e}", flush=True)
+
+    # 6. Delete Supabase auth user (revokes all sessions)
     try:
         r = requests.delete(
             f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}",
