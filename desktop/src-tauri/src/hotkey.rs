@@ -279,6 +279,11 @@ fn handle(vk: u16, down: bool) -> bool {
     let any_active = HOLD_ACTIVE.load(Ordering::SeqCst) || LOCK_ACTIVE.load(Ordering::SeqCst);
     if down && !in_combo(&hold, vk) && !in_combo(&lock, vk) {
         if any_active {
+            // Чужой шорткат (Alt+Tab, Alt+Shift, Win+→): отпускание Alt/Win пропускаем
+            // как есть — меню/«Пуск» после такого и так не откроются, а подмена
+            // отпускания ломала бы переключение окон и раскладки.
+            MASK_WIN_UP.store(false, Ordering::SeqCst);
+            MASK_ALT_UP.store(false, Ordering::SeqCst);
             emit(HotkeyEvent::Other);
         } else if vk == VK_ESCAPE && ACTIVE.load(Ordering::SeqCst) {
             emit(HotkeyEvent::Escape);
@@ -407,6 +412,21 @@ mod tests {
         handle(VK_LSHIFT, false);
         handle(VK_LCONTROL, false);
         events();
+    }
+
+    #[test]
+    fn alt_tab_with_alt_as_hold_cancels_and_lets_alt_through() {
+        let _g = SERIAL.lock().unwrap();
+        events();
+        set_combo(Kind::Hold, &[VK_LMENU]);
+        set_combo(Kind::Lock, &[VK_LMENU, Z]);
+        assert!(!handle(VK_LMENU, true));
+        assert!(!handle(0x09, true), "Tab reaches Windows");
+        assert_eq!(events(), vec![HotkeyEvent::Down, HotkeyEvent::Other]);
+        handle(0x09, false);
+        // Отпускание Alt не глотаем и не подменяем — иначе Alt+Tab не переключит окно.
+        assert!(!handle(VK_LMENU, false));
+        assert_eq!(events(), vec![HotkeyEvent::Up]);
     }
 
     #[test]

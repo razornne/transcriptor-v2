@@ -22,15 +22,37 @@ use tauri::async_runtime::JoinHandle;
 
 /// Удержание короче этого — случайное касание: ничего не распознаём и не вставляем.
 const TAP_MS: u128 = 300;
+/// Диктовка «включается» (плашка, пауза медиа, Soniox), только если сочетание
+/// продержали столько без других клавиш. Иначе «удерживать» = Alt запускал
+/// диктовку на каждом Alt+Tab и Alt+Shift (смена раскладки). Микрофон при этом
+/// открывается сразу на нажатии — первые слова не теряются.
+const ARM_MS: u128 = 250;
 /// Потолок одной диктовки.
 const MAX_DICTATION: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum Mode {
     Idle,
+    /// Сочетание нажато, ждём ARM_MS: это диктовка или чужой шорткат?
+    Pending(Instant),
     Hold(Instant),
     Locked,
     Finishing,
+}
+
+/// Микрофон, открытый на нажатии, пока не ясно, диктовка ли это.
+struct Opened {
+    capture: Result<mic::Session, String>,
+    rx: UnboundedReceiver<Vec<i16>>,
+    pressed: Instant,
+}
+
+impl Opened {
+    fn discard(self) {
+        if let Ok(c) = self.capture {
+            c.stop();
+        }
+    }
 }
 
 struct Active {
@@ -50,6 +72,7 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>, mut keys: UnboundedReceiver<H
         let (done_tx, mut done_rx) = unbounded_channel::<Internal>();
         let mut mode = Mode::Idle;
         let mut active: Option<Active> = None;
+        let mut pending: Option<Opened> = None;
         let mut tick = tokio::time::interval(Duration::from_millis(50));
 
         loop {
@@ -57,15 +80,29 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>, mut keys: UnboundedReceiver<H
                 Some(ev) = keys.recv() => {
                     match (ev, mode) {
                         (HotkeyEvent::Down, Mode::Idle) => {
-                            match start(&app, &state).await {
-                                Ok(a) => { active = Some(a); mode = Mode::Hold(Instant::now()); }
-                                Err(msg) => flash(&app, "error", &msg, 2500),
+                            pending = Some(open_mic(&state));
+                            mode = Mode::Pending(Instant::now());
+                        }
+                        // Отпустили или нажали другую клавишу раньше ARM_MS (Alt+Tab,
+                        // Alt+Shift) — это был не диктовка: тихо закрываем микрофон.
+                        (HotkeyEvent::Up | HotkeyEvent::Other | HotkeyEvent::Escape, Mode::Pending(_)) => {
+                            if let Some(p) = pending.take() { p.discard(); }
+                            mode = Mode::Idle;
+                        }
+                        (HotkeyEvent::Lock, Mode::Pending(_)) => {
+                            match start(&app, &state, pending.take().unwrap_or_else(|| open_mic(&state))).await {
+                                Ok(a) => {
+                                    active = Some(a);
+                                    mode = Mode::Locked;
+                                    overlay::emit(&app, "handsfree", "", "");
+                                }
+                                Err(msg) => { mode = Mode::Idle; flash(&app, "error", &msg, 2500); }
                             }
                         }
                         // «Закрепить»: с нуля — сразу без удержания; во время удержания —
                         // «защёлкнуть» (Alt → Alt+Z); в закреплённом — закончить.
                         (HotkeyEvent::Lock, Mode::Idle) => {
-                            match start(&app, &state).await {
+                            match start(&app, &state, open_mic(&state)).await {
                                 Ok(a) => {
                                     active = Some(a);
                                     mode = Mode::Locked;
@@ -105,6 +142,15 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>, mut keys: UnboundedReceiver<H
                 }
                 _ = tick.tick() => {
                     match mode {
+                        Mode::Pending(since) if since.elapsed().as_millis() >= ARM_MS => {
+                            match pending.take() {
+                                Some(p) => match start(&app, &state, p).await {
+                                    Ok(a) => { active = Some(a); mode = Mode::Hold(since); }
+                                    Err(msg) => { mode = Mode::Idle; flash(&app, "error", &msg, 2500); }
+                                },
+                                None => mode = Mode::Idle,
+                            }
+                        }
                         Mode::Hold(_) | Mode::Locked if active.as_ref().map(|a| a.started.elapsed() > MAX_DICTATION).unwrap_or(false) => {
                             mode = Mode::Finishing;
                             finish(&app, &state, active.take(), done_tx.clone());
@@ -117,15 +163,24 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>, mut keys: UnboundedReceiver<H
     });
 }
 
-async fn start(app: &AppHandle, state: &Arc<AppState>) -> Result<Active, String> {
+fn open_mic(state: &Arc<AppState>) -> Opened {
+    let pressed = Instant::now();
+    let (tx, rx) = unbounded_channel::<Vec<i16>>();
+    let capture = mic::open(state.settings().mic.clone(), tx);
+    Opened { capture, rx, pressed }
+}
+
+/// Ошибки (не вошёл, микрофон) показываем только здесь — когда ясно, что это
+/// диктовка, а не Alt+Tab.
+async fn start(app: &AppHandle, state: &Arc<AppState>, opened: Opened) -> Result<Active, String> {
     if state.session.lock().await.is_none() {
+        opened.discard();
         crate::show_main(app);
         return Err(ApiError::NotSignedIn.user_message());
     }
     let settings = state.settings();
-    let pressed = Instant::now();
-    let (tx, rx) = unbounded_channel::<Vec<i16>>();
-    let capture = mic::open(settings.mic.clone(), tx).map_err(|e| {
+    let Opened { capture, rx, pressed } = opened;
+    let capture = capture.map_err(|e| {
         crate::log!("[audio] {e}");
         format!("Microphone problem: {e}")
     })?;
