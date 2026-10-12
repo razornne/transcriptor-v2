@@ -77,13 +77,6 @@ static LOCK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MASK_WIN_UP: AtomicBool = AtomicBool::new(false);
 static MASK_ALT_UP: AtomicBool = AtomicBool::new(false);
 
-/// Запись нового сочетания из настроек: клавиши глотаются, по отпусканию всех — результат.
-static CAPTURE: Mutex<Option<Capture>> = Mutex::new(None);
-struct Capture {
-    keys: Vec<u16>,
-    done: std::sync::mpsc::Sender<Result<Vec<u16>, String>>,
-}
-
 pub fn normalize(vk: u16) -> u16 {
     match vk {
         VK_LCONTROL | VK_RCONTROL => VK_CONTROL,
@@ -221,27 +214,6 @@ pub fn validate_pair(hold: &[u16], lock: &[u16]) -> Result<(), String> {
     Ok(())
 }
 
-/// Ждёт, пока юзер нажмёт и отпустит новое сочетание (Esc — отмена).
-pub fn capture(timeout: std::time::Duration) -> Result<Vec<u16>, String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    *CAPTURE.lock().unwrap() = Some(Capture { keys: Vec::new(), done: tx });
-    crate::log!("[hotkey] capture started");
-    let res = rx.recv_timeout(timeout).unwrap_or_else(|_| Err("timed out".into()));
-    *CAPTURE.lock().unwrap() = None;
-    match &res {
-        Ok(k) => crate::log!("[hotkey] captured {}", label(k)),
-        Err(e) => crate::log!("[hotkey] capture ended: {e}"),
-    }
-    res
-}
-
-/// Прервать запись сочетания (окно закрыли, не нажав клавиш).
-pub fn cancel_capture() {
-    if let Some(c) = CAPTURE.lock().unwrap().take() {
-        let _ = c.done.send(Err("cancelled".into()));
-    }
-}
-
 fn emit(ev: HotkeyEvent) {
     if let Some(tx) = SENDER.get() {
         let _ = tx.send(ev);
@@ -272,26 +244,6 @@ pub fn send_keys(inputs: &[INPUT]) {
 /// Обработка одного события клавиатуры. true = проглотить.
 fn handle(vk: u16, down: bool) -> bool {
     DOWN[vk as usize & 0xFF].store(down, Ordering::SeqCst);
-
-    // Режим записи нового сочетания: всё глотаем.
-    {
-        let mut cap = CAPTURE.lock().unwrap();
-        if let Some(c) = cap.as_mut() {
-            if down {
-                if vk == VK_ESCAPE && c.keys.is_empty() {
-                    let _ = c.done.send(Err("cancelled".into()));
-                    *cap = None;
-                } else if !c.keys.contains(&vk) {
-                    c.keys.push(vk);
-                }
-            } else if c.keys.contains(&vk) && !c.keys.iter().any(|k| is_down(*k)) {
-                let keys = std::mem::take(&mut c.keys);
-                let _ = c.done.send(validate(&keys).map(|_| keys));
-                *cap = None;
-            }
-            return true;
-        }
-    }
 
     let hold = HOLD_KEYS.lock().unwrap().clone();
     let lock = LOCK_KEYS.lock().unwrap().clone();
@@ -455,24 +407,6 @@ mod tests {
         handle(VK_LSHIFT, false);
         handle(VK_LCONTROL, false);
         events();
-    }
-
-    #[test]
-    fn capture_works_repeatedly() {
-        let _g = SERIAL.lock().unwrap();
-        events();
-        for keys in [[VK_LCONTROL, VK_LSHIFT, Z], [VK_RCONTROL, VK_LSHIFT, 0x20]] {
-            let t = std::thread::spawn(|| capture(std::time::Duration::from_secs(3)));
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            for k in keys {
-                assert!(handle(k, true), "captured keys are swallowed");
-            }
-            for k in keys.iter().rev() {
-                handle(*k, false);
-            }
-            assert_eq!(t.join().unwrap().unwrap(), keys.to_vec());
-        }
-        assert!(events().is_empty(), "capture must not trigger dictation");
     }
 
     #[test]

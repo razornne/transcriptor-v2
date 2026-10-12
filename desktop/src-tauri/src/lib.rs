@@ -102,21 +102,21 @@ fn apply_hotkey(app: &AppHandle, state: &AppState, kind: hotkey::Kind, keys: Vec
     Ok(hotkeys_json(state))
 }
 
-/// Ждёт, пока юзер нажмёт новое сочетание (клавиши в это время никуда не уходят).
+/// Новое сочетание, записанное в окне настроек (виртуальные коды клавиш).
+/// Записывает окно, а не хук: пока в фокусе наше окно, Windows не зовёт наш
+/// WH_KEYBOARD_LL вовсе (проверено 2026-10-12) — поэтому запись в 0.1–0.5 не видела клавиш.
 /// kind: "hold" — удерживать, "lock" — закрепить.
 #[tauri::command]
-async fn capture_hotkey(app: AppHandle, state: State<'_, AppStateArc>, kind: String) -> Result<Value, String> {
-    let keys = tauri::async_runtime::spawn_blocking(|| hotkey::capture(std::time::Duration::from_secs(15)))
-        .await
-        .map_err(|e| e.to_string())??;
+fn set_hotkey(app: AppHandle, state: State<'_, AppStateArc>, kind: String, keys: Vec<u16>) -> Result<Value, String> {
+    hotkey::validate(&keys)?;
     let res = apply_hotkey(&app, &state, kind_of(&kind), keys.clone());
-    crate::log!("[hotkey] {kind} → {}: {}", hotkey::label(&keys), if res.is_ok() { "saved" } else { "rejected" });
+    crate::log!("[hotkey] {kind} → {}: {}", hotkey::label(&keys), match &res { Ok(_) => "saved".into(), Err(e) => e.clone() });
     res
 }
 
 #[tauri::command]
-fn cancel_hotkey_capture() {
-    hotkey::cancel_capture();
+fn hotkey_label(keys: Vec<u16>) -> String {
+    hotkey::label(&keys)
 }
 
 #[tauri::command]
@@ -259,8 +259,8 @@ async fn get_profile(state: State<'_, AppStateArc>) -> Result<Value, String> {
 async fn after_sign_in(app: &AppHandle, state: &AppStateArc) {
     let _ = app.emit("auth-changed", true);
     // Прогреваем ключ Soniox, чтобы первая диктовка стартовала сразу.
-    let lang = state.settings().language;
-    if let Err(e) = api::live_token(state, &lang).await {
+    let langs = state.settings().languages;
+    if let Err(e) = api::live_token(state, &langs).await {
         crate::log!("[token] prefetch failed: {e:?}");
     }
 }
@@ -295,8 +295,11 @@ async fn save_settings(app: AppHandle, state: State<'_, AppStateArc>, settings: 
     // Шорткат меняется только через capture/reset_hotkey: окно держит копию
     // настроек, снятую до смены, и иначе затирало новый шорткат старым.
     let mut settings = settings;
-    settings.hotkey = state.settings().hotkey;
-    let lang_changed = state.settings().language != settings.language;
+    let current = state.settings();
+    settings.hotkey = current.hotkey;
+    settings.lock_hotkey = current.lock_hotkey;
+    settings.normalize_languages();
+    let lang_changed = current.languages != settings.languages;
     state.store.save_settings(&settings);
     apply_autostart(&app, settings.autostart);
     overlay::set_bar(&app, settings.show_bar);
@@ -467,8 +470,8 @@ pub fn run() {
             save_settings,
             open_web,
             open_log_folder,
-            capture_hotkey,
-            cancel_hotkey_capture,
+            set_hotkey,
+            hotkey_label,
             reset_hotkey,
             get_vocabulary,
             save_vocabulary,

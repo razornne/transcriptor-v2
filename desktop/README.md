@@ -21,7 +21,7 @@ Tauri 2 app: the Rust side does the work, `ui/` is two static pages (settings wi
 | Paste | `src-tauri/src/paste.rs` — clipboard + Ctrl+V, previous clipboard restored |
 | Sign-in | `src-tauri/src/auth.rs` — system browser + PKCE, loopback `http://127.0.0.1:53682/callback`; the app gets its own Supabase session |
 | Pill overlay | `src-tauri/src/overlay.rs` + `ui/overlay.html` — animation only (no words), never takes focus, click-through |
-| Shortcut | `hotkey.rs`: 1–3 keys; in multi-key combos left/right modifiers are equal, a single key is side-exact (Right Alt); "Change" records the next combo in the hook |
+| Shortcut | `hotkey.rs`: 1–3 keys; in multi-key combos left/right modifiers are equal, a single key is side-exact (Right Alt); "Change" records the combo in the settings page (`app.js`) — Windows doesn't call the low-level hook while our own window is focused |
 | Dictation bar / instant start | `overlay.rs` idle pill (hidden over full-screen windows); `mic.rs` keeps the mic open with 0.5 s pre-roll when "Instant start" is on |
 | Dictionary | `lib.rs` `get_vocabulary`/`save_vocabulary` → `/api/profile`, `/api/vocabulary` (same list as the web app; terms go to Soniox `context.terms` and to AI polish) |
 | Pause media while dictating | `src-tauri/src/media.rs` — Windows media sessions (SMTC): pauses only what is playing, resumes after paste |

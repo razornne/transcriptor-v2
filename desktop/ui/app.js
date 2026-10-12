@@ -14,6 +14,7 @@ const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
 
 let settings = null;
+const langBoxes = () => [...document.querySelectorAll("#langs input")];
 
 function setAuthStatus(text, err = false) {
   const s = $("authStatus");
@@ -58,28 +59,76 @@ function renderHotkeys(r) {
   renderKeys("lock", r.lock_hotkey);
 }
 
-// Запись идёт до нажатия сочетания, Esc, «Cancel» или 15 с. Потерю фокуса окна
-// больше не считаем отменой: из-за неё запись обрывалась сама (0.3.x).
-let capturing = null;
-async function captureHotkey(kind) {
-  if (capturing) { invoke("cancel_hotkey_capture"); return; }
-  capturing = kind;
+// Сочетание записывает само окно: пока оно в фокусе, Windows не зовёт глобальный
+// хук клавиатуры (из-за этого запись в 0.1–0.5 ни разу не сработала).
+// e.code → виртуальный код Windows (как в hotkey.rs; левый/правый различаются).
+function vkOf(code) {
+  const named = {
+    ControlLeft: 0xA2, ControlRight: 0xA3, ShiftLeft: 0xA0, ShiftRight: 0xA1, AltLeft: 0xA4, AltRight: 0xA5,
+    MetaLeft: 0x5B, MetaRight: 0x5C, OSLeft: 0x5B, OSRight: 0x5C,
+    Space: 0x20, Enter: 0x0D, Tab: 0x09, Backspace: 0x08, Pause: 0x13, CapsLock: 0x14, ScrollLock: 0x91,
+    Insert: 0x2D, Delete: 0x2E, Home: 0x24, End: 0x23, PageUp: 0x21, PageDown: 0x22,
+    ArrowLeft: 0x25, ArrowUp: 0x26, ArrowRight: 0x27, ArrowDown: 0x28, Backquote: 0xC0,
+  };
+  if (code in named) return named[code];
+  let m = /^Key([A-Z])$/.exec(code);
+  if (m) return m[1].charCodeAt(0);
+  if ((m = /^Digit(\d)$/.exec(code))) return 0x30 + +m[1];
+  if ((m = /^F(\d{1,2})$/.exec(code)) && +m[1] >= 1 && +m[1] <= 24) return 0x6F + +m[1];
+  return null;
+}
+
+// Запись идёт до отпускания сочетания, Esc, «Cancel» или 15 с.
+let capturing = null; // { kind, keys: [vk], down: Set<vk>, timer }
+function endCapture() {
+  if (!capturing) return;
+  clearTimeout(capturing.timer);
+  $(`change-${capturing.kind}`).textContent = "Change";
+  capturing = null;
+  $("hotkeyHint").hidden = false;
+  $("hotkeyCapture").hidden = true;
+}
+function captureError(msg) {
+  $("hotkeyErr").textContent = msg;
+  $("hotkeyErr").hidden = false;
+}
+function captureHotkey(kind) {
+  if (capturing) { endCapture(); return; }
+  capturing = { kind, keys: [], down: new Set(), timer: setTimeout(() => { endCapture(); captureError("No keys pressed — try again"); }, 15000) };
   $("hotkeyErr").hidden = true;
   $("hotkeyHint").hidden = true;
   $("hotkeyCapture").hidden = false;
+  $("hotkeyLive").textContent = "";
   $(`change-${kind}`).textContent = "Cancel";
-  try {
-    renderHotkeys(await invoke("capture_hotkey", { kind }));
-  } catch (e) {
-    const msg = String(e);
-    if (msg !== "cancelled") { $("hotkeyErr").textContent = msg === "timed out" ? "No keys pressed — try again" : msg; $("hotkeyErr").hidden = false; }
-  } finally {
-    capturing = null;
-    $("hotkeyHint").hidden = false;
-    $("hotkeyCapture").hidden = true;
-    $(`change-${kind}`).textContent = "Change";
-  }
+  $(`change-${kind}`).blur(); // иначе Space/Enter «нажмут» кнопку
 }
+window.addEventListener("keydown", async (e) => {
+  if (!capturing) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.code === "Escape" && capturing.keys.length === 0) { endCapture(); return; }
+  const vk = vkOf(e.code);
+  if (vk == null || capturing.down.has(vk)) return;
+  capturing.down.add(vk);
+  if (!capturing.keys.includes(vk)) capturing.keys.push(vk);
+  const c = capturing;
+  const label = await invoke("hotkey_label", { keys: c.keys });
+  if (capturing === c) $("hotkeyLive").textContent = label;
+}, true);
+window.addEventListener("keyup", async (e) => {
+  if (!capturing) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const vk = vkOf(e.code);
+  capturing.down.delete(vk);
+  if (!capturing.keys.includes(vk) || capturing.down.size > 0) return;
+  const { kind, keys } = capturing;
+  endCapture();
+  try { renderHotkeys(await invoke("set_hotkey", { kind, keys })); }
+  catch (err) { captureError(String(err)); }
+}, true);
+// Ушли из окна посреди записи (Alt+Tab) — отпускания не увидим, начинаем заново.
+window.addEventListener("blur", () => { if (capturing) { capturing.keys = []; capturing.down.clear(); $("hotkeyLive").textContent = ""; } });
 for (const kind of ["hold", "lock"]) {
   $(`change-${kind}`).onclick = () => captureHotkey(kind);
   $(`reset-${kind}`).onclick = async () => {
@@ -87,46 +136,6 @@ for (const kind of ["hold", "lock"]) {
     catch (e) { $("hotkeyErr").textContent = String(e); $("hotkeyErr").hidden = false; }
   };
 }
-
-// ── Словарь (общий с вебом) ──────────────────────────────────────────────
-let vocab = [];
-function renderVocab() {
-  const box = $("dictChips");
-  box.innerHTML = "";
-  const sorted = [...vocab].sort((a, b) => (b.freq || 1) - (a.freq || 1));
-  for (const item of sorted) {
-    const chip = Object.assign(document.createElement("span"), { className: "chip", textContent: item.term });
-    const del = Object.assign(document.createElement("button"), { type: "button", textContent: "×", title: `Remove ${item.term}` });
-    del.onclick = () => saveVocab(vocab.filter((v) => v !== item), `Removed ${item.term}`);
-    chip.append(del);
-    box.append(chip);
-  }
-}
-async function loadVocab() {
-  try { vocab = (await invoke("get_vocabulary")) || []; renderVocab(); } catch {}
-}
-async function saveVocab(next, done) {
-  const prev = vocab;
-  vocab = next; renderVocab();
-  $("dictStatus").classList.remove("err");
-  try {
-    await invoke("save_vocabulary", { vocabulary: next });
-    $("dictStatus").textContent = done;
-  } catch (e) {
-    vocab = prev; renderVocab();
-    $("dictStatus").textContent = String(e);
-    $("dictStatus").classList.add("err");
-  }
-}
-$("dictForm").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const term = $("dictInput").value.trim();
-  if (!term) return;
-  $("dictInput").value = "";
-  if (vocab.some((v) => v.term.toLowerCase() === term.toLowerCase())) { $("dictStatus").textContent = `${term} is already there`; return; }
-  // freq=10 — как «+ Add a term» в вебе: ручные термины идут в начало подсказок.
-  saveVocab([{ term, freq: 10 }, ...vocab], `Added ${term}`);
-});
 
 // ── Запись созвона ───────────────────────────────────────────────────────
 let lastTranscriptId = null;
@@ -221,7 +230,7 @@ async function refresh() {
   else if ($("callLive").hidden === false) callView("callIdle");
   renderPending(st.pending);
 
-  $("language").value = settings.language || "";
+  for (const box of langBoxes()) box.checked = (settings.languages || []).includes(box.value);
   $("cleanup").checked = !!settings.cleanup;
   $("autostart").checked = !!settings.autostart;
   $("showBar").checked = settings.show_bar !== false;
@@ -235,14 +244,13 @@ async function refresh() {
 
   if (st.signed_in) {
     invoke("get_profile").then(renderUsage).catch(() => {});
-    loadVocab();
   }
 }
 
 async function save() {
   settings = {
     ...settings,
-    language: $("language").value,
+    languages: langBoxes().filter((b) => b.checked).map((b) => b.value),
     cleanup: $("cleanup").checked,
     autostart: $("autostart").checked,
     show_bar: $("showBar").checked,
@@ -275,7 +283,8 @@ $("magic").onclick = () => {
   signIn("sign_in_email", { email }, `Check ${email} and open the sign-in link on this computer…`);
 };
 $("email").addEventListener("keydown", (e) => { if (e.key === "Enter") $("magic").click(); });
-for (const id of ["language", "cleanup", "autostart", "mic", "showBar", "instant", "pauseMedia"]) $(id).addEventListener("change", save);
+for (const id of ["cleanup", "autostart", "mic", "showBar", "instant", "pauseMedia"]) $(id).addEventListener("change", save);
+for (const box of langBoxes()) box.addEventListener("change", save);
 $("signout").onclick = async () => { await invoke("sign_out"); await refresh(); };
 $("web").onclick = () => invoke("open_web");
 $("logs").onclick = () => invoke("open_log_folder");

@@ -88,22 +88,8 @@
           <button class="link" id="reset-lock" hidden>Reset</button>
         </div>
         <div class="howto-sub" id="hotkeyHint">While holding, press the extra hands-free key to keep going without holding. <kbd>Esc</kbd> cancels.</div>
-        <div class="howto-sub capture" id="hotkeyCapture" hidden>Press and release the new shortcut… <kbd>Esc</kbd> cancels</div>
+        <div class="howto-sub capture" id="hotkeyCapture" hidden>Press and release the new shortcut… <kbd>Esc</kbd> cancels <b id="hotkeyLive"></b></div>
         <p class="status err" id="hotkeyErr" hidden></p>
-      </div>
-
-      <!-- ── Словарь ────────────────────────────── -->
-      <div class="card dict">
-        <div class="keyrow-text">
-          <div class="row-title">Dictionary</div>
-          <div class="row-desc">Names and terms Skriptly should always spell right — in dictation and in call transcripts</div>
-        </div>
-        <form class="dict-add" id="dictForm">
-          <input class="field" id="dictInput" placeholder="Add a word, e.g. Kubeflow" autocomplete="off" maxlength="80" />
-          <button class="btn" type="submit">Add</button>
-        </form>
-        <div class="chips" id="dictChips"></div>
-        <p class="status" id="dictStatus"></p>
       </div>
 
       <div class="card" id="usageCard" hidden>
@@ -113,20 +99,19 @@
       </div>
 
       <div class="card rows">
-        <label class="row">
+        <div class="row langs-row">
           <div class="row-text">
-            <div class="row-title">Language</div>
-            <div class="row-desc">Auto handles mixed languages</div>
+            <div class="row-title">Languages</div>
+            <div class="row-desc" id="langsDesc">Tick the ones you speak. None = Auto, which can mix up Russian and Ukrainian</div>
+            <div class="lang-chips" id="langs">
+              <label class="lang"><input type="checkbox" value="en" /><span>English</span></label>
+              <label class="lang"><input type="checkbox" value="ru" /><span>Русский</span></label>
+              <label class="lang"><input type="checkbox" value="uk" /><span>Українська</span></label>
+              <label class="lang"><input type="checkbox" value="pl" /><span>Polski</span></label>
+              <label class="lang"><input type="checkbox" value="cs" /><span>Čeština</span></label>
+            </div>
           </div>
-          <select class="field" id="language">
-            <option value="">Auto</option>
-            <option value="en">English</option>
-            <option value="uk">Українська</option>
-            <option value="ru">Русский</option>
-            <option value="pl">Polski</option>
-            <option value="cs">Čeština</option>
-          </select>
-        </label>
+        </div>
         <label class="row">
           <div class="row-text">
             <div class="row-title">Polish with AI</div>

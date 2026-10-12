@@ -60,8 +60,16 @@ async fn post(state: &AppState, path: &str, body: Value, timeout: Duration) -> R
         .map_err(|e| ApiError::Other(e.to_string()))
 }
 
-async fn fetch_token(state: &AppState, language: &str) -> Result<LiveToken, ApiError> {
-    let r = post(state, "/api/live/token", json!({ "purpose": "dictation", "language": language }),
+/// Ключ кэшируется по набору языков: сменил язык — следующая диктовка возьмёт новый.
+fn language_key(languages: &[String]) -> String {
+    languages.join(",")
+}
+
+async fn fetch_token(state: &AppState, languages: &[String]) -> Result<LiveToken, ApiError> {
+    // Сервер понимает один язык (термины словаря и контекст от него не зависят);
+    // несколько языков подставляем в подсказки сами ниже.
+    let single = if languages.len() == 1 { languages[0].as_str() } else { "" };
+    let r = post(state, "/api/live/token", json!({ "purpose": "dictation", "language": single }),
                  Duration::from_secs(20)).await?;
     match r.status().as_u16() {
         200 => {}
@@ -73,19 +81,22 @@ async fn fetch_token(state: &AppState, language: &str) -> Result<LiveToken, ApiE
     }
     let mut t: LiveToken = r.json().await.map_err(|e| ApiError::Other(e.to_string()))?;
     t.fetched = Some(Instant::now());
-    t.language = language.to_string();
+    t.language = language_key(languages);
+    if !languages.is_empty() {
+        t.language_hints = languages.to_vec();
+    }
     Ok(t)
 }
 
-/// Ключ из кэша, если он свежий и для того же языка; иначе новый.
-pub async fn live_token(state: &AppState, language: &str) -> Result<LiveToken, ApiError> {
+/// Ключ из кэша, если он свежий и для тех же языков; иначе новый.
+pub async fn live_token(state: &AppState, languages: &[String]) -> Result<LiveToken, ApiError> {
     let mut guard = state.token.lock().await;
     if let Some(t) = guard.as_ref() {
-        if t.language == language && t.fetched.map(|f| f.elapsed() < TOKEN_TTL).unwrap_or(false) {
+        if t.language == language_key(languages) && t.fetched.map(|f| f.elapsed() < TOKEN_TTL).unwrap_or(false) {
             return Ok(t.clone());
         }
     }
-    let t = fetch_token(state, language).await?;
+    let t = fetch_token(state, languages).await?;
     *guard = Some(t.clone());
     Ok(t)
 }

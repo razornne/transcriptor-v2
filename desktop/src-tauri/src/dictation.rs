@@ -140,9 +140,9 @@ async fn start(app: &AppHandle, state: &Arc<AppState>) -> Result<Active, String>
     let _ = overlay::show(app);
 
     let rate = capture.rate;
-    let (a, st, lang) = (app.clone(), state.clone(), settings.language.clone());
+    let (a, st, langs) = (app.clone(), state.clone(), settings.languages.clone());
     let stt = tauri::async_runtime::spawn(async move {
-        let token = api::live_token(&st, &lang).await.map_err(|e| {
+        let token = api::live_token(&st, &langs).await.map_err(|e| {
             let msg = e.user_message();
             if matches!(e, ApiError::NotSignedIn) {
                 crate::show_main(&a);
