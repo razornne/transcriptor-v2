@@ -1,6 +1,6 @@
 [package]
 name = "skriptly"
-version = "0.5.2"
+version = "0.6.0"
 description = "Skriptly — voice dictation for Windows"
 edition = "2021"
 

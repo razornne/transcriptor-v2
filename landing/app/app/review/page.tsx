@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { sb } from "@/lib/ink/supabase";
+import { getAccessToken } from "@/lib/ink/session";
 import {
   adminListRecordings, adminGetRecording, adminRecordingAudio,
   type ArchivedRecording,
@@ -234,8 +234,7 @@ export default function ReviewPage() {
 
   useEffect(() => {
     void (async () => {
-      const { data } = await sb.auth.getSession();
-      if (!data.session) { setState("signed-out"); return; }
+      if (!(await getAccessToken())) { setState("signed-out"); return; }
       try {
         const list = await adminListRecordings();
         setRows(list);

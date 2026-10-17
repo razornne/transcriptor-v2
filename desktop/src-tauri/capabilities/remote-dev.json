@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "remote-dev",
+  "description": "DEV ONLY (enabled by tauri.dev.conf.json): the web app served from localhost:3000 gets the same bridge as production.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:3000/*"]
+  },
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-open-external",
+    "allow-get-state",
+    "allow-desktop-session",
+    "allow-sign-in-google",
+    "allow-sign-in-email",
+    "allow-sign-out",
+    "allow-forget-token",
+    "allow-save-settings",
+    "allow-open-log-folder",
+    "allow-set-hotkey",
+    "allow-hotkey-label",
+    "allow-reset-hotkey",
+    "allow-call-start",
+    "allow-call-stop",
+    "allow-call-take",
+    "allow-call-pending",
+    "allow-call-discard"
+  ]
+}

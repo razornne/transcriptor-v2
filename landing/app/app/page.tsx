@@ -1,7 +1,10 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
-import { sb } from "@/lib/ink/supabase";
+import { watchSession, signOutEverywhere, type AppSession } from "@/lib/ink/session";
+import { desktopListen, installExternalLinks, isDesktop } from "@/lib/ink/desktop";
+import {
+  NATIVE_SESSION_PREFIX, pendingNativeRecordings, startNativeRecording, takeNativeRecording,
+} from "@/lib/ink/nativeRecorder";
 import { InputCard } from "@/components/ink/InputCard";
 import { InkSidebar } from "@/components/ink/InkSidebar";
 import { LoginScreen } from "@/components/ink/LoginScreen";
@@ -45,6 +48,7 @@ function phCapture(event: string, props?: Record<string, unknown>) {
 // ── Coarse browser/OS sniff for capture_stats — good enough for triage ────
 function detectBrowserOS(): { browser: string; os: string } {
   if (typeof navigator === "undefined") return { browser: "unknown", os: "unknown" };
+  if (isDesktop()) return { browser: "skriptly-desktop", os: "windows" };
   const ua = navigator.userAgent;
   const browser = /Edg\//.test(ua) ? "edge" : /OPR\//.test(ua) ? "opera"
     : /Chrome\//.test(ua) ? "chrome" : /Firefox\//.test(ua) ? "firefox"
@@ -58,6 +62,9 @@ function detectBrowserOS(): { browser: string; os: string } {
 // What to tell the user when the shared tab/window came without audio —
 // browsers differ a lot in what they can capture.
 function systemAudioHelp(): string {
+  if (isDesktop()) {
+    return "Couldn't capture the sound your computer plays, so only your microphone will be recorded. Check that your speakers or headphones are the default sound output.";
+  }
   const { browser, os } = detectBrowserOS();
   if (browser === "firefox" || browser === "safari") {
     return "This browser can't capture call audio, so only your microphone will be recorded. To record both sides of the call, use Chrome or Edge.";
@@ -200,7 +207,7 @@ function UndoToast({ onUndo, onDismiss }: { onUndo: () => void; onDismiss: () =>
 
 // ── InkApp ──────────────────────────────────────────────────
 export default function InkApp() {
-  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [session, setSession] = useState<AppSession | null | undefined>(undefined);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const entriesRef = useRef<HistoryEntry[]>([]);
@@ -314,9 +321,8 @@ export default function InkApp() {
   useEffect(() => { setProjects(loadProjects()); }, []);
 
   useEffect(() => {
-    void sb.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
+    // браузер: Supabase Auth; окно приложения: сессией владеет приложение (lib/ink/session.ts)
+    return watchSession(setSession);
   }, []);
 
   useEffect(() => {
@@ -368,6 +374,17 @@ export default function InkApp() {
         sizeMb: o.sizeMb, sessionId: o.id, source: "crash",
       });
     });
+    if (isDesktop()) {
+      void pendingNativeRecordings().then(async (list) => {
+        if (!list.length) return;
+        const p = list[0];
+        const blob = await takeNativeRecording(p.id);
+        setRecover({
+          blob, durationSec: p.seconds, sizeMb: blob.size / 1048576,
+          sessionId: NATIVE_SESSION_PREFIX + p.id, source: "crash",
+        });
+      }).catch(() => {});
+    }
   }, [session]);
 
   useEffect(() => {
@@ -595,7 +612,7 @@ export default function InkApp() {
       ensureNotifyPermission();
       setLimitHit(false); setStatusKind("info"); setStatus("requesting microphone…");
       captureAlertRef.current = false;
-      recorderRef.current = await startRecording({
+      recorderRef.current = await (isDesktop() ? startNativeRecording : startRecording)({
         onSystemAudioMissing: () => window.confirm(`${systemAudioHelp()}\n\nContinue with microphone only?`),
         onSystemAudioLost: () => {
           captureAlertRef.current = true;
@@ -653,7 +670,7 @@ export default function InkApp() {
         phCapture("live_transcript_started", { channels: rec.liveStreams.call ? 2 : 1 });
       }
       setRecSeconds(0); setRecording(true); setActiveId(null);
-      setStatus("recording — share a tab to capture call audio too");
+      setStatus(isDesktop() ? "recording" : "recording — share a tab to capture call audio too");
       recTimerRef.current = window.setInterval(() => setRecSeconds((s) => s + 1), 1000);
       phCapture("recording_started");
     } catch (e) {
@@ -666,6 +683,23 @@ export default function InkApp() {
   }, [recording, passLimitGate, cookBlob, session, language, context, speakers]);
 
   useEffect(() => { onRecToggleRef.current = onRecToggle; }, [onRecToggle]);
+
+  // ── Окно приложения: пункт трея «Record a call» и внешние ссылки ──
+  const sessionRef = useRef(session);
+  const recordingRef = useRef(recording);
+  useEffect(() => { sessionRef.current = session; recordingRef.current = recording; }, [session, recording]);
+  useEffect(() => {
+    if (!isDesktop()) return;
+    const stopLinks = installExternalLinks();
+    let alive = true;
+    let un: (() => void) | undefined;
+    void desktopListen("desktop-record-toggle", () => {
+      if (!sessionRef.current) return;
+      if (!recordingRef.current) setActiveId(null); // со страницы транскрипта — на экран записи
+      void onRecToggleRef.current?.();
+    }).then((u) => { if (alive) un = u; else u(); }).catch(() => {});
+    return () => { alive = false; un?.(); stopLinks(); };
+  }, []);
   useEffect(() => () => {
     window.clearInterval(recTimerRef.current); keepAliveStopRef.current?.(); void liveRef.current?.stop();
   }, []);
@@ -959,7 +993,7 @@ export default function InkApp() {
           settings={settings}
           onSettingsChange={(patch) => setSettings((prev) => ({ ...prev, ...patch }))}
           onClose={() => { setSettingsOpen(false); setSettingsSection("account"); }}
-          onSignOut={() => { void sb.auth.signOut(); }}
+          onSignOut={() => { void signOutEverywhere(); }}
           workspace={workspace}
           onWorkspaceChange={setWorkspace}
           uiLang={uiLang}

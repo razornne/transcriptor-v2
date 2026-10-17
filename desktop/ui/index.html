@@ -3,165 +3,47 @@
 <head>
   <meta charset="utf-8" />
   <title>Skriptly</title>
-  <link rel="stylesheet" href="style.css" />
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin: 0; height: 100vh; display: grid; place-items: center; background: #F6F4EE; color: #14120E;
+           font: 15px "Segoe UI", system-ui, sans-serif; }
+    @media (prefers-color-scheme: dark) { body { background: #100F0C; color: #F2EFE7; } .sub { color: #A29B8B; } }
+    .box { text-align: center; }
+    .mark { width: 44px; height: 44px; border-radius: 12px; background: #14120E; color: #F6F4EE; margin: 0 auto 18px;
+            display: grid; place-items: center; font: 700 24px "Segoe UI", sans-serif; }
+    @media (prefers-color-scheme: dark) { .mark { background: #F2EFE7; color: #100F0C; } }
+    .sub { color: #6B6557; margin: 0 0 16px; }
+    button { font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 10px; border: 1px solid #D8D2C1;
+             background: transparent; color: inherit; cursor: pointer; }
+  </style>
 </head>
 <body>
-  <div class="app">
-    <div class="brand">
-      <div class="mark" aria-hidden="true">S</div>
-      <span class="brand-name">Skriptly</span>
-      <span class="brand-ver" id="version"></span>
-    </div>
-
-    <!-- ── Signed out ─────────────────────────────── -->
-    <section id="signedOut" class="stack" hidden>
-      <div>
-        <h1>Say it <em>messy</em>.<br />Get clean text anywhere.</h1>
-        <p class="sub">Sign in with your Skriptly account to start dictating.</p>
-      </div>
-      <button class="btn primary block" id="google">Continue with Google</button>
-      <div class="or">or</div>
-      <input class="field" id="email" type="email" placeholder="you@company.com" autocomplete="email" />
-      <button class="btn block" id="magic">Email me a sign-in link</button>
-      <p class="status" id="authStatus" role="status"></p>
-    </section>
-
-    <!-- ── Signed in ──────────────────────────────── -->
-    <section id="signedIn" class="stack" hidden>
-      <!-- ── Запись созвона ─────────────────────── -->
-      <div class="card call" id="callCard">
-        <div class="call-idle" id="callIdle">
-          <div class="call-head">
-            <div>
-              <div class="card-title">Record a call</div>
-              <div class="howto-sub">Your mic and the call's sound from any app — Zoom, Teams, Meet, Telegram.</div>
-            </div>
-          </div>
-          <button class="btn primary block" id="callStart"><span class="rec-dot"></span>Start recording</button>
-        </div>
-
-        <div class="call-live" id="callLive" hidden>
-          <div class="call-head">
-            <span class="rec-dot live"></span>
-            <span class="card-title">Recording</span>
-            <span class="timer" id="callTimer">0:00</span>
-          </div>
-          <div class="meters">
-            <div class="meter"><span>You</span><div class="bar"><i id="lvlMic"></i></div></div>
-            <div class="meter"><span>Call</span><div class="bar"><i id="lvlSys"></i></div></div>
-          </div>
-          <p class="status err" id="callWarn" hidden>No computer audio found — only your mic is recorded.</p>
-          <button class="btn block" id="callStop">Stop &amp; transcribe</button>
-        </div>
-
-        <div class="call-busy" id="callBusy" hidden>
-          <div class="call-head"><span class="spinner"></span><span id="callBusyText">Preparing…</span></div>
-          <div class="howto-sub">You can close this window — the transcript will appear in your history on skriptly.io.</div>
-        </div>
-
-        <div class="call-done" id="callDone" hidden>
-          <div class="call-head"><span class="ok">✓</span><span class="card-title">Transcript ready</span></div>
-          <button class="btn primary block" id="callOpen">Open transcript</button>
-          <button class="link" id="callAgain">Record another call</button>
-        </div>
-
-        <div class="call-error" id="callError" hidden>
-          <p class="status err" id="callErrorText"></p>
-          <button class="link" id="callErrorOk">OK</button>
-        </div>
-
-        <div class="pending" id="pending"></div>
-      </div>
-
-      <!-- ── Диктовка ───────────────────────────── -->
-      <div class="card howto">
-        <div class="keyrow">
-          <div class="keyrow-text"><div class="row-title">Hold to dictate</div><div class="row-desc">Release to paste where your cursor is</div></div>
-          <span class="keys" id="keys-hold"></span>
-          <button class="link" id="change-hold">Change</button>
-          <button class="link" id="reset-hold" hidden>Reset</button>
-        </div>
-        <div class="keyrow">
-          <div class="keyrow-text"><div class="row-title">Hands-free</div><div class="row-desc">Press to start, press again to finish</div></div>
-          <span class="keys" id="keys-lock"></span>
-          <button class="link" id="change-lock">Change</button>
-          <button class="link" id="reset-lock" hidden>Reset</button>
-        </div>
-        <div class="howto-sub" id="hotkeyHint">While holding, press the extra hands-free key to keep going without holding. <kbd>Esc</kbd> cancels.</div>
-        <div class="howto-sub capture" id="hotkeyCapture" hidden>Press and release the new shortcut… <kbd>Esc</kbd> cancels <b id="hotkeyLive"></b></div>
-        <p class="status err" id="hotkeyErr" hidden></p>
-      </div>
-
-      <div class="card" id="usageCard" hidden>
-        <div class="usage-row"><span><b id="plan"></b> plan</span><span id="minutes"></span></div>
-        <div class="bar" id="bar"><i id="barFill"></i></div>
-        <div class="usage-row" id="dictRow" hidden><span>Dictation</span><span id="dictation"></span></div>
-      </div>
-
-      <div class="card rows">
-        <div class="row langs-row">
-          <div class="row-text">
-            <div class="row-title">Languages</div>
-            <div class="row-desc" id="langsDesc">Tick the ones you speak. None = Auto, which can mix up Russian and Ukrainian</div>
-            <div class="lang-chips" id="langs">
-              <label class="lang"><input type="checkbox" value="en" /><span>English</span></label>
-              <label class="lang"><input type="checkbox" value="ru" /><span>Русский</span></label>
-              <label class="lang"><input type="checkbox" value="uk" /><span>Українська</span></label>
-              <label class="lang"><input type="checkbox" value="pl" /><span>Polski</span></label>
-              <label class="lang"><input type="checkbox" value="cs" /><span>Čeština</span></label>
-            </div>
-          </div>
-        </div>
-        <label class="row">
-          <div class="row-text">
-            <div class="row-title">Polish with AI</div>
-            <div class="row-desc">Removes “um”, repeats and self-corrections</div>
-          </div>
-          <span class="switch"><input type="checkbox" id="cleanup" /><span></span></span>
-        </label>
-        <label class="row">
-          <div class="row-text">
-            <div class="row-title">Microphone</div>
-          </div>
-          <select class="field" id="mic"></select>
-        </label>
-        <label class="row">
-          <div class="row-text">
-            <div class="row-title">Show dictation bar</div>
-            <div class="row-desc">A small pill at the bottom of the screen</div>
-          </div>
-          <span class="switch"><input type="checkbox" id="showBar" /><span></span></span>
-        </label>
-        <label class="row">
-          <div class="row-text">
-            <div class="row-title">Pause media while dictating</div>
-            <div class="row-desc">YouTube, series, music — resumes after</div>
-          </div>
-          <span class="switch"><input type="checkbox" id="pauseMedia" /><span></span></span>
-        </label>
-        <label class="row">
-          <div class="row-text">
-            <div class="row-title">Instant start</div>
-            <div class="row-desc">Keeps the mic open so the first word is never lost. Bluetooth headsets stay in call mode</div>
-          </div>
-          <span class="switch"><input type="checkbox" id="instant" /><span></span></span>
-        </label>
-        <label class="row">
-          <div class="row-text">
-            <div class="row-title">Start with Windows</div>
-          </div>
-          <span class="switch"><input type="checkbox" id="autostart" /><span></span></span>
-        </label>
-      </div>
-    </section>
-
-    <div class="footer" id="footer" hidden>
-      <span class="email" id="who"></span>
-      <button class="link" id="web">Open web app</button>
-      <button class="link" id="logs">Logs</button>
-      <button class="link" id="signout">Sign out</button>
-    </div>
+  <div class="box">
+    <div class="mark">S</div>
+    <p class="sub" id="msg">Loading Skriptly…</p>
+    <button id="retry" hidden>Try again</button>
   </div>
-  <script src="app.js"></script>
+  <script>
+    // Главное окно — это веб-приложение. Эта страница только проверяет связь и переходит;
+    // без интернета показывает «Try again» (а диктовка из трея всё равно работает).
+    const msg = document.getElementById("msg"), retry = document.getElementById("retry");
+    let timer = 0;
+    async function go() {
+      clearTimeout(timer);
+      retry.hidden = true;
+      msg.textContent = "Loading Skriptly…";
+      try {
+        const url = await window.__TAURI__.core.invoke("app_url");
+        await fetch(url, { mode: "no-cors", cache: "no-store" });
+        location.replace(url);
+      } catch (e) {
+        msg.textContent = "Can't reach Skriptly. Check your internet connection.";
+        retry.hidden = false;
+        timer = setTimeout(go, 8000);
+      }
+    }
+    retry.onclick = go;
+    go();
+  </script>
 </body>
 </html>

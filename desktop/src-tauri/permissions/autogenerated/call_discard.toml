@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-call-discard"
+description = "Enables the call_discard command without any pre-configured scope."
+commands.allow = ["call_discard"]
+
+[[permission]]
+identifier = "deny-call-discard"
+description = "Denies the call_discard command without any pre-configured scope."
+commands.deny = ["call_discard"]

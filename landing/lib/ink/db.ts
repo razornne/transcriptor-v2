@@ -1,6 +1,6 @@
 "use client";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config";
-import { sb } from "./supabase";
+import { getAccessToken } from "./session";
 
 // История транскриптов — Supabase Postgres через RAW REST (НЕ PostgrestClient,
 // он зависает — см. CLAUDE.md). Контракт колонок 1-в-1 со старым /app.
@@ -40,8 +40,7 @@ function rowToEntry(row: Record<string, unknown>): HistoryEntry {
 }
 
 async function sbFetch(path: string, opts: RequestInit = {}): Promise<unknown> {
-  const { data } = await sb.auth.getSession();
-  const token = data.session?.access_token || SUPABASE_ANON_KEY;
+  const token = (await getAccessToken()) || SUPABASE_ANON_KEY;
   const headers = new Headers(opts.headers || {});
   headers.set("apikey", SUPABASE_ANON_KEY);
   headers.set("Authorization", "Bearer " + token);

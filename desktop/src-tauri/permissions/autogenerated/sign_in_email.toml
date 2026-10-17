@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sign-in-email"
+description = "Enables the sign_in_email command without any pre-configured scope."
+commands.allow = ["sign_in_email"]
+
+[[permission]]
+identifier = "deny-sign-in-email"
+description = "Denies the sign_in_email command without any pre-configured scope."
+commands.deny = ["sign_in_email"]

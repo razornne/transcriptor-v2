@@ -17,6 +17,14 @@ function formatDuration(s: number): string {
   return `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
+// Часы записи: 0:07, 12:34, 1:02:03 (крупный таймер на панели записи).
+function formatClock(s: number): string {
+  const sec = Math.max(0, Math.floor(s));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), ss = sec % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
+}
+
 // Honest pipeline stages — fixed order + human labels for the timeline.
 const STEP_ORDER = ["container", "audio_split", "transcription", "diarization", "ai_formatting"] as const;
 const STEP_LABELS: Record<string, string> = {
@@ -185,7 +193,7 @@ export function InputCard({
         /* ── идёт запись ── */
         <div className="i-livecard">
           <span className="i-livepill"><span className="i-rec-dot" />Recording</span>
-          <div className="i-livetime">{formatDuration(recSeconds)}</div>
+          <div className="i-livetime">{formatClock(recSeconds)}</div>
           <p className="i-livehint">Capturing your microphone and the sound from the call.</p>
           {levelsRef && <LevelMeters levelsRef={levelsRef} />}
           <button type="button" className="i-stopbtn" onClick={() => onRecToggle()} aria-label="Stop recording">

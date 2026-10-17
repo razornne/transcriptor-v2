@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/remote-schema.json",
+  "identifier": "remote",
+  "description": "The Skriptly web app (skriptly.io) running in the main window may use the native bridge: session, call recording and dictation settings. Nothing else.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["https://skriptly.io/*", "https://www.skriptly.io/*"]
+  },
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-open-external",
+    "allow-get-state",
+    "allow-desktop-session",
+    "allow-sign-in-google",
+    "allow-sign-in-email",
+    "allow-sign-out",
+    "allow-forget-token",
+    "allow-save-settings",
+    "allow-open-log-folder",
+    "allow-set-hotkey",
+    "allow-hotkey-label",
+    "allow-reset-hotkey",
+    "allow-call-start",
+    "allow-call-stop",
+    "allow-call-take",
+    "allow-call-pending",
+    "allow-call-discard"
+  ]
+}

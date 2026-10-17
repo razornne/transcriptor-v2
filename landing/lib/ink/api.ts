@@ -1,6 +1,8 @@
 "use client";
 import { API_BASE } from "./config";
 import { sb } from "./supabase";
+import { getAccessToken, getSessionUser } from "./session";
+import { desktopInvoke, isDesktop } from "./desktop";
 import type { Segment } from "./db";
 
 // Тонкий клиент к Flask-бэку на Modal.
@@ -76,11 +78,9 @@ export class StripeCustomerInvalidError extends Error {
 }
 
 async function authFetch(url: string, opts: RequestInit = {}): Promise<Response> {
-  const { data } = await sb.auth.getSession();
+  const token = await getAccessToken();
   const headers = new Headers(opts.headers || {});
-  if (data.session?.access_token) {
-    headers.set("Authorization", "Bearer " + data.session.access_token);
-  }
+  if (token) headers.set("Authorization", "Bearer " + token);
   return fetch(url, { ...opts, headers });
 }
 
@@ -282,7 +282,7 @@ async function transcribeLarge(
   onProgress?: (p: JobProgress) => void,
   cancel?: CancelToken,
 ): Promise<Segment[]> {
-  const { data: { user } } = await sb.auth.getUser();
+  const user = await getSessionUser();
   if (!user?.id) throw new Error("Not authenticated — cannot upload large file.");
 
   const ext = _blobExt(blob);
@@ -421,6 +421,8 @@ export async function saveVocabulary(vocabulary: VocabTerm[]): Promise<void> {
     const data = await res.json().catch(() => ({})) as { error?: string };
     throw new Error(data.error || `HTTP ${res.status}`);
   }
+  // Словарь зашит в ключ Soniox, которым диктует приложение — просим новый.
+  if (isDesktop()) void desktopInvoke("forget_token").catch(() => {});
 }
 
 export async function sendToNotion(

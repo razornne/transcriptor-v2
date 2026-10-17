@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-call-pending"
+description = "Enables the call_pending command without any pre-configured scope."
+commands.allow = ["call_pending"]
+
+[[permission]]
+identifier = "deny-call-pending"
+description = "Denies the call_pending command without any pre-configured scope."
+commands.deny = ["call_pending"]

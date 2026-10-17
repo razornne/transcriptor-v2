@@ -2082,3 +2082,34 @@
   transition: border-color .15s ease;
 }
 .i-login-send:hover { border-color: var(--i-graphite); }
+
+/* ── Настройки приложения (раздел Dictation, только в окне приложения) ── */
+.i-keys { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.i-keys kbd {
+  font-family: var(--i-mono); font-size: 12px; padding: 3px 8px; border-radius: 6px;
+  background: var(--i-paper); border: 1px solid var(--i-line2); color: var(--i-ink);
+}
+.i-keys .plus { color: var(--i-graphite); font-size: 12px; }
+.i-textbtn {
+  flex: none; font-size: 13px; font-weight: 600; color: var(--i-accent-text);
+  padding: 5px 9px; border-radius: 8px; transition: background .12s ease;
+}
+.i-textbtn:hover { background: var(--i-accent-soft); }
+.i-langs { display: flex; flex-wrap: wrap; gap: 8px; }
+.i-langchip {
+  display: inline-flex; align-items: center; height: 34px; padding: 0 14px;
+  border-radius: 17px; border: 1px solid var(--i-line2); background: var(--i-paper);
+  font-size: 13.5px; font-weight: 600; color: var(--i-mute2); cursor: pointer;
+  transition: border-color .12s ease, background .12s ease, color .12s ease;
+}
+.i-langchip input { position: absolute; opacity: 0; width: 0; height: 0; }
+.i-langchip:hover { border-color: var(--i-graphite); }
+.i-langchip.on { background: var(--i-accent-soft); border-color: var(--i-accent); color: var(--i-accent-text); }
+.i-langchip:focus-within { box-shadow: 0 0 0 3px var(--i-ring); }
+.i-mini {
+  background: var(--i-surface); border: 1px solid var(--i-line2);
+  border-radius: 10px; height: 36px; padding: 0 10px; max-width: 260px;
+  font-family: var(--i-ui); font-size: 13.5px; font-weight: 500; color: var(--i-ink);
+  outline: none; cursor: pointer;
+}
+.i-mini:focus { border-color: var(--i-accent); }

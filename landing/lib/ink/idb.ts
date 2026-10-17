@@ -8,6 +8,9 @@
 // СВОЯ база ('ink_recordings'), не 'transcriptor_recordings' старого /app:
 // на проде оба приложения живут на одном origin — не трогаем чужую схему.
 
+import { desktopInvoke } from "./desktop";
+import { NATIVE_SESSION_PREFIX } from "./nativeRecorder";
+
 const DB_NAME = "ink_recordings";
 const DB_VERSION = 1;
 
@@ -65,6 +68,11 @@ export async function idbAppendChunk(sessionId: string, blob: Blob): Promise<voi
 }
 
 export async function idbDeleteSession(sessionId: string): Promise<void> {
+  if (sessionId.startsWith(NATIVE_SESSION_PREFIX)) {
+    // запись из приложения: файлы лежат на диске приложения, не в IndexedDB
+    await desktopInvoke("call_discard", { id: sessionId.slice(NATIVE_SESSION_PREFIX.length) }).catch(() => {});
+    return;
+  }
   try {
     const db = await openDb();
     const t = tx(db, ["sessions", "chunks"], "readwrite");

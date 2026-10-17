@@ -1,16 +1,35 @@
-# Skriptly for Windows — dictation
+# Skriptly for Windows
 
-Hold **Ctrl + Win**, speak, release — the text is pasted where your cursor is, in any app.
-**Ctrl + Win + Space** dictates hands-free (press again to finish). Both shortcuts are
-changeable (e.g. Alt / Alt + Z). **Esc** cancels. The Dictionary (shared with the web app)
-teaches recognition your names and terms.
+**The main window is the web app** (`skriptly.io/app`) — history, summaries, billing, settings, everything the
+website has, in its own window. The app adds what a browser can't do:
 
-**Record a call** (settings window or tray menu): your mic (left channel) + everything the
-computer plays (WASAPI loopback, right channel) — same stereo layout as the web recorder, so the
-backend separates you from the other side. After Stop the recording is compressed, sent to
-`/api/transcribe` and saved to the web history; "Open transcript" opens `skriptly.io/app?entry=<id>`.
+- **Dictation anywhere.** Hold **Ctrl + Win**, speak, release — the text is pasted where your cursor is, in any
+  app. **Ctrl + Win + Space** dictates hands-free. Both shortcuts are changeable (Settings → Dictation).
+  **Esc** cancels. The Dictionary (Settings → Vocabulary) teaches recognition your names and terms.
+- **Call recording** without "share a tab": your mic (left channel) + everything the computer plays
+  (WASAPI loopback, right channel). The app only records; the page sends the file through the normal pipeline.
 
-Tauri 2 app: the Rust side does the work, `ui/` is two static pages (settings window + dictation pill).
+The window lives in the tray; closing it keeps dictation working.
+
+## How the window and the app talk
+
+`ui/index.html` is only a loader: it checks the connection and navigates to the web app (offline → "Try again").
+The page detects the app by `window.__SKRIPTLY_DESKTOP__` and calls Rust commands through the bridge
+(`landing/lib/ink/desktop.ts`). The bridge is a whitelist: `build.rs` lists every command, and
+`capabilities/remote.json` allows exactly those for `https://skriptly.io/*` — nothing else (no plugins, no file access).
+Navigation outside skriptly.io (Stripe, Google, Notion) opens in the system browser instead.
+
+- **Session**: the app owns it (sign-in through the system browser, PKCE). The page asks for a fresh token
+  (`desktop_session`) per request; only one side may refresh the token — two clients would sign each other out.
+- **Recording**: `call_start` → `call_stop` (Ogg) → `call_take` (raw bytes over IPC) → page uploads like any file →
+  `call_discard` after success. If anything fails the file stays on disk and the page offers it again on next launch.
+- **Settings**: Settings → Dictation in the page (`components/ink/DesktopSettings.tsx`) drives `get_state`/`save_settings`/`set_hotkey`.
+
+Dev: run the web app (`npm run dev` in `landing/`), then in `desktop/`:
+`SKRIPTLY_APP_URL=http://localhost:3000/app npx tauri dev --config src-tauri/tauri.dev.conf.json`
+(the dev config additionally allows the bridge for localhost:3000; it is never enabled in release builds).
+
+Tauri 2 app: the Rust side does the work; `ui/` is the loader and the dictation pill.
 
 | Piece | Where |
 |---|---|
@@ -19,14 +38,14 @@ Tauri 2 app: the Rust side does the work, `ui/` is two static pages (settings wi
 | Streaming to Soniox `stt-rt-v5` | `src-tauri/src/stt.rs` — WebSocket straight to Soniox |
 | Temporary Soniox key, usage, AI polish | `src-tauri/src/api.rs` → Flask `/api/live/token` (purpose=dictation, 1 h key), `/api/dictation/usage`, `/api/dictation/cleanup` |
 | Paste | `src-tauri/src/paste.rs` — clipboard + Ctrl+V, previous clipboard restored |
-| Sign-in | `src-tauri/src/auth.rs` — system browser + PKCE, loopback `http://127.0.0.1:53682/callback`; the app gets its own Supabase session |
+| Sign-in | `src-tauri/src/auth.rs` — system browser + PKCE, loopback `http://127.0.0.1:53682/callback` |
 | Pill overlay | `src-tauri/src/overlay.rs` + `ui/overlay.html` — animation only (no words), never takes focus, click-through |
-| Shortcut | `hotkey.rs`: 1–3 keys; in multi-key combos left/right modifiers are equal, a single key is side-exact (Right Alt); "Change" records the combo in the settings page (`app.js`) — Windows doesn't call the low-level hook while our own window is focused |
+| Shortcut | `hotkey.rs`: 1–3 keys; in multi-key combos left/right modifiers are equal, a single key is side-exact (Right Alt); the page records the combo — Windows doesn't call the low-level hook while our own window is focused |
 | Dictation bar / instant start | `overlay.rs` idle pill (hidden over full-screen windows); `mic.rs` keeps the mic open with 0.5 s pre-roll when "Instant start" is on |
-| Dictionary | `lib.rs` `get_vocabulary`/`save_vocabulary` → `/api/profile`, `/api/vocabulary` (same list as the web app; terms go to Soniox `context.terms` and to AI polish) |
+| Dictionary | Settings → Vocabulary in the page → `/api/vocabulary`; the page then calls `forget_token` (terms go to Soniox `context.terms` and to AI polish) |
 | Pause media while dictating | `src-tauri/src/media.rs` — Windows media sessions (SMTC): pauses only what is playing, resumes after paste |
-| Settings file | `store.rs` — tmp + rename, direct-write fallback, errors logged (0.1–0.3 never persisted settings) |
-| Call recording | `recorder.rs` (mixer on wall clock — loopback sends nothing during silence; WAV on disk, flushed every 5 s, survives crashes; Ogg Vorbis ~22 MB/h) + `calls.rs` (upload → poll job → insert into `transcripts` → LLM title) |
+| Settings file | `store.rs` — tmp + rename, direct-write fallback, errors logged |
+| Call recording | `recorder.rs` (mixer on wall clock — loopback sends nothing during silence; WAV on disk, flushed every 5 s, survives crashes; Ogg Vorbis ~22 MB/h); web side `landing/lib/ink/nativeRecorder.ts` |
 
 Settings/session live in `%APPDATA%\io.skriptly.desktop\` (`settings.json`, `session.json`, `skriptly.log`).
 

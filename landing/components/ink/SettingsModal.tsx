@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
+import type { AppSession } from "@/lib/ink/session";
+import { isDesktop } from "@/lib/ink/desktop";
+import { DesktopSettings } from "./DesktopSettings";
 import type { Profile, WorkspaceInfo, VocabTerm } from "@/lib/ink/api";
 import {
   saveVocabulary, StripeCustomerInvalidError,
@@ -12,11 +14,11 @@ import {
   notionOAuthStart, notionDisconnect as apiNotionDisconnect,
   deleteAccount as apiDeleteAccount,
 } from "@/lib/ink/api";
-import { sb } from "@/lib/ink/supabase";
+import { signOutEverywhere } from "@/lib/ink/session";
 import { saveSettings, type InkSettings } from "@/lib/ink/settings";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
 
-type NavSection = "account" | "subscription" | "workspace" | "integrations" | "settings" | "invite" | "danger";
+type NavSection = "account" | "subscription" | "dictation" | "workspace" | "integrations" | "settings" | "invite" | "danger";
 type Lang = "en" | "ua";
 
 // ── i18n dictionary ────────────────────────────────────────────────────────
@@ -27,7 +29,7 @@ const DICT = {
     title: "Settings",
     back: "Back to recordings",
     nav: {
-      account: "Account", subscription: "Subscription", workspace: "Workspace",
+      account: "Account", subscription: "Subscription", dictation: "Dictation", workspace: "Workspace",
       integrations: "Integrations", settings: "Settings",
       invite: "Invite friends", danger: "Danger zone",
     },
@@ -96,7 +98,7 @@ const DICT = {
     title: "Налаштування",
     back: "Назад до записів",
     nav: {
-      account: "Акаунт", subscription: "Підписка", workspace: "Воркспейс",
+      account: "Акаунт", subscription: "Підписка", dictation: "Диктовка", workspace: "Воркспейс",
       integrations: "Інтеграції", settings: "Налаштування",
       invite: "Запросити друзів", danger: "Небезпечна зона",
     },
@@ -224,7 +226,7 @@ function Toggle({
   );
 }
 
-const NAV_ORDER: NavSection[] = ["account", "subscription", "workspace", "integrations", "settings", "invite", "danger"];
+const NAV_ORDER: NavSection[] = ["account", "subscription", "dictation", "workspace", "integrations", "settings", "invite", "danger"];
 
 export function SettingsModal({
   session, profile, settings, onSettingsChange, onClose, onSignOut,
@@ -232,7 +234,7 @@ export function SettingsModal({
   uiLang = "en", onUiLangChange,
   initialSection = "account",
 }: {
-  session: Session;
+  session: AppSession;
   profile: Profile | null;
   settings: InkSettings;
   onSettingsChange: (patch: Partial<InkSettings>) => void;
@@ -461,7 +463,7 @@ export function SettingsModal({
     setDeleting(true);
     try {
       await apiDeleteAccount();
-      await sb.auth.signOut();
+      await signOutEverywhere();
       window.location.href = "/";
     } catch {
       setDeleting(false);
@@ -520,7 +522,7 @@ export function SettingsModal({
               {t.back}
             </button>
             <p className="i-modal-navtitle">{t.title}</p>
-            {NAV_ORDER.map((id) => (
+            {NAV_ORDER.filter((id) => id !== "dictation" || isDesktop()).map((id) => (
               <button
                 key={id}
                 type="button"
@@ -534,6 +536,9 @@ export function SettingsModal({
 
           {/* Right content */}
           <div className="i-modal-content">
+
+            {/* ── Dictation (только в приложении) ── */}
+            {nav === "dictation" && isDesktop() && <DesktopSettings />}
 
             {/* ── Account ── */}
             {nav === "account" && (
