@@ -34,12 +34,25 @@ use tauri_plugin_autostart::ManagerExt;
 
 type AppStateArc = Arc<AppState>;
 
+/// Сколько страница «You're in» остаётся в браузере до возврата в приложение (синхронно с полоской на странице).
+const SIGN_IN_PAGE_MS: u64 = 5000;
+
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
     }
+}
+
+/// После входа браузер должен успеть показать страницу «You're in» (≈5 с анимации),
+/// поэтому окно приложения выходит на передний план не сразу, а с задержкой.
+fn show_main_later(app: &AppHandle, ms: u64) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        show_main(&app);
+    });
 }
 
 /// Адрес веб-приложения. `SKRIPTLY_APP_URL` — для разработки (npm run dev на localhost:3000).
@@ -147,7 +160,7 @@ async fn after_sign_in(app: &AppHandle, state: &AppStateArc) {
 #[tauri::command]
 async fn sign_in_google(app: AppHandle, state: State<'_, AppStateArc>) -> Result<String, String> {
     let s = auth::sign_in(&state, auth::Method::Google).await?;
-    show_main(&app); // браузер остаётся позади — возвращаем окно приложения на передний план
+    show_main_later(&app, SIGN_IN_PAGE_MS); // даём браузеру показать страницу, потом возвращаем окно приложения
     after_sign_in(&app, &state).await;
     Ok(s.email)
 }
@@ -159,7 +172,7 @@ async fn sign_in_email(app: AppHandle, state: State<'_, AppStateArc>, email: Str
         return Err("Enter a valid email".into());
     }
     let s = auth::sign_in(&state, auth::Method::Email(email)).await?;
-    show_main(&app);
+    show_main_later(&app, SIGN_IN_PAGE_MS);
     after_sign_in(&app, &state).await;
     Ok(s.email)
 }
