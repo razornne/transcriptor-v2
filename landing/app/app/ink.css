@@ -2113,3 +2113,16 @@
   outline: none; cursor: pointer;
 }
 .i-mini:focus { border-color: var(--i-accent); }
+
+/* ── Скелетоны загрузки (история, план, минуты, открытая запись) ── */
+.i-skel {
+  display: inline-block; border-radius: 6px; vertical-align: middle;
+  background: linear-gradient(90deg, var(--i-track) 0%, var(--i-row) 50%, var(--i-track) 100%);
+  background-size: 200% 100%; animation: i-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes i-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.i-skel-list { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; }
+.i-skel-item { display: flex; flex-direction: column; gap: 7px; padding: 9px 10px; }
+.i-resultload { display: flex; flex-direction: column; padding-top: 6px; }
+.i-resultload .i-skel { display: block; }
+@media (prefers-reduced-motion: reduce) { .i-skel { animation: none; } }

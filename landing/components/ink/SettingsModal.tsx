@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppSession } from "@/lib/ink/session";
 import { isDesktop } from "@/lib/ink/desktop";
+import { clearCache } from "@/lib/ink/cache";
 import { DesktopSettings } from "./DesktopSettings";
 import type { Profile, WorkspaceInfo, VocabTerm } from "@/lib/ink/api";
 import {
@@ -463,6 +464,7 @@ export function SettingsModal({
     setDeleting(true);
     try {
       await apiDeleteAccount();
+      clearCache(session.user.id);
       await signOutEverywhere();
       window.location.href = "/";
     } catch {

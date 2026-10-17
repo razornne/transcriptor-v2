@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { watchSession, signOutEverywhere, type AppSession } from "@/lib/ink/session";
+import { loadCache, saveEntriesCache, saveProfileCache } from "@/lib/ink/cache";
 import { desktopListen, installExternalLinks, isDesktop } from "@/lib/ink/desktop";
 import {
   NATIVE_SESSION_PREFIX, pendingNativeRecordings, startNativeRecording, takeNativeRecording,
@@ -210,8 +211,18 @@ export default function InkApp() {
   const [session, setSession] = useState<AppSession | null | undefined>(undefined);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  // Первый кадр рисуется из кэша (слепок списка + профиль), пока с сервера идут свежие
+  // данные; до их прихода — скелетоны, а не «пусто»/демо-запись.
+  const [entriesLoaded, setEntriesLoaded] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const entriesRef = useRef<HistoryEntry[]>([]);
+  const cachedForRef = useRef<string | null>(null); // для кого кэш уже применён
   useEffect(() => { entriesRef.current = entries; }, [entries]);
+  useEffect(() => {
+    if (!session || !entriesLoaded) return;
+    const t = window.setTimeout(() => saveEntriesCache(session.user.id, entries), 600);
+    return () => window.clearTimeout(t);
+  }, [entries, entriesLoaded, session]);
   const [autoSummaryIds, setAutoSummaryIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   // Сайдбар — постоянная колонка на десктопе, выезжающая панель на мобильном (≤860px).
@@ -328,26 +339,36 @@ export default function InkApp() {
   useEffect(() => {
     if (!session) {
       setEntries([]); setProfile(null);
+      setEntriesLoaded(false); setProfileLoaded(false); cachedForRef.current = null;
       setWorkspace(null);
       ph()?.reset?.();
       return;
     }
+    // Кэш — только при первом входе пользователя: Supabase пересоздаёт объект сессии
+    // при возврате на вкладку, и повторный сброс в слепки закрыл бы открытую запись.
+    if (cachedForRef.current !== session.user.id) {
+      cachedForRef.current = session.user.id;
+      const cached = loadCache(session.user.id);
+      setEntries(cached.entries); setProfile(cached.profile);
+      setEntriesLoaded(false); setProfileLoaded(false);
+    }
     void fetchHistory().then((list) => {
-      setEntries(list);
+      setEntries(list); setEntriesLoaded(true);
       // ?entry=<id> — ссылка «Open transcript» из Windows-приложения (desktop/)
       const wanted = new URLSearchParams(window.location.search).get("entry");
       if (wanted) {
         if (list.some((e) => e.id === wanted)) setActiveId(wanted);
         window.history.replaceState({}, "", window.location.pathname);
       }
-    }).catch(() => setEntries([]));
+    }).catch(() => { setEntries([]); setEntriesLoaded(true); });
     // ?upgrade=pro|team&billing=monthly|annual — кнопки тарифов на лендинге
     const params = new URLSearchParams(window.location.search);
     const upgrade = params.get("upgrade");
     const upBilling = params.get("billing") === "annual" ? "annual" : "monthly";
     if (upgrade) window.history.replaceState({}, "", window.location.pathname);
     void fetchProfile().then((p) => {
-      setProfile(p);
+      setProfile(p); setProfileLoaded(true);
+      saveProfileCache(session.user.id, p);
       if (upgrade === "pro" && (p?.plan || "free") === "free") {
         void createStripeCheckout("pro", upBilling)
           .then((url) => { window.location.href = url; })
@@ -364,7 +385,7 @@ export default function InkApp() {
           minutes_limit: p?.minutes_limit,
         });
       }
-    });
+    }).catch(() => setProfileLoaded(true));
     void fetchWorkspace().then(setWorkspace).catch(() => {});
     void idbGetOrphans().then((orphans) => {
       if (!orphans.length) return;
@@ -394,7 +415,7 @@ export default function InkApp() {
   }, [recording, cooking]);
 
   // Display demo entry when no real entries and not processing
-  const displayedEntries = entries.length === 0 && !cooking ? [DEMO_ENTRY] : entries;
+  const displayedEntries = entries.length === 0 && !cooking && entriesLoaded ? [DEMO_ENTRY] : entries;
   const activeEntry = displayedEntries.find((e) => e.id === activeId) || null;
   const view: "INPUT" | "OUTPUT" = activeEntry ? "OUTPUT" : "INPUT";
 
@@ -824,6 +845,8 @@ export default function InkApp() {
         onToggle={() => setSbOpen((v) => !v)}
         onNew={() => setActiveId(null)}
         email={session.user?.email || ""}
+        loading={!entriesLoaded}
+        profileLoading={!profileLoaded}
         onTeamChange={setTeam}
         onSelect={(id) => setActiveId(id)}
         onDelete={handleDelete}
@@ -866,17 +889,27 @@ export default function InkApp() {
                 <button type="button" className="i-back" onClick={() => setActiveId(null)}>
                   {activeEntry.id === "demo" ? "← Try it yourself" : "← New recording"}
                 </button>
-                <ResultView
-                  key={activeEntry.id}
-                  entry={activeEntry}
-                  plan={plan}
-                  notionConnected={profile?.notion_connected}
-                  activeTab={activeTab}
-                  onTabChange={setActiveTab}
-                  onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
-                  autoSummaryPending={autoSummaryIds.has(activeEntry.id)}
-                  onUpgrade={() => { setSettingsSection("subscription"); setSettingsOpen(true); }}
-                />
+                {activeEntry.stub ? (
+                  <div className="i-resultload" aria-busy="true" aria-label="Loading transcript">
+                    <span className="i-skel" style={{ height: 30, width: "58%" }} />
+                    <span className="i-skel" style={{ height: 12, width: "32%", marginTop: 14 }} />
+                    {[0, 1, 2, 3].map((k) => (
+                      <span key={k} className="i-skel" style={{ height: 14, width: `${92 - k * 11}%`, marginTop: k === 0 ? 34 : 18 }} />
+                    ))}
+                  </div>
+                ) : (
+                  <ResultView
+                    key={activeEntry.id}
+                    entry={activeEntry}
+                    plan={plan}
+                    notionConnected={profile?.notion_connected}
+                    activeTab={activeTab}
+                    onTabChange={setActiveTab}
+                    onPatch={(fields, db) => patchLocal(activeEntry.id, fields, db)}
+                    autoSummaryPending={autoSummaryIds.has(activeEntry.id)}
+                    onUpgrade={() => { setSettingsSection("subscription"); setSettingsOpen(true); }}
+                  />
+                )}
                 {status && (
                   <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">
                     {status}
@@ -956,7 +989,7 @@ export default function InkApp() {
                 )}
 
                 {/* Onboarding — shown only when no real entries yet */}
-                {!entries.length && !cooking && !recording && (
+                {!entries.length && entriesLoaded && !cooking && !recording && (
                   <div className="i-onboard">
                     <svg
                       className="i-onboard-icon"

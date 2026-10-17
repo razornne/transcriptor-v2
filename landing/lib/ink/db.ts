@@ -20,6 +20,10 @@ export type HistoryEntry = {
   aiResults: Record<string, string>;
   workspaceId: string | null;
   visibility: string;
+  /** Слепок из кэша (lib/ink/cache.ts): без текста, пока с сервера не пришла полная запись. */
+  stub?: boolean;
+  /** Длительность, секунд — для слепка, у которого segments пуст. */
+  durationSec?: number;
 };
 
 function rowToEntry(row: Record<string, unknown>): HistoryEntry {

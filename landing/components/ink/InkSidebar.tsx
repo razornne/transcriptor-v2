@@ -30,8 +30,8 @@ const DICT = {
 type Lang = keyof typeof DICT;
 
 function fmtDur(e: HistoryEntry): string {
-  if (!e.segments.length) return "—";
-  const s = Math.max(...e.segments.map((x) => x.end));
+  if (!e.segments.length && e.durationSec == null) return "—";
+  const s = e.durationSec ?? Math.max(...e.segments.map((x) => x.end));
   return s >= 3600
     ? `${Math.floor(s / 3600)}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}`
     : `${Math.max(1, Math.round(s / 60))}m`;
@@ -58,7 +58,7 @@ export function InkSidebar({
   open, team, entries, activeId, profile, hasWorkspace,
   projects, onCreateProject, onDeleteProject, onMoveEntry,
   onClose, onToggle, onNew, onTeamChange, onSelect, onDelete, onSettings,
-  email, uiLang = "en",
+  email, loading = false, profileLoading = false, uiLang = "en",
 }: {
   open: boolean;
   team: boolean;
@@ -81,6 +81,10 @@ export function InkSidebar({
   onDelete: (id: string) => void;
   onSettings?: () => void;
   email: string;
+  /** История ещё грузится: вместо «пусто» — скелетоны, счётчики проектов скрыты. */
+  loading?: boolean;
+  /** Профиль (план, минуты) ещё грузится. */
+  profileLoading?: boolean;
   uiLang?: Lang;
 }) {
   const [q, setQ] = useState("");
@@ -350,7 +354,7 @@ export function InkSidebar({
                           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
                         </svg>
                         <span className="i-proj-name">{proj.name}</span>
-                        <span className="i-proj-count">{projEntries.length}</span>
+                        <span className="i-proj-count">{loading ? "" : projEntries.length}</span>
                       </button>
                       <button
                         type="button"
@@ -407,7 +411,18 @@ export function InkSidebar({
           )}
 
           {/* ── Unsorted / flat entries ── */}
-          {filtered.length === 0 && (
+          {filtered.length === 0 && loading && (
+            <div className="i-skel-list" aria-hidden="true">
+              {[0, 1, 2, 3].map((k) => (
+                <div key={k} className="i-skel-item">
+                  <span className="i-skel" style={{ width: `${78 - k * 9}%`, height: 12 }} />
+                  <span className="i-skel" style={{ width: 62, height: 9 }} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {filtered.length === 0 && !loading && (
             <p className="i-sb-empty">
               {team ? s.noShared : q ? s.noFound : s.noRecs}
             </p>
@@ -432,7 +447,9 @@ export function InkSidebar({
             <div className="i-acct-av" aria-hidden="true">{(email[0] || "?").toUpperCase()}</div>
             <div className="i-acct-text">
               <div className="i-acct-name" title={email}>{email || "…"}</div>
-              <div className="i-acct-plan">{profile ? `${profile.plan} plan` : "…"}</div>
+              <div className="i-acct-plan">
+                {profile ? `${profile.plan} plan` : profileLoading ? <span className="i-skel" style={{ width: 54, height: 9 }} /> : "…"}
+              </div>
             </div>
             {onSettings && (
               <button
@@ -454,7 +471,11 @@ export function InkSidebar({
           >
             <div className="i-usage-row">
               <span>Call minutes</span>
-              <span>{profile ? `${Math.round(profile.minutes_used)} / ${Math.round(profile.minutes_limit)}` : "…"}</span>
+              <span>
+                {profile
+                  ? `${Math.round(profile.minutes_used)} / ${Math.round(profile.minutes_limit)}`
+                  : profileLoading ? <span className="i-skel" style={{ width: 52, height: 9 }} /> : "…"}
+              </span>
             </div>
             <div className="i-usage-track">
               <div className="i-usage-fill" style={{ width: `${Math.round(Math.min(1, usedRatio) * 100)}%` }} />
