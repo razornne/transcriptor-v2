@@ -11,10 +11,10 @@ export const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJtb25ha2hrdGJhbGl3Z29icnh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyMTY4OTMsImV4cCI6MjA5NDc5Mjg5M30.HeY7nTJrAKPPHNRrPQwrIlx0HTd5L8a3xYZNgL-zWX4";
 
 export const SUPPORTED_LANGUAGES = [
-  { value: "", label: "Auto" },
-  { value: "en", label: "EN" },
-  { value: "ru", label: "RU" },
-  { value: "uk", label: "UK" },
-  { value: "pl", label: "PL" },
-  { value: "cs", label: "CS" },
+  { value: "", label: "Auto-detect" },
+  { value: "en", label: "English" },
+  { value: "ru", label: "Русский" },
+  { value: "uk", label: "Українська" },
+  { value: "pl", label: "Polski" },
+  { value: "cs", label: "Čeština" },
 ] as const;

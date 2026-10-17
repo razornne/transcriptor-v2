@@ -4,6 +4,7 @@ import type { AppSession } from "@/lib/ink/session";
 import { isDesktop } from "@/lib/ink/desktop";
 import { clearCache } from "@/lib/ink/cache";
 import { DesktopSettings } from "./DesktopSettings";
+import { Select } from "./Select";
 import type { Profile, WorkspaceInfo, VocabTerm } from "@/lib/ink/api";
 import {
   saveVocabulary, StripeCustomerInvalidError,
@@ -846,36 +847,21 @@ export function SettingsModal({
                 <div className="i-msect-card">
                   <div className="i-mrow">
                     <label className="i-mrow-label" htmlFor="s-lang">{t.fieldLanguage}</label>
-                    <select
+                    <Select
                       id="s-lang"
-                      className="i-mini"
                       value={settings.language}
-                      onChange={(e) => {
-                        const next = saveSettings({ language: e.target.value });
-                        onSettingsChange(next);
-                      }}
-                    >
-                      {SUPPORTED_LANGUAGES.map((l) => (
-                        <option key={l.value} value={l.value}>{l.label}</option>
-                      ))}
-                    </select>
+                      onChange={(v) => onSettingsChange(saveSettings({ language: v }))}
+                      options={SUPPORTED_LANGUAGES.map((l) => ({ value: l.value, label: l.label }))}
+                    />
                   </div>
                   <div className="i-mrow">
                     <label className="i-mrow-label" htmlFor="s-spk">{t.fieldSpeakers}</label>
-                    <select
+                    <Select
                       id="s-spk"
-                      className="i-mini"
                       value={settings.speakers}
-                      onChange={(e) => {
-                        const next = saveSettings({ speakers: e.target.value });
-                        onSettingsChange(next);
-                      }}
-                    >
-                      <option value="">{t.auto}</option>
-                      {[1, 2, 3, 4, 5, 6].map((n) => (
-                        <option key={n} value={String(n)}>{n}</option>
-                      ))}
-                    </select>
+                      onChange={(v) => onSettingsChange(saveSettings({ speakers: v }))}
+                      options={[{ value: "", label: t.auto }, ...[1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: String(n) }))]}
+                    />
                   </div>
                 </div>
 
@@ -944,15 +930,12 @@ export function SettingsModal({
                   {onUiLangChange && (
                     <div className="i-mrow">
                       <label className="i-mrow-label" htmlFor="s-uilang">{t.interfaceLanguage}</label>
-                      <select
+                      <Select
                         id="s-uilang"
-                        className="i-mini"
                         value={uiLang}
-                        onChange={(e) => onUiLangChange(e.target.value as Lang)}
-                      >
-                        <option value="en">English</option>
-                        <option value="ua">Українська</option>
-                      </select>
+                        onChange={(v) => onUiLangChange(v as Lang)}
+                        options={[{ value: "en", label: "English" }, { value: "ua", label: "Українська" }]}
+                      />
                     </div>
                   )}
                 </div>

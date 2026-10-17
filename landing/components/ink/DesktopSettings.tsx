@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { desktopInvoke } from "@/lib/ink/desktop";
+import { Select } from "./Select";
 
 // Настройки диктовки в приложении Skriptly (хоткеи, языки, микрофон…). Видны только
 // в окне приложения: сама диктовка работает в Rust (desktop/src-tauri), страница
@@ -242,15 +243,12 @@ export function DesktopSettings() {
       <div className="i-msect-card">
         <div className="i-mrow">
           <label className="i-mrow-label" htmlFor="d-mic">Input device (dictation and call recording)</label>
-          <select
+          <Select
             id="d-mic"
-            className="i-mini"
             value={s.mic && st.mics.includes(s.mic) ? s.mic : ""}
-            onChange={(e) => void save({ mic: e.target.value || null })}
-          >
-            <option value="">System default</option>
-            {st.mics.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
+            onChange={(v) => void save({ mic: v || null })}
+            options={[{ value: "", label: "System default" }, ...st.mics.map((m) => ({ value: m, label: m }))]}
+          />
         </div>
       </div>
 

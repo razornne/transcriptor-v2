@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { SUPPORTED_LANGUAGES } from "@/lib/ink/config";
+import { Select } from "./Select";
 import type { PipelineSteps } from "@/lib/ink/api";
 
 function formatDuration(s: number): string {
@@ -253,21 +254,22 @@ export function InputCard({
           </div>
 
           <div className="i-opts">
-            <label className="i-opt">
-              <span className="i-opt-label">Language</span>
-              <select aria-label="Language" value={language} onChange={(e) => onLanguage(e.target.value)}>
-                {SUPPORTED_LANGUAGES.map((l) => (
-                  <option key={l.value} value={l.value}>{l.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="i-opt">
-              <span className="i-opt-label">Speakers</span>
-              <select aria-label="Speakers" value={speakers} onChange={(e) => onSpeakers(e.target.value)}>
-                <option value="">Auto</option>
-                {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
+            <div className="i-opt">
+              <span className="i-opt-label" id="opt-language">Language</span>
+              <Select
+                variant="inline" ariaLabelledBy="opt-language"
+                value={language} onChange={onLanguage}
+                options={SUPPORTED_LANGUAGES.map((l) => ({ value: l.value, label: l.label }))}
+              />
+            </div>
+            <div className="i-opt">
+              <span className="i-opt-label" id="opt-speakers">Speakers</span>
+              <Select
+                variant="inline" ariaLabelledBy="opt-speakers"
+                value={speakers} onChange={onSpeakers}
+                options={[{ value: "", label: "Auto" }, ...[1, 2, 3, 4, 5, 6].map((n) => ({ value: String(n), label: String(n) }))]}
+              />
+            </div>
             <label className="i-opt grow">
               <span className="i-opt-label">Context (optional)</span>
               <input
