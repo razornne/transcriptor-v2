@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>You're in · Skriptly</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&amp;family=Instrument+Serif:ital@0;1&amp;family=Manrope:wght@300;400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: light dark;
+    --paper:#F6F4EE; --surface:#FCFBF8; --ink:#14120E; --mute:#6B6557; --mute2:#4F493D; --line:#E4DFD2; --line2:#D8D2C1;
+    --track:#E8E3D6; --accent:#2740E6; --accsoft:#E4E8FC; --acctext:#1B2FB8; --sigsoft:#FBE6E0; --sigtext:#9E3019;
+    --okbg:#E2F1E8; --oktext:#1F6B47; }
+  @media (prefers-color-scheme: dark) { :root {
+    --paper:#100F0C; --surface:#181613; --ink:#F2EFE7; --mute:#A29B8B; --mute2:#C9C3B4; --line:#2A2722; --line2:#3A362F;
+    --track:#2A2722; --accent:#5B6CFF; --accsoft:#1D2145; --acctext:#A9B3FF; --sigsoft:#3A1D16; --sigtext:#FF9C84;
+    --okbg:#14301F; --oktext:#7FD6A4; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink);
+         font: 14px/1.45 "Manrope", "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; }
+  header { width: 100%; padding: 28px 40px; display: flex; align-items: center; gap: 10px; }
+  .mark { width: 28px; height: 28px; border-radius: 8px; background: var(--ink); color: var(--paper); display: grid; place-items: center;
+          font: 700 16px "Bricolage Grotesque", sans-serif; }
+  .brand { font: 600 18px "Bricolage Grotesque", sans-serif; letter-spacing: -0.01em; }
+  main { flex: 1; width: 100%; max-width: 1000px; padding: 20px 32px 40px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 14px 0 10px; border-radius: 16px;
+          background: var(--okbg); color: var(--oktext); font-size: 13px; font-weight: 600; max-width: 100%; }
+  .pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  h1 { margin: 26px 0 0; font: 600 clamp(44px, 8vw, 68px)/1.02 "Bricolage Grotesque", sans-serif; letter-spacing: -0.015em; }
+  h1 em { font: italic 400 1.06em "Instrument Serif", Georgia, serif; letter-spacing: 0; color: var(--accent); }
+  .sub { margin: 16px 0 0; font-size: 17px; line-height: 1.55; color: var(--mute); max-width: 520px; }
+  .demo { margin-top: 44px; width: 100%; display: flex; flex-wrap: wrap; align-items: stretch; gap: 14px; }
+  .card { flex: 1 1 340px; min-width: 0; text-align: left; padding: 26px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); }
+  .card.say { background: transparent; border: 1.5px dashed var(--line2); }
+  .label { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); }
+  .card.get .label { color: var(--acctext); }
+  .card p { margin: 14px 0 0; font-size: 18px; line-height: 1.7; }
+  .card.say p { color: var(--mute2); }
+  .x { color: var(--sigtext); background: linear-gradient(currentColor, currentColor) no-repeat 0 58% / 100% 2px; }
+  .hl { background: var(--accsoft); color: var(--acctext); padding: 1px 6px; border-radius: 6px; font-weight: 600; }
+  .tags { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag { height: 26px; padding: 0 10px; border-radius: 13px; background: var(--track); color: var(--mute2); font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; }
+  .arrow { flex: none; align-self: center; width: 44px; height: 44px; border-radius: 22px; background: var(--ink); color: var(--paper); display: grid; place-items: center; }
+  .tips { margin-top: 14px; width: 100%; display: flex; flex-wrap: wrap; gap: 14px; }
+  .tip { flex: 1 1 260px; min-width: 0; text-align: left; padding: 22px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line); }
+  .tip h2 { margin: 16px 0 0; font: 600 19px "Bricolage Grotesque", sans-serif; letter-spacing: -0.01em; }
+  .tip p { margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: var(--mute); }
+  .ico { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; }
+  .keys { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 34px; }
+  kbd { font: 600 12px "JetBrains Mono", monospace; padding: 4px 9px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line2); border-bottom-width: 3px; }
+  .plus { color: var(--mute); font-size: 13px; }
+  footer { margin-top: 40px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .back { display: flex; align-items: center; gap: 12px; color: var(--mute); }
+  .back b { color: var(--ink); font-weight: 600; }
+  .bar { width: 120px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 2px; background: var(--accent); width: 0; animation: fill 3.2s .6s ease-out forwards; }
+  .note { font-size: 13px; color: var(--mute); }
+  /* появление сверху вниз, зачёркивание «мусора» и подсветка результата */
+  .rise { opacity: 0; transform: translateY(10px); animation: rise .6s ease-out forwards; }
+  .d1 { animation-delay: .05s; } .d2 { animation-delay: .18s; } .d3 { animation-delay: .3s; } .d4 { animation-delay: .5s; } .d5 { animation-delay: .7s; }
+  .x { background-size: 0 2px; animation: strike .6s ease-out forwards; }
+  .x.s1 { animation-delay: .9s; } .x.s2 { animation-delay: 1.15s; } .x.s3 { animation-delay: 1.4s; }
+  .hl { animation: glow 1.2s 1.6s ease-out both; }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+  @keyframes strike { to { background-size: 100% 2px; } }
+  @keyframes fill { to { width: 100%; } }
+  @keyframes glow { 0% { box-shadow: 0 0 0 0 var(--accent); } 40% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 25%, transparent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { .rise { opacity: 1; transform: none; animation: none; } .x { background-size: 100% 2px; animation: none; } .hl { animation: none; } .bar i { width: 100%; animation: none; } }
+  @media (max-width: 720px) { .arrow { transform: rotate(90deg); } header { padding: 20px; } main { padding: 12px 20px 32px; } }
+</style>
+</head>
+<body>
+  <header><div class="mark">S</div><span class="brand">Skriptly</span></header>
+  <main>
+    <div class="pill rise d1">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+      <span>Signed in as __EMAIL__</span>
+    </div>
+    <h1 class="rise d2">You're <em>in</em>.</h1>
+    <p class="sub rise d3">Skriptly is waiting in the app. Here is what it does to your words.</p>
+
+    <div class="demo rise d4">
+      <section class="card say">
+        <div class="label">What you say</div>
+        <p><span class="x s1">um, so basically,</span> the thing is, we need to send the<span class="x s2">, uh, the</span> report by <span class="x s3">Friday, no wait,</span> Thursday</p>
+      </section>
+      <div class="arrow" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></div>
+      <section class="card get">
+        <div class="label">What you get</div>
+        <p>We need to send the report by <span class="hl">Thursday</span>.</p>
+        <div class="tags"><span class="tag">Fillers removed</span><span class="tag">Self-correction applied</span></div>
+      </section>
+    </div>
+
+    <div class="tips rise d5">
+      <section class="tip">
+        <div class="keys">__KEYS__</div>
+        <h2>Dictate anywhere</h2>
+        <p>Hold the keys, speak, let go. Clean text lands where your cursor is.</p>
+      </section>
+      <section class="tip">
+        <div class="ico" style="background:var(--sigsoft);color:var(--sigtext)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+        <h2>Record a call</h2>
+        <p>Zoom, Meet, Teams. Every speaker labelled, with a summary on request.</p>
+      </section>
+      <section class="tip">
+        <div class="ico" style="background:var(--accsoft);color:var(--acctext)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></div>
+        <h2>Upload any file</h2>
+        <p>Voice memos, meeting videos, exports. Drop them in and get text back.</p>
+      </section>
+    </div>
+
+    <footer class="rise d5">
+      <div class="back"><b>Taking you back to the app</b><span class="bar"><i></i></span></div>
+      <div class="note">Nothing happened? You can close this tab and open Skriptly from the tray.</div>
+    </footer>
+  </main>
+</body>
+</html>

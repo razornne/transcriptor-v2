@@ -1,8 +1,13 @@
 "use client";
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { HistoryEntry, Segment } from "@/lib/ink/db";
 import { generate, sendToNotion, UpgradeRequiredError } from "@/lib/ink/api";
 import { UpgradeCard } from "./UpgradeCard";
+import { SpeakersCard, TurnRow } from "./Turns";
+import {
+  fmtTime, groupTurns, readSuggestions, speakerStats, spkDisplay, stripDash, SUGGESTIONS_KEY, writeSuggestions,
+  type NameSuggestion, type SpeakerStat,
+} from "@/lib/ink/speakers";
 
 // ── Markdown renderer ────────────────────────────────────────────
 function inlineMd(text: string): ReactNode {
@@ -94,26 +99,6 @@ function renderMd(md: string): ReactNode {
 
 export type Tab = "transcript" | "summary" | "actions";
 
-// Matte "expensive ink" speaker palette — defined as CSS vars in ink.css so the
-// whole set is themeable in one place. Klein blue + muted copper/plum/teal.
-const SPK_COLORS = ["var(--i-spk-1)", "var(--i-spk-2)", "var(--i-spk-3)", "var(--i-spk-4)"];
-
-function spkColor(label: string): string {
-  const m = label.match(/(\d+)/);
-  return SPK_COLORS[(m ? parseInt(m[1], 10) : 0) % SPK_COLORS.length];
-}
-
-function spkDisplay(label: string, names: Record<string, string>): string {
-  if (names[label]) return names[label];
-  const m = label.match(/(\d+)/);
-  return m ? `Speaker ${parseInt(m[1], 10) + 1}` : label;
-}
-
-function fmtTime(s: number): string {
-  const m = Math.floor(s / 60), ss = Math.floor(s % 60);
-  return `${m}:${String(ss).padStart(2, "0")}`;
-}
-
 function fmtDate(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -121,10 +106,6 @@ function fmtDate(iso: string): string {
     day: "numeric", month: "short",
     year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
   });
-}
-
-function stripDash(text: string): string {
-  return text.replace(/^—\s*/, "").trim();
 }
 
 export function transcriptText(segments: Segment[], names: Record<string, string>): string {
@@ -142,95 +123,6 @@ function NotionIcon() {
     </svg>
   );
 }
-
-// ── мемоизированная строка сегмента ─────────────────────────────
-const SegmentRow = memo(function SegmentRow({
-  idx, speaker, name, displayName, color, time, text, edited,
-  editingSpk, editingText,
-  onStartEdit, onRename, onCancelEdit,
-  onStartTextEdit, onSaveText, onCancelTextEdit,
-}: {
-  idx: number; speaker: string; name: string; displayName: string; color: string;
-  time: string; text: string; edited?: boolean;
-  editingSpk: boolean; editingText: boolean;
-  onStartEdit: (idx: number) => void;
-  onRename: (label: string, value: string) => void;
-  onCancelEdit: () => void;
-  onStartTextEdit: (idx: number) => void;
-  onSaveText: (idx: number, val: string) => void;
-  onCancelTextEdit: () => void;
-}) {
-  // Focus the rename input WITHOUT scrolling the page. The browser's default
-  // autofocus scroll-into-view is what yanked the transcript around on click.
-  const spkInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (editingSpk) spkInputRef.current?.focus({ preventScroll: true });
-  }, [editingSpk]);
-
-  return (
-    <div className="i-seg">
-      <div className="i-seg-head">
-        {editingSpk ? (
-          <input
-            ref={spkInputRef}
-            className="i-spk-edit"
-            style={{ color }}
-            defaultValue={name} placeholder={displayName}
-            // Keep every interaction inside the input — never let it bubble to
-            // the segment row (which could seek/scroll the player).
-            onClick={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            onBlur={(e) => onRename(speaker, e.target.value)}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") onCancelEdit();
-            }}
-          />
-        ) : (
-          <button
-            type="button" className="i-spk" style={{ color }}
-            title="Click to rename"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              onStartEdit(idx);
-            }}
-          >
-            {displayName}<span className="i-spk-hint"> ✎</span>
-          </button>
-        )}
-        <span className="i-seg-time">{time}</span>
-        {edited && <span className="i-seg-edited">edited</span>}
-      </div>
-
-      {editingText ? (
-        <textarea
-          className="i-seg-edit-area"
-          autoFocus
-          defaultValue={text}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSaveText(idx, (e.target as HTMLTextAreaElement).value);
-            }
-            if (e.key === "Escape") onCancelTextEdit();
-          }}
-          onBlur={(e) => onSaveText(idx, e.target.value)}
-        />
-      ) : (
-        <div className="i-seg-text-wrap" onDoubleClick={() => onStartTextEdit(idx)}>
-          <p className="i-seg-text">{stripDash(text)}</p>
-          <button
-            type="button" className="i-seg-pencil"
-            aria-label="Edit text" onClick={() => onStartTextEdit(idx)}
-          >✎</button>
-        </div>
-      )}
-    </div>
-  );
-});
 
 // ── ResultView ────────────────────────────────────────────────────
 export function ResultView({
@@ -272,6 +164,25 @@ export function ResultView({
   const names = entry.speakerNames;
   const isAiGated = plan === "free" || gated;
 
+  const stats = useMemo(() => speakerStats(entry.segments), [entry.segments]);
+  const turns = useMemo(() => groupTurns(entry.segments), [entry.segments]);
+  const suggestions = readSuggestions(entry.aiResults, names);
+
+  // Подсказка принята/отклонена — убираем её из списка, имя применяем только при «Accept».
+  const resolveSuggestions = (rest: NameSuggestion[], nextNames: Record<string, string> = names) => {
+    const ai = { ...entry.aiResults, [SUGGESTIONS_KEY]: writeSuggestions(rest) };
+    onPatch({ aiResults: ai, speakerNames: nextNames }, { ai_results: ai, speaker_names: nextNames });
+  };
+  const acceptSuggestion = (sg: NameSuggestion) =>
+    resolveSuggestions(suggestions.filter((x) => x.speaker !== sg.speaker), { ...names, [sg.speaker]: sg.name });
+  const dismissSuggestion = (sg: NameSuggestion) =>
+    resolveSuggestions(suggestions.filter((x) => x.speaker !== sg.speaker));
+  const acceptAllSuggestions = () => {
+    const next = { ...names };
+    suggestions.forEach((sg) => { next[sg.speaker] = sg.name; });
+    resolveSuggestions([], next);
+  };
+
   const runAI = async (template: "summary" | "actions") => {
     if (genBusy) return;
     setGenBusy(template);
@@ -297,6 +208,10 @@ export function ResultView({
     setEditingSpk(segIdx);
   }, []);
   const onCancelEdit = useCallback(() => setEditingSpk(null), []);
+  const pickSpeaker = (st: SpeakerStat) => {
+    onStartEdit(st.firstIdx);
+    document.getElementById(`seg-${st.firstIdx}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
   const onRename = useCallback((label: string, value: string) => {
     setEditingSpk(null);
     const trimmed = value.trim();
@@ -422,6 +337,13 @@ export function ResultView({
         <span>{fmtDate(entry.date)}</span>
       </div>
 
+      {stats.length >= 2 && (
+        <SpeakersCard
+          stats={stats} names={names} suggestions={suggestions}
+          onPick={pickSpeaker} onAccept={acceptSuggestion} onDismiss={dismissSuggestion} onAcceptAll={acceptAllSuggestions}
+        />
+      )}
+
       <div className="i-tabs">
         <div className="i-segctl" role="tablist">
           {(["transcript", "summary", "actions"] as const).map((t) => (
@@ -456,19 +378,14 @@ export function ResultView({
       {/* ── Transcript ── */}
       {activeTab === "transcript" && (
         <div className="i-seglist">
-          {entry.segments.map((s, k) => (
-            <SegmentRow
-              key={k}
-              idx={k}
-              speaker={s.speaker}
-              name={names[s.speaker] || ""}
-              displayName={spkDisplay(s.speaker, names)}
-              color={spkColor(s.speaker)}
-              time={fmtTime(s.start)}
-              text={s.text}
-              edited={s.edited}
-              editingSpk={editingSpk === k}
-              editingText={editingSegIdx === k}
+          {turns.map((t) => (
+            <TurnRow
+              key={t.items[0].idx}
+              turn={t}
+              name={names[t.speaker] || ""}
+              displayName={spkDisplay(t.speaker, names)}
+              editingSpk={editingSpk === t.items[0].idx}
+              editingIdx={editingSegIdx}
               onStartEdit={onStartEdit}
               onRename={onRename}
               onCancelEdit={onCancelEdit}

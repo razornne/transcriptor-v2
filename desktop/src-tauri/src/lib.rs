@@ -147,6 +147,7 @@ async fn after_sign_in(app: &AppHandle, state: &AppStateArc) {
 #[tauri::command]
 async fn sign_in_google(app: AppHandle, state: State<'_, AppStateArc>) -> Result<String, String> {
     let s = auth::sign_in(&state, auth::Method::Google).await?;
+    show_main(&app); // браузер остаётся позади — возвращаем окно приложения на передний план
     after_sign_in(&app, &state).await;
     Ok(s.email)
 }
@@ -158,6 +159,7 @@ async fn sign_in_email(app: AppHandle, state: State<'_, AppStateArc>, email: Str
         return Err("Enter a valid email".into());
     }
     let s = auth::sign_in(&state, auth::Method::Email(email)).await?;
+    show_main(&app);
     after_sign_in(&app, &state).await;
     Ok(s.email)
 }

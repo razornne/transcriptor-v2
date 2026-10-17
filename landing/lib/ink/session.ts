@@ -59,3 +59,18 @@ export async function signOutEverywhere(): Promise<void> {
   if (isDesktop()) await desktopInvoke("sign_out");
   else await sb.auth.signOut();
 }
+
+/** Имя пользователя из токена (Google кладёт full_name в user_metadata). Только первое слово. */
+export function firstNameFromToken(token?: string | null): string | null {
+  try {
+    const payload = (token || "").split(".")[1];
+    if (!payload) return null;
+    const bin = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const json = new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    const meta = (JSON.parse(json) as { user_metadata?: { full_name?: string; name?: string } }).user_metadata;
+    const full = (meta?.full_name || meta?.name || "").trim();
+    return full ? full.split(/\s+/)[0] : null;
+  } catch {
+    return null;
+  }
+}

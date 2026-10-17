@@ -40,18 +40,41 @@ pub fn redirect_url() -> String {
     format!("http://127.0.0.1:{LOOPBACK_PORT}/callback")
 }
 
-const DONE_PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>Skriptly</title>
-<body style="font-family:Segoe UI,sans-serif;background:#F6F4EE;color:#14120E;display:grid;place-items:center;height:90vh">
-<div style="text-align:center"><h2>%TITLE%</h2><p style="color:#6B6557">%BODY%</p></div>"#;
+const ERROR_PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>Skriptly</title>
+<meta name="color-scheme" content="light dark">
+<body style="font-family:Manrope,Segoe UI,sans-serif;background:#F6F4EE;color:#14120E;display:grid;place-items:center;height:90vh;margin:0">
+<div style="text-align:center;max-width:460px;padding:24px"><h2 style="font-size:28px;margin:0 0 8px">%TITLE%</h2><p style="color:#6B6557;margin:0">%BODY%</p></div>"#;
 
-fn page(title: &str, body: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
-    let html = DONE_PAGE.replace("%TITLE%", title).replace("%BODY%", body);
+/// Страница после входа (вариант A из макета): шаблон `signed_in.html`, в него
+/// подставляются почта и подпись шортката диктовки (как он настроен у пользователя).
+const SIGNED_IN_PAGE: &str = include_str!("signed_in.html");
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+fn html_response(html: String) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
     tiny_http::Response::from_string(html)
         .with_header("Content-Type: text/html; charset=utf-8".parse::<tiny_http::Header>().unwrap())
 }
 
+fn page(title: &str, body: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+    html_response(ERROR_PAGE.replace("%TITLE%", &html_escape(title)).replace("%BODY%", &html_escape(body)))
+}
+
+fn signed_in_page(email: &str, hotkey_label: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+    let keys: String = hotkey_label
+        .split(" + ")
+        .enumerate()
+        .map(|(i, k)| format!("{}<kbd>{}</kbd>", if i > 0 { "<span class=\"plus\">+</span>" } else { "" }, html_escape(k)))
+        .collect();
+    html_response(SIGNED_IN_PAGE.replace("__EMAIL__", &html_escape(email)).replace("__KEYS__", &keys))
+}
+
 /// Ждём редирект браузера на loopback. Отменяется новым входом.
-fn wait_for_code(cancel: Arc<AtomicBool>) -> Result<String, String> {
+/// Запрос с кодом НЕ закрываем: ответ (страница «вы вошли») отдаём после обмена кода на сессию,
+/// чтобы показать почту.
+fn wait_for_code(cancel: Arc<AtomicBool>) -> Result<(String, tiny_http::Request), String> {
     // Прошлый вход мог ещё держать порт — даём ему освободиться.
     let deadline = Instant::now() + Duration::from_secs(3);
     let server = loop {
@@ -83,8 +106,7 @@ fn wait_for_code(cancel: Arc<AtomicBool>) -> Result<String, String> {
             })
         };
         if let Some(code) = param("code") {
-            let _ = req.respond(page("You're signed in", "You can close this tab and go back to Skriptly."));
-            return Ok(code);
+            return Ok((code, req));
         }
         let err = param("error_description").or_else(|| param("error")).unwrap_or_else(|| "no code".into());
         let _ = req.respond(page("Sign-in failed", &err));
@@ -166,8 +188,15 @@ pub async fn sign_in(state: &AppState, method: Method) -> Result<Session, String
         }
     }
 
-    let code = waiter.await.map_err(|e| e.to_string())??;
-    let session = token_request(state, "pkce", json!({ "auth_code": code, "code_verifier": verifier })).await?;
+    let (code, req) = waiter.await.map_err(|e| e.to_string())??;
+    let session = match token_request(state, "pkce", json!({ "auth_code": code, "code_verifier": verifier })).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = req.respond(page("Sign-in failed", &e));
+            return Err(e);
+        }
+    };
+    let _ = req.respond(signed_in_page(&session.email, &crate::hotkey::label(&state.settings().hotkey)));
     state.store.save_session(&session);
     *state.session.lock().await = Some(session.clone());
     crate::log!("[auth] signed in as {}", session.email);

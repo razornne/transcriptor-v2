@@ -199,7 +199,7 @@ web_image = (
         "stripe>=12",  # API 2025-03-31.basil+ — нужна для managed_payments в Checkout
         "boto3",  # S3 API клиента для архива записей в Cloudflare R2
     )
-    .add_local_python_source("app", "soniox")  # soniox — временные ключи живого транскрипта
+    .add_local_python_source("app", "soniox", "speaker_names")  # soniox — ключи живого транскрипта; speaker_names — подсказки имён
     # Cutover (2026-06-14): фронт переехал на Next.js /app, GET / теперь 301-редирект.
     # templates/index.html заархивирован в legacy/ — Flask его больше не рендерит,
     # поэтому каталог templates/ не монтируется (его и нет в корне).

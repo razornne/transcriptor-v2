@@ -3,6 +3,7 @@ import { API_BASE } from "./config";
 import { sb } from "./supabase";
 import { getAccessToken, getSessionUser } from "./session";
 import { desktopInvoke, isDesktop } from "./desktop";
+import type { NameSuggestion } from "./speakers";
 import type { Segment } from "./db";
 
 // Тонкий клиент к Flask-бэку на Modal.
@@ -370,6 +371,25 @@ export async function generate(
   });
   const result = await pollJob(jobId);
   return ((result.result as string) || "").trim();
+}
+
+/** Имена, прямо названные в разговоре («Привіт, Миколо»). Только подсказки, с цитатой-доказательством.
+ *  Никогда не бросает: нет AI на тарифе, сеть, LLM — просто пустой список. */
+export async function fetchSpeakerSuggestions(segments: Segment[]): Promise<NameSuggestion[]> {
+  try {
+    const res = await authFetch(`${API_BASE}/api/speaker-names`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        segments: segments.map((s) => ({ speaker: s.speaker, start: s.start, end: s.end, text: s.text })),
+      }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.names) ? (data.names as NameSuggestion[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function generateTitle(text: string, language: string): Promise<string | null> {

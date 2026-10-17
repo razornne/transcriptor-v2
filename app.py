@@ -3755,6 +3755,40 @@ def dictation_cleanup_endpoint():
     return jsonify({"text": cleaned if ok else raw, "cleaned": ok})
 
 
+@app.route("/api/speaker-names", methods=["POST"])
+def speaker_names_endpoint():
+    """Имена спикеров, которые прямо названы в разговоре (обращение, самопредставление).
+    Body: {segments: [{speaker, start, text}]}. Returns {names: [{speaker, name, evidence, at}]}.
+    Это ПОДСКАЗКИ: страница показывает цитату-доказательство, имя применяет только юзер.
+    Как и остальной AI — с тарифа Pro; в Privacy Mode текст не уходит в Gemini.
+    Никогда не падает из-за LLM: в худшем случае пустой список."""
+    import speaker_names as sn
+
+    body = request.get_json(silent=True) or {}
+    segments = [s for s in (body.get("segments") or []) if isinstance(s, dict)][:6000]
+    if len({s.get("speaker") for s in segments}) < 2:
+        return jsonify({"names": []})
+    if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
+        try:
+            profile = _get_user_profile(g.user_id)
+            eff_plan = _get_effective_plan(g.user_id, g.user_email, profile)
+            if not PLAN_LIMITS.get(eff_plan, PLAN_LIMITS["free"])["ai"]:
+                return jsonify({"error": "AI analysis requires Pro plan.", "upgrade_required": True}), 402
+            if PRIVACY_MODE_ALLOWED_PLANS and _privacy_mode_active(profile, eff_plan):
+                return jsonify({"names": []})
+        except Exception as e:
+            print(f"[speaker-names] plan check failed: {e}", flush=True)
+    t0 = time.time()
+    try:
+        raw = _gemini_quick(sn.build_prompt(segments), timeout=40.0)
+        names = sn.parse_suggestions(raw, segments)
+    except Exception as e:
+        print(f"[speaker-names] failed: {e}", flush=True)
+        return jsonify({"names": []})
+    print(f"[speaker-names] {len(segments)} segments -> {len(names)} names in {time.time() - t0:.1f}s", flush=True)
+    return jsonify({"names": names})
+
+
 @app.route("/api/dictation/usage", methods=["POST"])
 def dictation_usage_endpoint():
     """Body: {seconds}. Секунды диктовки → своя месячная квота (RPC из migrations/016).

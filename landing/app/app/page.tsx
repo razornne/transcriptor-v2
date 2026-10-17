@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { watchSession, signOutEverywhere, type AppSession } from "@/lib/ink/session";
+import { firstNameFromToken, watchSession, signOutEverywhere, type AppSession } from "@/lib/ink/session";
+import { SUGGESTIONS_KEY, writeSuggestions } from "@/lib/ink/speakers";
 import { loadCache, saveEntriesCache, saveProfileCache } from "@/lib/ink/cache";
 import { desktopListen, installExternalLinks, isDesktop } from "@/lib/ink/desktop";
 import {
@@ -19,7 +20,7 @@ import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
-  transcribe, generate, fetchProfile, fetchWorkspace, cancelJob, createStripeCheckout,
+  transcribe, generate, fetchSpeakerSuggestions, fetchProfile, fetchWorkspace, cancelJob, createStripeCheckout,
   CancelledError, type CancelToken, type Profile, type JobProgress, type WorkspaceInfo,
   type PipelineSteps,
   type Project, loadProjects, saveProjects,
@@ -453,12 +454,17 @@ export default function InkApp() {
     return true;
   }, [profile, closeSbMobile]);
 
-  const finishWithSegments = useCallback(async (segments: Segment[], lang: string) => {
+  const finishWithSegments = useCallback(async (
+    segments: Segment[], lang: string, opts: { micOwner?: boolean } = {},
+  ) => {
     if (!session?.user) return;
     const title = autoTitle(segments);
+    // Запись с двумя каналами (микрофон + звук звонка): SPEAKER_00 — это владелец микрофона, то есть вы.
+    // Это не догадка, а устройство записи, поэтому имя ставим сразу (потом его можно переименовать).
+    const mine: Record<string, string> = opts.micOwner ? { SPEAKER_00: firstNameFromToken(session.access_token) || "You" } : {};
     const entry = await insertEntry({
       user_id: session.user.id, title, title_is_auto: true,
-      language: lang || null, segments, speaker_names: {}, notes: "", ai_results: {},
+      language: lang || null, segments, speaker_names: mine, notes: "", ai_results: {},
       visibility: workspace && visibility === "workspace" ? "workspace" : "private",
       workspace_id: workspace && visibility === "workspace" ? workspace.id : null,
     });
@@ -485,12 +491,21 @@ export default function InkApp() {
           phCapture("summary_auto_failed", { error: String(err) });
         })
         .finally(() => setAutoSummaryIds((prev) => { const s = new Set(prev); s.delete(entry.id); return s; }));
+
+      // Имена, названные в разговоре, — подсказками (юзер принимает сам)
+      void fetchSpeakerSuggestions(segments).then((list) => {
+        const found = list.filter((sg) => !(opts.micOwner && sg.speaker === "SPEAKER_00"));
+        if (!found.length) return;
+        const json = writeSuggestions(found);
+        patchLocal(entry.id, { aiResults: { [SUGGESTIONS_KEY]: json } }, { ai_results: { [SUGGESTIONS_KEY]: json } });
+        phCapture("speaker_names_suggested", { count: found.length });
+      });
     }
   }, [session, workspace, visibility, profile, patchLocal]);
 
   const cookBlob = useCallback(async (
     blob: Blob, durationSec: number, sessionId: string | null = null,
-    archive: { recordingId?: string; source?: "record" | "upload" } = {},
+    archive: { recordingId?: string; source?: "record" | "upload"; micOwner?: boolean } = {},
   ) => {
     if (cooking) return;
     setCooking(true); setPipeline(null); closeSbMobile(); setStatusKind("info"); setStatus("uploading…");
@@ -535,7 +550,7 @@ export default function InkApp() {
         if (sessionId) void idbDeleteSession(sessionId);
         setRecover(null);
       } else {
-        await finishWithSegments(segments, language);
+        await finishWithSegments(segments, language, { micOwner: archive.micOwner });
         if (sessionId) void idbDeleteSession(sessionId);
         setRecover(null);
         notify("Skriptly — transcript ready", "Your recording is processed and saved.");
@@ -602,7 +617,7 @@ export default function InkApp() {
       }
       if (rec) {
         const { blob, durationSec, stats } = await rec.stop();
-        void cookBlob(blob, durationSec, rec.sessionId, { recordingId: rec.recordingId, source: "record" });
+        void cookBlob(blob, durationSec, rec.sessionId, { recordingId: rec.recordingId, source: "record", micOwner: stats.hasSystemAudio });
         if (session?.user) {
           const { browser, os } = detectBrowserOS();
           phCapture("capture_stats", { ...stats, duration_sec: durationSec });
