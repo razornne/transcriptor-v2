@@ -119,12 +119,12 @@ function LevelMeters({ levelsRef }: { levelsRef: MutableRefObject<{ mic: number;
   }, [levelsRef]);
   return (
     <div className="i-levels" aria-hidden="true">
-      <div className="i-level-row">
-        <span className="i-level-label">Mic</span>
+      <div className="i-level-row mic">
+        <span className="i-level-label">You</span>
         <div className="i-level-bar"><div ref={micRef} className="i-level-fill mic" /></div>
       </div>
-      <div className="i-level-row">
-        <span className="i-level-label">Tab</span>
+      <div className="i-level-row sys">
+        <span className="i-level-label">Call</span>
         <div className="i-level-bar"><div ref={sysRef} className="i-level-fill sys" /></div>
       </div>
     </div>
@@ -158,154 +158,123 @@ export function InputCard({
   onVisibility?: (v: "private" | "workspace") => void;
 }) {
   const [drag, setDrag] = useState(false);
-  const [contextOpen, setContextOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const ctxRef = useRef<HTMLInputElement>(null);
-  const hasContext = context.trim().length > 0;
   const hasPipeline = !!pipeline && Object.keys(pipeline).length > 0;
-
-  useEffect(() => { if (contextOpen) ctxRef.current?.focus(); }, [contextOpen]);
+  const idle = !recording && !cooking;
 
   return (
     <div
-      className={`i-card${drag ? " drag" : ""}`}
-      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      className="i-home"
+      onDragOver={(e) => { e.preventDefault(); if (idle) setDrag(true); }}
       onDragLeave={() => setDrag(false)}
       onDrop={(e) => {
         e.preventDefault(); setDrag(false);
         const f = e.dataTransfer.files?.[0];
-        if (f && !cooking && !recording) onFile(f);
+        if (f && idle) onFile(f);
       }}
     >
-      {/* ── Dropzone body ── */}
-      <div className={`i-dropzone${recording ? " live" : ""}${cooking ? " cooking" : ""}${drag ? " dragging" : ""}`}>
-        {recording ? (
-          <div className="i-dropzone-rec">
-            <span className="i-rec-dot-lg" />
-            <span className="i-dropzone-timer">{formatDuration(recSeconds)}</span>
-            {levelsRef && <LevelMeters levelsRef={levelsRef} />}
-            <span className="i-dropzone-hint-sub">Recording in progress — click Stop when done</span>
-          </div>
-        ) : cooking ? (
-          hasPipeline ? (
+      <input
+        ref={fileRef}
+        type="file"
+        accept="audio/*,video/*"
+        hidden
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }}
+      />
+
+      {recording ? (
+        /* ── идёт запись ── */
+        <div className="i-livecard">
+          <span className="i-livepill"><span className="i-rec-dot" />Recording</span>
+          <div className="i-livetime">{formatDuration(recSeconds)}</div>
+          <p className="i-livehint">Capturing your microphone and the sound from the call.</p>
+          {levelsRef && <LevelMeters levelsRef={levelsRef} />}
+          <button type="button" className="i-stopbtn" onClick={() => onRecToggle()} aria-label="Stop recording">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="5" y="5" width="14" height="14" rx="3" />
+            </svg>
+            Stop and transcribe
+          </button>
+        </div>
+      ) : cooking ? (
+        /* ── обработка ── */
+        <div className="i-livecard i-busycard">
+          {hasPipeline ? (
             <StepTimeline pipeline={pipeline!} chunkProgress={chunkProgress} />
           ) : (
-            <div className="i-dropzone-rec">
-              <span className="i-dropzone-hint-sub">Processing…</span>
-            </div>
-          )
-        ) : (
-          <div className="i-dropzone-idle">
-            <svg
-              className="i-dropzone-icon"
-              width="26" height="26" viewBox="0 0 24 24"
-              fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"
-            >
-              <path d="M9 18V5l12-2v13" />
-              <circle cx="6" cy="18" r="3" />
-              <circle cx="18" cy="16" r="3" />
-            </svg>
-            <span className="i-dropzone-hint">{drag ? "Release to upload" : "Drop audio or video here"}</span>
-            <span className="i-dropzone-hint-sub">or click Record below</span>
-          </div>
-        )}
-      </div>
-
-      {/* ── Control row ── */}
-      <div className="i-ctrl-row">
-        <input
-          ref={fileRef}
-          type="file"
-          accept="audio/*,video/*"
-          hidden
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }}
-        />
-
-        {/* Hero Record button */}
-        <button
-          type="button"
-          className={`i-rec-hero${recording ? " live" : ""}`}
-          disabled={cooking}
-          onClick={() => onRecToggle()}
-          aria-label={recording ? "Stop recording" : "Start recording"}
-        >
-          <span className="i-rec-dot" />
-          {recording
-            ? <><span>Stop</span> · <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatDuration(recSeconds)}</span></>
-            : "Record"
-          }
-        </button>
-
-        {!recording && (
-          <button
-            type="button"
-            className="i-upload-btn"
-            disabled={cooking}
-            onClick={() => fileRef.current?.click()}
-            aria-label="Upload audio or video file"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
-            </svg>
-            Upload
-          </button>
-        )}
-
-        <select
-          className="i-mini"
-          aria-label="Language"
-          value={language}
-          onChange={(e) => onLanguage(e.target.value)}
-          disabled={recording || cooking}
-        >
-          {SUPPORTED_LANGUAGES.map((l) => (
-            <option key={l.value} value={l.value}>{l.label}</option>
-          ))}
-        </select>
-
-        <select
-          className="i-mini"
-          aria-label="Speakers"
-          value={speakers}
-          onChange={(e) => onSpeakers(e.target.value)}
-          disabled={recording || cooking}
-        >
-          <option value="">Spk: auto</option>
-          {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>Spk: {n}</option>)}
-        </select>
-
-        <button
-          type="button"
-          className={`i-ctx-btn${contextOpen || hasContext ? " on" : ""}`}
-          aria-expanded={contextOpen}
-          disabled={recording || cooking}
-          onClick={() => setContextOpen((v) => !v)}
-        >
-          {hasContext ? "Context ·" : "+ Context"}
-        </button>
-      </div>
-
-      {/* ── Context expand row ── */}
-      {contextOpen && (
-        <div className="i-ctx-row">
-          <input
-            ref={ctxRef}
-            className="i-field"
-            value={context}
-            placeholder="Topic, names, terms — helps Whisper"
-            disabled={recording || cooking}
-            onChange={(e) => onContext(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setContextOpen(false);
-              if (e.key === "Enter") { e.preventDefault(); setContextOpen(false); }
-            }}
-            onBlur={() => { if (!context.trim()) setContextOpen(false); }}
-          />
+            <p className="i-livehint" style={{ textAlign: "center", margin: 0 }}>Processing…</p>
+          )}
         </div>
+      ) : (
+        /* ── старт ── */
+        <>
+          <div className="i-home-grid">
+            <section className="i-hcard">
+              <div className="i-hcard-ico" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+                </svg>
+              </div>
+              <div>
+                <h2>Record a call</h2>
+                <p>Your microphone plus the sound from Zoom, Meet, Teams or any other app.</p>
+              </div>
+              <button type="button" className="i-hbtn rec" onClick={() => onRecToggle()} aria-label="Start recording">
+                Start recording
+              </button>
+            </section>
+
+            <section className={`i-hcard upload${drag ? " drag" : ""}`}>
+              <div className="i-hcard-ico" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 16V4m0 0-4 4m4-4 4 4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+                </svg>
+              </div>
+              <div>
+                <h2>{drag ? "Release to upload" : "Upload a file"}</h2>
+                <p>Any audio or video: a call export, a voice memo, a meeting video. Drop it here or choose a file.</p>
+              </div>
+              <button
+                type="button"
+                className="i-hbtn ghost"
+                onClick={() => fileRef.current?.click()}
+                aria-label="Upload audio or video file"
+              >
+                Choose file
+              </button>
+            </section>
+          </div>
+
+          <div className="i-opts">
+            <label className="i-opt">
+              <span className="i-opt-label">Language</span>
+              <select aria-label="Language" value={language} onChange={(e) => onLanguage(e.target.value)}>
+                {SUPPORTED_LANGUAGES.map((l) => (
+                  <option key={l.value} value={l.value}>{l.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="i-opt">
+              <span className="i-opt-label">Speakers</span>
+              <select aria-label="Speakers" value={speakers} onChange={(e) => onSpeakers(e.target.value)}>
+                <option value="">Auto</option>
+                {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+            <label className="i-opt grow">
+              <span className="i-opt-label">Context (optional)</span>
+              <input
+                type="text"
+                value={context}
+                placeholder="Topic, names, terms. Helps recognition"
+                onChange={(e) => onContext(e.target.value)}
+              />
+            </label>
+          </div>
+        </>
       )}
 
       {/* ── Visibility selector — ONLY when user has a real workspace ── */}
-      {inWorkspace && onVisibility && visibility && (
+      {inWorkspace && onVisibility && visibility && idle && (
         <div className="i-vis-row">
           <span className="i-vis-label">Save as</span>
           <div className="i-vis-seg">
@@ -314,7 +283,7 @@ export function InputCard({
               className={`i-vis-btn${visibility === "private" ? " on" : ""}`}
               onClick={() => onVisibility("private")}
             >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
                 <rect x="3" y="11" width="18" height="11" rx="2" />
                 <path d="M7 11V7a5 5 0 0 1 10 0v4" />
               </svg>
@@ -325,7 +294,7 @@ export function InputCard({
               className={`i-vis-btn${visibility === "workspace" ? " on" : ""}`}
               onClick={() => onVisibility("workspace")}
             >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
                 <circle cx="9" cy="7" r="4" />
                 <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />

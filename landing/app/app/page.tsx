@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { sb } from "@/lib/ink/supabase";
-import { DotField, type DotFieldHandle } from "@/components/ink/DotField";
 import { InputCard } from "@/components/ink/InputCard";
 import { InkSidebar } from "@/components/ink/InkSidebar";
 import { LoginScreen } from "@/components/ink/LoginScreen";
@@ -208,7 +207,12 @@ export default function InkApp() {
   useEffect(() => { entriesRef.current = entries; }, [entries]);
   const [autoSummaryIds, setAutoSummaryIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [sbOpen, setSbOpen] = useState(false);
+  // Сайдбар — постоянная колонка на десктопе, выезжающая панель на мобильном (≤860px).
+  // UI рендерится только после определения сессии (см. ниже), поэтому window тут безопасен.
+  const [sbOpen, setSbOpen] = useState(() => typeof window !== "undefined" && window.innerWidth > 860);
+  const closeSbMobile = useCallback(() => {
+    if (window.innerWidth <= 860) setSbOpen(false);
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"account" | "subscription" | "workspace">("account");
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
@@ -289,8 +293,6 @@ export default function InkApp() {
   const [undoEntry, setUndoEntry] = useState<HistoryEntry | null>(null);
   const undoTimerRef = useRef<number>(0);
 
-  const dotsRef = useRef<DotFieldHandle>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const liveRef = useRef<LiveTranscript | null>(null);
   const recTimerRef = useRef<number>(0);
@@ -406,16 +408,15 @@ export default function InkApp() {
   const passLimitGate = useCallback((): boolean => {
     const left = minutesLeft(profile);
     if (left <= 0) {
-      setLimitHit(true); setStatusKind("error"); setStatus("monthly minutes used up"); setSbOpen(false);
+      setLimitHit(true); setStatusKind("error"); setStatus("monthly minutes used up"); closeSbMobile();
       return false;
     }
     if (left <= 30 && !window.confirm(`Only ~${Math.round(left)} min left on your plan. Start anyway?`)) return false;
     return true;
-  }, [profile]);
+  }, [profile, closeSbMobile]);
 
   const finishWithSegments = useCallback(async (segments: Segment[], lang: string) => {
     if (!session?.user) return;
-    dotsRef.current?.wave(1.8);
     const title = autoTitle(segments);
     const entry = await insertEntry({
       user_id: session.user.id, title, title_is_auto: true,
@@ -454,8 +455,7 @@ export default function InkApp() {
     archive: { recordingId?: string; source?: "record" | "upload" } = {},
   ) => {
     if (cooking) return;
-    setCooking(true); setPipeline(null); setSbOpen(false); setStatusKind("info"); setStatus("uploading…");
-    dotsRef.current?.wave(0.8);
+    setCooking(true); setPipeline(null); closeSbMobile(); setStatusKind("info"); setStatus("uploading…");
 
     const token: CancelToken = { cancelled: false, jobId: null };
     cancelRef.current = token;
@@ -467,13 +467,13 @@ export default function InkApp() {
       // Honest pipeline timeline (rendered inside InputCard) — drives the radar too.
       if (pr.pipeline_steps) setPipeline(pr.pipeline_steps);
       if (pr.chunks_total) {
-        if ((pr.chunks_done || 0) > lastChunks) { lastChunks = pr.chunks_done || 0; dotsRef.current?.wave(1); }
+        if ((pr.chunks_done || 0) > lastChunks) lastChunks = pr.chunks_done || 0;
         setChunkProgress({ done: pr.chunks_done || 0, total: pr.chunks_total });
         setStatus(`chunk ${pr.chunks_done || 0}/${pr.chunks_total} · transcribing…`);
       } else {
         setChunkProgress(null);
         if (pr.stage && pr.stage !== lastStage) {
-          lastStage = pr.stage; dotsRef.current?.wave(1);
+          lastStage = pr.stage;
           setStatus(STAGE_LABELS[pr.stage] || "");
         }
       }
@@ -722,7 +722,7 @@ export default function InkApp() {
         applyThemeSmooth(current === "light" ? "dark" : "light");
         return;
       }
-      if (e.key === "Escape") { setSbOpen(false); setSettingsOpen(false); setHotkeysOpen(false); return; }
+      if (e.key === "Escape") { closeSbMobile(); setSettingsOpen(false); setHotkeysOpen(false); return; }
 
       if (isInput) return;
 
@@ -769,12 +769,11 @@ export default function InkApp() {
   if (!session) return <LoginScreen />;
 
   const plan = profile?.plan || "free";
-  const dotMode = settingsOpen || view === "OUTPUT" ? "reading" : "live";
   // workspace?.id is the reliable check: API returns non-null object with empty fields when no workspace
   const inWorkspace = !!(workspace?.id);
 
   return (
-    <div className={`ink-root${sbOpen ? " sb-open" : ""}${team ? " team" : ""}`}>
+    <div className={`ink-root i-shell${sbOpen ? " sb-open" : ""}${team ? " team" : ""}`}>
       <InkSidebar
         open={sbOpen}
         team={team}
@@ -787,18 +786,21 @@ export default function InkApp() {
         onCreateProject={handleCreateProject}
         onDeleteProject={handleDeleteProject}
         onMoveEntry={handleMoveEntry}
-        onClose={() => setSbOpen(false)}
+        onClose={closeSbMobile}
+        onToggle={() => setSbOpen((v) => !v)}
+        onNew={() => setActiveId(null)}
+        email={session.user?.email || ""}
         onTeamChange={setTeam}
         onSelect={(id) => setActiveId(id)}
         onDelete={handleDelete}
-        onSignOut={() => { void sb.auth.signOut(); }}
         onSettings={() => setSettingsOpen(true)}
       />
 
+      <div className="i-main">
       <header className="i-topbar">
         <button
           type="button"
-          className="i-iconbtn"
+          className="i-iconbtn i-sbtoggle"
           aria-label="Open sidebar (⌘\\)"
           onClick={() => setSbOpen((v) => !v)}
         >
@@ -818,25 +820,13 @@ export default function InkApp() {
               <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h.01M12 13h.01M16 13h.01M6 17h12" />
             </svg>
           </button>
-          <button
-            type="button"
-            className="i-iconbtn"
-            aria-label="Settings (⌘,)"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-            </svg>
-          </button>
           <InkThemeToggle />
         </div>
       </header>
 
       <main className="i-hero">
-        <DotField ref={dotsRef} anchorRef={stageRef} mode={dotMode} processing={cooking} />
         <div className="i-center">
-          <div ref={stageRef}>
+          <div className="i-stage">
             {view === "OUTPUT" && activeEntry ? (
               <>
                 <button type="button" className="i-back" onClick={() => setActiveId(null)}>
@@ -959,8 +949,9 @@ export default function InkApp() {
           </div>
         </div>
       </main>
+      </div>
 
-      {/* ── Settings Modal ── */}
+      {/* ── Settings page ── */}
       {settingsOpen && (
         <SettingsModal
           session={session}

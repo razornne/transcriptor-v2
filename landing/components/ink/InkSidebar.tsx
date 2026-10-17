@@ -8,7 +8,7 @@ const DICT = {
     personal: "Personal", team: "Team", search: "Search…",
     noShared: "No shared recordings yet — team items appear here.",
     noFound: "Nothing found.", noRecs: "Your recordings will appear here.",
-    settings: "Settings", signOut: "Sign out",
+    settings: "Settings", signOut: "Sign out", newRec: "New recording", collapse: "Collapse sidebar",
     today: "Today", yesterday: "Yesterday", thisWeek: "This week", earlier: "Earlier",
     untitled: "Untitled",
     newProject: "+ New project",
@@ -19,7 +19,7 @@ const DICT = {
     personal: "Особисте", team: "Команда", search: "Пошук…",
     noShared: "Немає спільних записів — командні матеріали тут.",
     noFound: "Нічого не знайдено.", noRecs: "Тут з'являться ваші записи.",
-    settings: "Налаштування", signOut: "Вийти",
+    settings: "Налаштування", signOut: "Вийти", newRec: "Новий запис", collapse: "Згорнути панель",
     today: "Сьогодні", yesterday: "Вчора", thisWeek: "Цього тижня", earlier: "Раніше",
     untitled: "Без назви",
     newProject: "+ Новий проект",
@@ -57,8 +57,8 @@ function groupOf(iso: string): string {
 export function InkSidebar({
   open, team, entries, activeId, profile, hasWorkspace,
   projects, onCreateProject, onDeleteProject, onMoveEntry,
-  onClose, onTeamChange, onSelect, onDelete, onSignOut, onSettings,
-  uiLang = "en",
+  onClose, onToggle, onNew, onTeamChange, onSelect, onDelete, onSettings,
+  email, uiLang = "en",
 }: {
   open: boolean;
   team: boolean;
@@ -70,12 +70,17 @@ export function InkSidebar({
   onCreateProject: (name: string) => void;
   onDeleteProject: (id: string) => void;
   onMoveEntry: (entryId: string, targetProjectId: string | null) => void;
+  /** Закрыть выезжающую панель (только мобильный) */
   onClose: () => void;
+  /** Свернуть/развернуть колонку (десктоп) */
+  onToggle: () => void;
+  /** Перейти на пустой экран «новая запись» */
+  onNew: () => void;
   onTeamChange: (team: boolean) => void;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
-  onSignOut: () => void;
   onSettings?: () => void;
+  email: string;
   uiLang?: Lang;
 }) {
   const [q, setQ] = useState("");
@@ -271,6 +276,25 @@ export function InkSidebar({
       <div className="i-scrim" onClick={onClose} aria-hidden="true" />
       <aside className="i-sb" aria-hidden={!open} aria-label="Workspace and history">
 
+        <div className="i-sb-head">
+          <div className="i-brand">
+            <span className="i-brand-mark" aria-hidden="true">S</span>
+            <span className="i-brand-name">Skriptly</span>
+          </div>
+          <button type="button" className="i-flatbtn" aria-label={s.collapse} onClick={onToggle}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" />
+            </svg>
+          </button>
+        </div>
+
+        <button type="button" className="i-newrec" onClick={() => { onNew(); onClose(); }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          {s.newRec}
+        </button>
+
         {/* Personal / Team toggle */}
         {hasWorkspace && (
           <div className="i-seg-toggle" role="tablist">
@@ -285,8 +309,8 @@ export function InkSidebar({
 
         {/* Search */}
         <div className={`i-search${hasWorkspace ? "" : " i-search-top"}`}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
           </svg>
           <input
             value={q}
@@ -404,42 +428,37 @@ export function InkSidebar({
         </div>
 
         <div className="i-sb-bottom">
-          <div className="i-sb-actions">
+          <div className="i-acct">
+            <div className="i-acct-av" aria-hidden="true">{(email[0] || "?").toUpperCase()}</div>
+            <div className="i-acct-text">
+              <div className="i-acct-name" title={email}>{email || "…"}</div>
+              <div className="i-acct-plan">{profile ? `${profile.plan} plan` : "…"}</div>
+            </div>
             {onSettings && (
               <button
                 type="button"
-                className="i-item i-sb-settings"
+                className="i-flatbtn"
                 onClick={() => { onSettings(); onClose(); }}
-                aria-label="Open settings"
+                aria-label={s.settings}
+                title={s.settings}
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 7h9M16 7h5M3 17h5M12 17h9" /><circle cx="14" cy="7" r="2" /><circle cx="10" cy="17" r="2" />
                 </svg>
-                {s.settings}
               </button>
             )}
-            <button type="button" className="i-item" onClick={onSignOut}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-              </svg>
-              {s.signOut}
-            </button>
           </div>
           <div
             className="i-usage"
-            title={profile
-              ? `${Math.round(profile.minutes_used)} / ${profile.minutes_limit} min · ${profile.plan}`
-              : ""}
+            title={profile ? `${Math.round(profile.minutes_used)} / ${profile.minutes_limit} min · ${profile.plan}` : ""}
           >
-            {Array.from({ length: 10 }, (_, k) => (
-              <span key={k} className={`i-usage-dot${k < Math.round(usedRatio * 10) ? " fill" : ""}`} />
-            ))}
-            <span className="i-usage-label">
-              {profile
-                ? `${(profile.minutes_used / 60).toFixed(1)} / ${Math.round(profile.minutes_limit / 60)}h · ${profile.plan}`
-                : "…"}
-            </span>
+            <div className="i-usage-row">
+              <span>Call minutes</span>
+              <span>{profile ? `${Math.round(profile.minutes_used)} / ${Math.round(profile.minutes_limit)}` : "…"}</span>
+            </div>
+            <div className="i-usage-track">
+              <div className="i-usage-fill" style={{ width: `${Math.round(Math.min(1, usedRatio) * 100)}%` }} />
+            </div>
           </div>
         </div>
       </aside>

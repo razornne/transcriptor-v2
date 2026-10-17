@@ -25,6 +25,7 @@ type Lang = "en" | "ua";
 const DICT = {
   en: {
     title: "Settings",
+    back: "Back to recordings",
     nav: {
       account: "Account", subscription: "Subscription", workspace: "Workspace",
       integrations: "Integrations", settings: "Settings",
@@ -93,6 +94,7 @@ const DICT = {
   },
   ua: {
     title: "Налаштування",
+    back: "Назад до записів",
     nav: {
       account: "Акаунт", subscription: "Підписка", workspace: "Воркспейс",
       integrations: "Інтеграції", settings: "Налаштування",
@@ -220,30 +222,6 @@ function Toggle({
       <span className="i-toggle-thumb" />
     </label>
   );
-}
-
-function NavIcon({ id }: { id: NavSection }) {
-  const p = {
-    width: 14, height: 14, viewBox: "0 0 24 24",
-    fill: "none", stroke: "currentColor", strokeWidth: 1.7,
-    strokeLinecap: "round" as const, strokeLinejoin: "round" as const,
-  };
-  switch (id) {
-    case "account":
-      return <svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
-    case "subscription":
-      return <svg {...p}><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>;
-    case "workspace":
-      return <svg {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
-    case "integrations":
-      return <svg {...p}><path d="M10.59 13.41a2 2 0 0 0 2.83 0l3.59-3.59a2 2 0 0 0 0-2.83l-1-1a2 2 0 0 0-2.83 0l-.59.59"/><path d="M13.41 10.59a2 2 0 0 0-2.83 0l-3.59 3.59a2 2 0 0 0 0 2.83l1 1a2 2 0 0 0 2.83 0l.59-.59"/></svg>;
-    case "settings":
-      return <svg {...p}><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>;
-    case "invite":
-      return <svg {...p}><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>;
-    case "danger":
-      return <svg {...p}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
-  }
 }
 
 const NAV_ORDER: NavSection[] = ["account", "subscription", "workspace", "integrations", "settings", "invite", "danger"];
@@ -513,7 +491,6 @@ export function SettingsModal({
   const used = profile?.minutes_used || 0;
   const limit = profile?.minutes_limit || 60;
   const ratio = limit > 0 ? Math.min(1, used / limit) : 0;
-  const filledDots = Math.round(ratio * 16);
 
   // Helper: is the given plan an upgrade from current?
   const planIdx = (id: string) => PLAN_ORDER.indexOf(id as PlanId);
@@ -528,25 +505,21 @@ export function SettingsModal({
     <div
       ref={backdropRef}
       className="i-modal-back"
-      onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}
     >
       <div className="i-modal i-modal-wide" role="dialog" aria-modal="true" aria-label={t.title}>
 
-        {/* ── Header ── */}
-        <div className="i-modal-header">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
-          </svg>
-          <span className="i-modal-title">{t.title}</span>
-          <button type="button" className="i-modal-close" onClick={onClose} aria-label="Close">✕</button>
-        </div>
-
-        {/* ── Two-column body ── */}
+        {/* ── Two-column page: nav + content ── */}
         <div className="i-modal-2col">
 
           {/* Left nav */}
           <nav className="i-modal-nav" aria-label="Settings navigation">
+            <button type="button" className="i-backlink" onClick={onClose}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m15 6-6 6 6 6" />
+              </svg>
+              {t.back}
+            </button>
+            <p className="i-modal-navtitle">{t.title}</p>
             {NAV_ORDER.map((id) => (
               <button
                 key={id}
@@ -554,7 +527,6 @@ export function SettingsModal({
                 className={`i-modal-nav-item${nav === id ? " on" : ""}${id === "danger" ? " danger" : ""}`}
                 onClick={() => setNav(id)}
               >
-                <NavIcon id={id} />
                 {t.nav[id]}
               </button>
             ))}
@@ -579,9 +551,9 @@ export function SettingsModal({
                   <div className="i-mrow" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
                     <span className="i-mrow-label">{t.usageMonth}</span>
                     <div className="i-usage-meter">
-                      {Array.from({ length: 16 }, (_, k) => (
-                        <span key={k} className={`i-um-dot${k < filledDots ? " fill" : ""}`} />
-                      ))}
+                      <div className="i-usage-track">
+                        <div className="i-usage-fill" style={{ width: `${Math.round(ratio * 100)}%` }} />
+                      </div>
                       <span className="i-um-label">
                         {Math.round(used / 60 * 10) / 10} / {Math.round(limit / 60)}h
                         {profile?.minutes_pooled ? ` · ${t.teamPool}` : ""}
