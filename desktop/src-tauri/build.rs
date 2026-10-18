@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "forget_token",
     "save_settings",
     "open_log_folder",
+    "check_for_update",
     "set_hotkey",
     "hotkey_label",
     "reset_hotkey",

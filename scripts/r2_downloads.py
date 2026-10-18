@@ -4,9 +4,12 @@
   modal run scripts/r2_downloads.py::check
       — показывает правила жизненного цикла бакета. ВАЖНО: правило «удалять через 90 дней»
         должно быть ограничено префиксом recordings/, иначе оно удалит и установщик.
-  modal run scripts/r2_downloads.py::upload --path desktop/src-tauri/target/release/bundle/nsis/Skriptly_0.6.0_x64-setup.exe --version 0.6.0
+  modal run scripts/r2_downloads.py::upload --path desktop/src-tauri/target/release/bundle/nsis/Skriptly_0.7.0_x64-setup.exe --version 0.7.0 [--notes "что нового"]
       — кладёт файл как downloads/windows/Skriptly-setup.exe («последний», его отдаёт сайт)
-        и как downloads/windows/Skriptly_<версия>_x64-setup.exe (архив версий).
+        и как downloads/windows/Skriptly_<версия>_x64-setup.exe (архив версий), а рядом
+        downloads/windows/latest.json — манифест автообновления (версия + подпись из <exe>.sig).
+        Подпись появляется при сборке с TAURI_SIGNING_PRIVATE_KEY_PATH=C:Users<you>.tauriskriptly-updater.key
+        (без неё установленные приложения обновить не получится — файл .sig не создаётся).
 Повторный запуск безопасен: объекты перезаписываются.
 """
 import hashlib
@@ -46,13 +49,21 @@ def lifecycle() -> dict:
 
 
 @app.function(image=image, secrets=[secret], timeout=300)
-def put_installer(data: bytes, version: str) -> dict:
+def put_installer(data: bytes, version: str, signature: str = "", notes: str = "") -> dict:
     bucket = os.environ["R2_BUCKET"]
     c = _client()
     meta = {"version": version, "sha256": hashlib.sha256(data).hexdigest()}
     keys = ["downloads/windows/Skriptly-setup.exe", f"downloads/windows/Skriptly_{version}_x64-setup.exe"]
     for k in keys:
         c.put_object(Bucket=bucket, Key=k, Body=data, ContentType="application/vnd.microsoft.portable-executable", Metadata=meta)
+    if signature:
+        import json
+        from datetime import datetime, timezone
+        manifest = {"version": version, "notes": notes, "signature": signature,
+                    "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        c.put_object(Bucket=bucket, Key="downloads/windows/latest.json", Body=json.dumps(manifest).encode(),
+                     ContentType="application/json")
+        keys.append("downloads/windows/latest.json")
     return {"keys": keys, "size": len(data), **meta}
 
 
@@ -70,8 +81,33 @@ def check():
 
 
 @app.local_entrypoint()
-def upload(path: str, version: str):
+def upload(path: str, version: str, notes: str = ""):
     with open(path, "rb") as f:
         data = f.read()
+    signature = ""
+    try:
+        with open(path + ".sig", "r", encoding="utf-8") as f:
+            signature = f.read().strip()
+    except FileNotFoundError:
+        print("WARNING: нет файла .sig — манифест автообновления не обновлён (собирали без TAURI_SIGNING_PRIVATE_KEY_PATH?)")
     print(f"uploading {path} ({len(data) / 1048576:.1f} MB) as v{version} …")
-    print(put_installer.remote(data, version))
+    print(put_installer.remote(data, version, signature, notes))
+
+
+@app.function(image=image, secrets=[secret])
+def put_manifest(version: str, signature: str, notes: str = "") -> dict:
+    import json
+    from datetime import datetime, timezone
+    manifest = {"version": version, "notes": notes, "signature": signature,
+                "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    _client().put_object(Bucket=os.environ["R2_BUCKET"], Key="downloads/windows/latest.json",
+                         Body=json.dumps(manifest).encode(), ContentType="application/json")
+    return manifest
+
+
+@app.local_entrypoint()
+def manifest(sig_path: str, version: str, notes: str = ""):
+    """Переписать только манифест автообновления (откат или проверка): подпись берётся из <installer>.sig."""
+    with open(sig_path, "r", encoding="utf-8") as f:
+        signature = f.read().strip()
+    print(put_manifest.remote(version, signature, notes))

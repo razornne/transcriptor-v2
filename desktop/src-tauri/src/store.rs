@@ -26,6 +26,8 @@ pub struct Settings {
     pub instant_start: bool,
     /// Ставить играющее медиа (YouTube, музыка) на паузу на время диктовки.
     pub pause_media: bool,
+    /// После вставки смотреть, поправил ли юзер слово, и учить словарь на этих правках (learn.rs).
+    pub learn_from_edits: bool,
 }
 
 pub const LANGUAGES: [&str; 5] = ["en", "uk", "ru", "pl", "cs"];
@@ -61,6 +63,7 @@ impl Default for Settings {
             show_bar: true,
             instant_start: false,
             pause_media: true,
+            learn_from_edits: true,
         }
     }
 }

@@ -172,6 +172,7 @@ pub fn start(
 /// Звук компьютера (всё, что играет в колонки/наушники по умолчанию): WASAPI loopback —
 /// input-поток на устройстве вывода. Пока ничего не играет, данных нет вовсе —
 /// тишину досыпает микшер записи (recorder.rs).
+#[cfg(windows)]
 pub fn start_loopback(tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> Result<Capture, String> {
     open(
         Box::new(|| {
@@ -183,6 +184,12 @@ pub fn start_loopback(tx: UnboundedSender<Vec<i16>>, level: Arc<AtomicU32>) -> R
         level,
         Arc::new(AtomicBool::new(false)),
     )
+}
+
+/// macOS: звук системы только через ScreenCaptureKit (platform/mac) — пока не реализовано.
+#[cfg(not(windows))]
+pub fn start_loopback(_tx: UnboundedSender<Vec<i16>>, _level: Arc<AtomicU32>) -> Result<Capture, String> {
+    Err("Recording the computer's sound is not available on this system yet".into())
 }
 
 #[cfg(test)]

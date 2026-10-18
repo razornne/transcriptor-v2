@@ -126,6 +126,16 @@ pub fn dictation_exhausted(v: &Value) -> bool {
 }
 
 /// Чистка текста LLM. Любая ошибка → исходный текст (вставка важнее полировки).
+/// «Вставили → юзер поправил»: сервер найдёт пары для личного словаря. Тихо, без повторов.
+pub async fn learn(state: &AppState, original: &str, edited: &str, language: &str) -> Result<(), ApiError> {
+    let r = post(state, "/api/dictation/learn", json!({ "original": original, "edited": edited, "language": language }),
+                 Duration::from_secs(10)).await?;
+    if !r.status().is_success() {
+        return Err(ApiError::Other(format!("HTTP {}", r.status())));
+    }
+    Ok(())
+}
+
 pub async fn cleanup(state: &AppState, text: &str, language: &str) -> String {
     let res = post(state, "/api/dictation/cleanup", json!({ "text": text, "language": language }),
                    Duration::from_secs(6)).await;

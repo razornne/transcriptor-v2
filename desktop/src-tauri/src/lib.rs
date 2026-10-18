@@ -12,16 +12,18 @@ mod auth;
 mod config;
 mod dictation;
 mod hotkey;
+mod learn;
 #[macro_use]
 mod log;
-mod media;
 mod mic;
 mod overlay;
 mod paste;
+mod platform;
 mod recorder;
 mod state;
 mod stt;
 mod store;
+mod updater;
 
 use serde_json::{json, Value};
 use state::AppState;
@@ -84,8 +86,9 @@ fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
         .center()
         .visible(false)
         .initialization_script(&format!(
-            "window.__SKRIPTLY_DESKTOP__ = {{ version: '{}', platform: 'windows' }};",
-            env!("CARGO_PKG_VERSION")
+            "window.__SKRIPTLY_DESKTOP__ = {{ version: '{}', platform: '{}' }};",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS
         ))
         .on_navigation(|url| {
             if allowed_nav(url) {
@@ -412,6 +415,14 @@ async fn save_settings(app: AppHandle, state: State<'_, AppStateArc>, settings: 
     Ok(())
 }
 
+/// Кнопка «Check for updates» в настройках. Если есть новая версия и мы не заняты — ставит её
+/// (приложение закроется и откроется заново), иначе отвечает, что версия последняя или сейчас занято.
+#[tauri::command]
+async fn check_for_update(app: AppHandle, state: State<'_, AppStateArc>) -> Result<Value, String> {
+    let outcome = updater::check(&app, &state).await?;
+    Ok(updater::outcome_json(&outcome))
+}
+
 #[tauri::command]
 fn open_log_folder(state: State<'_, AppStateArc>) {
     let _ = tauri_plugin_opener::open_path(state.store.dir().to_string_lossy().to_string(), None::<&str>);
@@ -465,10 +476,8 @@ fn build_tray(app: &tauri::App, state: AppStateArc) -> tauri::Result<()> {
     Ok(())
 }
 
-/// %APPDATA%\io.skriptly.desktop — то же, что app_config_dir(), но доступно до setup().
 fn config_dir() -> std::path::PathBuf {
-    let base = std::env::var_os("APPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    base.join("io.skriptly.desktop")
+    platform::config_base()
 }
 
 pub fn run() {
@@ -478,14 +487,18 @@ pub fn run() {
     crate::log!("[app] Skriptly {} starting", env!("CARGO_PKG_VERSION"));
     let state: AppStateArc = Arc::new(AppState::new(store));
 
-    tauri::Builder::default()
-        .manage(state.clone())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+    let mut builder = tauri::Builder::default().manage(state.clone());
+    // Второй экземпляр обычно не нужен; для автотестов рядом с установленным приложением — SKRIPTLY_ALLOW_SECOND_INSTANCE.
+    if std::env::var_os("SKRIPTLY_ALLOW_SECOND_INSTANCE").is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)));
+    }
+    builder
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
         ))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             build_main_window(app)?;
             overlay::setup(app.handle(), state.settings().show_bar);
@@ -508,6 +521,7 @@ pub fn run() {
             dictation::spawn(app.handle().clone(), state.clone(), rx);
 
             apply_autostart(app.handle(), settings.autostart);
+            updater::spawn(app.handle().clone(), state.clone());
 
             // Автозапуск с Windows (--hidden) — тихо в трей; ручной запуск или
             // не залогинен — показываем окно.
@@ -559,6 +573,7 @@ pub fn run() {
             forget_token,
             save_settings,
             open_log_folder,
+            check_for_update,
             set_hotkey,
             hotkey_label,
             reset_hotkey,

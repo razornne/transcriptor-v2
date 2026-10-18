@@ -199,7 +199,7 @@ web_image = (
         "stripe>=12",  # API 2025-03-31.basil+ — нужна для managed_payments в Checkout
         "boto3",  # S3 API клиента для архива записей в Cloudflare R2
     )
-    .add_local_python_source("app", "soniox", "speaker_names")  # soniox — ключи живого транскрипта; speaker_names — подсказки имён
+    .add_local_python_source("app", "soniox", "speaker_names", "vocab_learn")  # soniox — ключи живого транскрипта; speaker_names — подсказки имён
     # Cutover (2026-06-14): фронт переехал на Next.js /app, GET / теперь 301-редирект.
     # templates/index.html заархивирован в legacy/ — Flask его больше не рендерит,
     # поэтому каталог templates/ не монтируется (его и нет в корне).
@@ -226,7 +226,7 @@ soniox_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
     .pip_install("soundfile", "numpy", "requests")
-    .add_local_python_source("merger", "channels", "soniox", "speakers")
+    .add_local_python_source("merger", "channels", "soniox", "speakers", "silence_trim")
 )
 
 # CPU-образ голосовых эмбеддингов для переразметки спикеров Soniox (speakers.py).
@@ -365,6 +365,33 @@ def _encode_for_stt(src_path: str, pan: str | None) -> str:
           ["-ac", "1", "-c:a", "libopus", "-b:a", "64k", out]
     subprocess.run(cmd, check=True, capture_output=True)
     return out
+
+
+def _encode_mic_trimmed(src_path: str, pan: str):
+    """Дорожка микрофона без долгих пауз (см. silence_trim.py): Soniox берёт деньги за длительность,
+    а микрофон в звонке большую часть времени молчит. Возвращает (путь к opus, отрезки) или
+    (None, None), если резать нечего. Любая ошибка — вызывающий берёт обычную дорожку."""
+    import silence_trim as st
+
+    wav = _tmp_path(".wav")
+    trimmed = _tmp_path(".wav")
+    try:
+        subprocess.run(["ffmpeg", "-y", "-i", src_path, "-af", pan, "-ac", "1", "-c:a", "pcm_s16le", wav],
+                       check=True, capture_output=True)
+        spans, total = st.analyse(wav)
+        if not spans:
+            return None, None
+        st.write_trimmed(wav, spans, trimmed)
+        kept = st.trimmed_duration(spans)
+        print(f"[trim] mic track {total / 60:.1f} -> {kept / 60:.1f} min ({100 * (1 - kept / total):.0f}% saved, "
+              f"{len(spans)} spans)", flush=True)
+        return _encode_for_stt(trimmed, None), spans
+    finally:
+        for p in (wav, trimmed):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 # Контейнеры, которые Soniox распознаёт сам — моно-файл в них шлём без перекодирования
@@ -2200,6 +2227,16 @@ def transcribe_soniox(
         else:
             tracks = [_encode_for_stt(src, pan) for pan in _CHANNEL_PANS[mode]]
             paths += tracks
+        mic_spans = None
+        if mode == "dual" and os.environ.get("MIC_TRIM", "on") != "off":
+            try:
+                trimmed_track, mic_spans = _encode_mic_trimmed(src, _CHANNEL_PANS["dual"][0])
+                if trimmed_track:
+                    paths.append(trimmed_track)
+                    tracks[0] = trimmed_track
+            except Exception as e:
+                print(f"[trim] skipped: {e}", flush=True)
+                mic_spans = None
         pp.done("audio_split")
 
         pp.start("transcription")
@@ -2226,6 +2263,9 @@ def transcribe_soniox(
                 return transcribe_long.remote(*args)
             return Transcriptor().transcribe_full.remote(*args)
         words = [soniox.tokens_to_words(t) for t in tokens]
+        if mic_spans:
+            import silence_trim
+            words[0] = silence_trim.remap_words(words[0], mic_spans)  # время укороченной дорожки → исходное
         pp.done("transcription")
         if not any(words):
             return {"segments": [], "vocab_additions": [], "channel_mode": mode, "stt": "soniox"}

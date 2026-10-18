@@ -9,7 +9,7 @@ import { Select } from "./Select";
 
 type AppSettings = {
   languages: string[]; cleanup: boolean; mic: string | null; autostart: boolean;
-  show_bar: boolean; instant_start: boolean; pause_media: boolean;
+  show_bar: boolean; instant_start: boolean; pause_media: boolean; learn_from_edits: boolean;
   [k: string]: unknown;
 };
 type State = {
@@ -67,6 +67,21 @@ export function DesktopSettings() {
   const [err, setErr] = useState("");
   const [cap, setCap] = useState<Kind | null>(null);
   const [live, setLive] = useState("");
+  const [upd, setUpd] = useState<string>("");
+
+  const checkUpdate = useCallback(async () => {
+    setUpd("Checking…");
+    try {
+      const r = await desktopInvoke<{ status: string; version?: string }>("check_for_update");
+      setUpd(
+        r.status === "latest" ? "You have the latest version."
+        : r.status === "busy" ? `v${r.version} is available. It installs after the current dictation or recording.`
+        : `Installing v${r.version}, the app will restart…`,
+      );
+    } catch {
+      setUpd("Couldn't check for updates. Try again later.");
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try { setSt(await desktopInvoke<State>("get_state")); }
@@ -218,6 +233,13 @@ export function DesktopSettings() {
         </div>
         <div className="i-mrow">
           <div style={{ flex: 1 }}>
+            <label className="i-mrow-label" htmlFor="d-learn">Learn from my corrections</label>
+            <div className="i-mrow-sub">If you fix a word right after dictating, Skriptly remembers it. Password fields are never read</div>
+          </div>
+          <Toggle id="d-learn" checked={s.learn_from_edits !== false} onChange={(v) => void save({ learn_from_edits: v })} />
+        </div>
+        <div className="i-mrow">
+          <div style={{ flex: 1 }}>
             <label className="i-mrow-label" htmlFor="d-bar">Show dictation bar</label>
             <div className="i-mrow-sub">A small pill at the bottom of the screen</div>
           </div>
@@ -253,9 +275,12 @@ export function DesktopSettings() {
       </div>
 
       <p className="i-mrow-sub" style={{ marginTop: 22 }}>
-        Skriptly for Windows v{st.version} ·{" "}
+        Skriptly desktop v{st.version} ·{" "}
+        <button type="button" className="i-textbtn" onClick={() => void checkUpdate()}>Check for updates</button>
+        {" · "}
         <button type="button" className="i-textbtn" onClick={() => void desktopInvoke("open_log_folder")}>Open logs folder</button>
       </p>
+      {upd && <p className="i-mrow-sub" role="status">{upd}</p>}
     </div>
   );
 }

@@ -1,11 +1,8 @@
 // Вставка текста в активное окно: буфер обмена + Ctrl+V, потом возвращаем
 // юзеру его прежний буфер (текст или картинку). Печать посимвольно
 // (KEYEVENTF_UNICODE) медленная на длинном тексте и ломается в части приложений.
-use crate::hotkey::{key_input, modifiers_held, send_keys};
+use crate::platform::keyboard::{modifiers_held, send_paste};
 use std::time::{Duration, Instant};
-
-const VK_CONTROL: u16 = 0x11;
-const VK_V: u16 = 0x56;
 
 enum Saved {
     Text(String),
@@ -29,12 +26,7 @@ pub fn paste(text: &str) -> Result<(), String> {
     };
     cb.set_text(text.to_string()).map_err(|e| format!("clipboard: {e}"))?;
     std::thread::sleep(Duration::from_millis(30));
-    send_keys(&[
-        key_input(VK_CONTROL, false),
-        key_input(VK_V, false),
-        key_input(VK_V, true),
-        key_input(VK_CONTROL, true),
-    ]);
+    send_paste()?;
     // Приложение читает буфер асинхронно — не возвращаем старое содержимое слишком рано.
     std::thread::sleep(Duration::from_millis(400));
     match saved {

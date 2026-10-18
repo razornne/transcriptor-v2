@@ -18,6 +18,7 @@
     "allow-forget-token",
     "allow-save-settings",
     "allow-open-log-folder",
+    "allow-check-for-update",
     "allow-set-hotkey",
     "allow-hotkey-label",
     "allow-reset-hotkey",

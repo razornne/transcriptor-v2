@@ -12,7 +12,8 @@
 use crate::api::{self, ApiError};
 use crate::hotkey::{HotkeyEvent, ACTIVE};
 use crate::state::AppState;
-use crate::{media, mic, overlay, paste, stt};
+use crate::platform::media;
+use crate::{learn, mic, overlay, paste, stt};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -304,6 +305,10 @@ fn finish(
                 report(&state, &app, r.audio_seconds);
                 match pasted {
                     Ok(Ok(())) => {
+                        if settings.learn_from_edits {
+                            let lang = if settings.language.is_empty() { None } else { Some(settings.language.clone()) };
+                            learn::watch(state.clone(), text.clone(), lang);
+                        }
                         flash(&app, "done", "", 700);
                         Internal::Finished
                     }

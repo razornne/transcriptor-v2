@@ -1127,7 +1127,7 @@ def _require_jwt():
         return None
 
     path = request.path
-    if not path.startswith("/api/") or path in _PUBLIC_API_PATHS:
+    if not path.startswith("/api/") or path in _PUBLIC_API_PATHS or path.startswith("/api/desktop/update/"):
         return None
 
     # Если SUPABASE_URL не задан — auth не настроен. В локальной разработке
@@ -3756,6 +3756,21 @@ def dictation_cleanup_endpoint():
     return jsonify({"text": cleaned if ok else raw, "cleaned": ok})
 
 
+@app.route("/api/dictation/learn", methods=["POST"])
+def dictation_learn_endpoint():
+    """Body: {original, edited, language?}. Приложение сравнило вставленный текст с тем, что юзер
+    оставил в поле после правок; пары wrong→right (vocab_learn) идут в личный словарь так же, как
+    пары из Gemini-коррекции. Присланное не логируем и не храним, кроме найденных пар."""
+    import vocab_learn
+    body = request.get_json(silent=True) or {}
+    pairs = vocab_learn.pairs_from_edit(str(body.get("original") or ""), str(body.get("edited") or ""))
+    if pairs and SUPABASE_SERVICE_ROLE_KEY and g.user_id:
+        lang = str(body.get("language") or "")[:8] or None
+        _save_vocabulary_additions(g.user_id, pairs, lang)
+        print(f"[dictation] learned {len(pairs)} pair(s) from user edit", flush=True)
+    return jsonify({"learned": pairs})
+
+
 # ── Публичные эндпоинты лендинга: скачивание приложения и вейтлист ─────────────
 # Установщик лежит в R2 (тот же бакет, префикс downloads/): ссылка skriptly.io/api/download/windows
 # каждый раз отдаёт 302 на короткоживущий presigned URL, так что бакет остаётся приватным,
@@ -3818,6 +3833,42 @@ def download_windows_info():
     resp = jsonify({"available": True, "version": (head.get("Metadata") or {}).get("version", ""),
                     "size_mb": round(head["ContentLength"] / 1048576, 1)})
     resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
+
+
+def _ver_tuple(v: str) -> tuple:
+    try:
+        return tuple(int(p) for p in str(v).strip().lstrip("v").split("-")[0].split("."))
+    except ValueError:
+        return (0,)
+
+
+@app.route("/api/desktop/update/<target>/<arch>/<current>")
+def desktop_update(target, arch, current):
+    """Манифест автообновления для Tauri-приложения (публичный). Манифест лежит в R2
+    (downloads/windows/latest.json: version, notes, pub_date, signature — его пишет
+    scripts/r2_downloads.py вместе с установщиком); ссылка на файл — наш /api/download/windows.
+    204 — обновлений нет."""
+    if target != "windows" or not R2_BUCKET:
+        return ("", 204)
+    try:
+        obj = _r2().get_object(Bucket=R2_BUCKET, Key="downloads/windows/latest.json")
+        import json as _j
+        latest = _j.loads(obj["Body"].read())
+        version, signature = str(latest["version"]), str(latest["signature"])
+    except Exception as e:
+        print(f"[update] manifest unavailable: {e}", flush=True)
+        return ("", 204)
+    if _ver_tuple(version) <= _ver_tuple(current):
+        return ("", 204)
+    resp = jsonify({
+        "version": version,
+        "notes": latest.get("notes") or "",
+        "pub_date": latest.get("pub_date"),
+        "url": f"{request.url_root.rstrip('/').replace('http://', 'https://')}/api/download/windows",
+        "signature": signature,
+    })
+    resp.headers["Cache-Control"] = "no-store"
     return resp
 
 
