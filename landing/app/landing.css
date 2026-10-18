@@ -74,12 +74,19 @@ html[data-lang="ua"] .lp em { font-family: var(--lp-display); font-style: italic
 .lp-links { display: flex; gap: 28px; font-size: 14.5px; font-weight: 500; color: var(--lp-mute2); }
 .lp-links a:hover { color: var(--lp-ink); }
 .lp-tools { display: flex; align-items: center; gap: 10px; }
-.lp-seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--lp-track); }
-.lp-seg button { border: 0; background: transparent; color: var(--lp-mute2); padding: 5px 10px; border-radius: 7px; font-size: 12px; font-weight: 700; cursor: pointer; }
-.lp-seg button.on { background: var(--lp-surface); color: var(--lp-ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+/* Переключатель: две колонки одной ширины + бегунок, который плавно переезжает (ширина не зависит от языка). */
+.lp-seg { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 10px; background: var(--lp-track); }
+.lp-seg-ind { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2); border-radius: 7px; background: var(--lp-surface); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); transition: transform 260ms cubic-bezier(.3, .7, .2, 1); }
+.lp-seg[data-i="1"] .lp-seg-ind { transform: translateX(100%); }
+.lp-seg button { position: relative; z-index: 1; border: 0; background: transparent; color: var(--lp-mute2); padding: 5px 10px; border-radius: 7px; font-size: 12px; font-weight: 700; cursor: pointer; transition: color 200ms ease; }
+.lp-seg button.on { color: var(--lp-ink); }
 .lp-icon-btn { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--lp-line); background: transparent; color: var(--lp-mute2); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
 .lp-icon-btn:hover { color: var(--lp-ink); border-color: var(--lp-line2); }
 
+/* Подпись кнопки: обе языковые версии в одной ячейке, ширина = максимум, видна активная. */
+.lp-lbl { display: inline-grid; }
+.lp-lbl > span { grid-area: 1 / 1; visibility: hidden; text-align: center; }
+.lp-lbl > span.act { visibility: visible; }
 .lp-short { display: none; }
 @media (max-width: 560px) { .lp-full { display: none; } .lp-short { display: inline; } }
 
@@ -189,7 +196,7 @@ html:not([data-theme="dark"]) .lp-wait-msg.ok { color: #7FD6A4; }
 
 /* ── Pricing ── */
 .lp-bill { margin-top: 28px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.lp-bill .lp-seg button { padding: 7px 16px; font-size: 13px; }
+.lp-bill .lp-seg button { padding: 7px 18px; font-size: 13px; }
 .lp-save { font-size: 12.5px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: var(--lp-okbg); color: var(--lp-oktext); opacity: 0.55; transition: opacity 200ms ease; }
 .lp-save.on { opacity: 1; }
 .lp-plans { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch; }
@@ -240,7 +247,7 @@ html:not([data-theme="dark"]) .lp-wait-msg.ok { color: #7FD6A4; }
 .lp-rv.in { opacity: 1; transform: none; }
 @media (prefers-reduced-motion: reduce) {
   .lp-rv { opacity: 1; transform: none; transition: none; }
-  .lp-btn, .lp-card, .lp-q-a, .lp-q button span { transition: none; }
+  .lp-btn, .lp-card, .lp-q-a, .lp-q button span, .lp-seg-ind { transition: none; }
 }
 
 /* ── Responsive ── */

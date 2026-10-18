@@ -86,7 +86,8 @@ function Nav({ t, lang, setLang }: { t: Copy; lang: Lang; setLang: (l: Lang) => 
           <a href="#faq">{t.nav.faq}</a>
         </nav>
         <div className="lp-tools">
-          <div className="lp-seg" role="group" aria-label="Language">
+          <div className="lp-seg" data-i={lang === "ua" ? 1 : 0} role="group" aria-label="Language">
+            <span className="lp-seg-ind" aria-hidden="true" />
             {(["en", "ua"] as Lang[]).map((l) => (
               <button key={l} type="button" className={lang === l ? "on" : ""} aria-pressed={lang === l} onClick={() => setLang(l)}>
                 {l.toUpperCase()}
@@ -100,7 +101,13 @@ function Nav({ t, lang, setLang }: { t: Copy; lang: Lang; setLang: (l: Lang) => 
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></svg>
             )}
           </button>
-          <a className="lp-btn lp-btn-primary lp-btn-sm" href={APP_URL}><span className="lp-full">{t.nav.openApp}</span><span className="lp-short">{t.nav.openAppShort}</span></a>
+          <a className="lp-btn lp-btn-primary lp-btn-sm" href={APP_URL}><span className="lp-lbl">
+            {(["en", "ua"] as Lang[]).map((l) => (
+              <span key={l} className={lang === l ? "act" : ""}>
+                <span className="lp-full">{COPY[l].nav.openApp}</span><span className="lp-short">{COPY[l].nav.openAppShort}</span>
+              </span>
+            ))}
+          </span></a>
         </div>
       </div>
     </header>
@@ -234,7 +241,7 @@ function Features({ t }: { t: Copy }) {
       </div>
       <div className="lp-grid">
         {t.features.items.map((f, i) => (
-          <div key={f.h} className="lp-card lp-feat lp-rv" style={{ transitionDelay: `${(i % 3) * 70}ms` }}>
+          <div key={i} className="lp-card lp-feat lp-rv" style={{ transitionDelay: `${(i % 3) * 70}ms` }}>
             <h3>{f.h}</h3>
             <p>{f.p}</p>
           </div>
@@ -347,7 +354,8 @@ function Pricing({ t }: { t: Copy }) {
         <p className="lp-lede">{p.sub}</p>
       </div>
       <div className="lp-bill">
-        <div className="lp-seg" role="group" aria-label="Billing period">
+        <div className="lp-seg" data-i={billing === "annual" ? 1 : 0} role="group" aria-label="Billing period">
+          <span className="lp-seg-ind" aria-hidden="true" />
           <button type="button" className={billing === "monthly" ? "on" : ""} aria-pressed={billing === "monthly"} onClick={() => setBilling("monthly")}>{p.monthly}</button>
           <button type="button" className={billing === "annual" ? "on" : ""} aria-pressed={billing === "annual"} onClick={() => setBilling("annual")}>{p.annual}</button>
         </div>
