@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import "@/app/landing.css";
 import { COPY, type Copy, type Lang, type PricingPlan } from "@/lib/content";
 import { useReveal, useTween } from "@/lib/hooks";
+import { initAnalytics, track, trackClicksByAttribute } from "@/lib/analytics";
 
 type Os = "windows" | "mac" | "other";
 type Billing = "monthly" | "annual";
@@ -101,7 +102,7 @@ function Nav({ t, lang, setLang }: { t: Copy; lang: Lang; setLang: (l: Lang) => 
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" /></svg>
             )}
           </button>
-          <a className="lp-btn lp-btn-primary lp-btn-sm" href={APP_URL}><span className="lp-lbl">
+          <a className="lp-btn lp-btn-primary lp-btn-sm" href={APP_URL} data-track="landing_open_app" data-loc="nav"><span className="lp-lbl">
             {(["en", "ua"] as Lang[]).map((l) => (
               <span key={l} className={lang === l ? "act" : ""}>
                 <span className="lp-full">{COPY[l].nav.openApp}</span><span className="lp-short">{COPY[l].nav.openAppShort}</span>
@@ -115,12 +116,12 @@ function Nav({ t, lang, setLang }: { t: Copy; lang: Lang; setLang: (l: Lang) => 
 }
 
 // Вторая кнопка героя и финала: Windows → скачать, Mac → вейтлист, телефон → ничего лишнего.
-function OsButton({ t, os, label }: { t: Copy; os: Os; label: string }) {
+function OsButton({ t, os, label, loc }: { t: Copy; os: Os; label: string; loc: string }) {
   if (os === "other") return null;
   if (os === "mac") {
-    return <a className="lp-btn lp-btn-ghost" href={WAITLIST_ANCHOR}>{t.hero.ctaMacWait}</a>;
+    return <a className="lp-btn lp-btn-ghost" href={WAITLIST_ANCHOR} data-track="landing_waitlist_cta" data-loc={loc}>{t.hero.ctaMacWait}</a>;
   }
-  return <a className="lp-btn lp-btn-ghost" href={DOWNLOAD_URL}><WinIcon />{label}</a>;
+  return <a className="lp-btn lp-btn-ghost" href={DOWNLOAD_URL} data-track="landing_download_windows" data-loc={loc}><WinIcon />{label}</a>;
 }
 
 function Hero({ t, os }: { t: Copy; os: Os }) {
@@ -132,8 +133,8 @@ function Hero({ t, os }: { t: Copy; os: Os }) {
         <h1 className="lp-h1">{t.hero.titleA} <em>{t.hero.titleAccent}</em></h1>
         <p className="lp-sub">{t.hero.sub}</p>
         <div className="lp-cta">
-          <a className="lp-btn lp-btn-primary" href={APP_URL}>{t.hero.ctaPrimary}</a>
-          <OsButton t={t} os={os} label={t.hero.ctaWin} />
+          <a className="lp-btn lp-btn-primary" href={APP_URL} data-track="landing_start_free" data-loc="hero">{t.hero.ctaPrimary}</a>
+          <OsButton t={t} os={os} label={t.hero.ctaWin} loc="hero" />
         </div>
         <div className="lp-note">{os === "mac" ? t.hero.noteMac : t.hero.note}</div>
       </div>
@@ -270,6 +271,7 @@ function Waitlist({ t, lang }: { t: Copy; lang: Lang }) {
         body: JSON.stringify({ email: email.trim(), platform: "macos", lang, website: hp }),
       });
       setState(res.ok ? "done" : "error");
+      track(res.ok ? "landing_waitlist_joined" : "landing_waitlist_failed", { platform: "macos", lang });
     } catch {
       setState("error");
     }
@@ -327,7 +329,7 @@ function Desktop({ t, lang }: { t: Copy; lang: Lang }) {
           <h2>{d.titleA} <em>{d.titleAccent}</em></h2>
           <p className="lp-plate-sub">{d.sub}</p>
           <div className="lp-plate-cta">
-            <a className="lp-btn lp-btn-paper" href={DOWNLOAD_URL}><WinIcon />{d.ctaWin}</a>
+            <a className="lp-btn lp-btn-paper" href={DOWNLOAD_URL} data-track="landing_download_windows" data-loc="desktop"><WinIcon />{d.ctaWin}</a>
             <span className="lp-pill">{d.macSoon}</span>
           </div>
           <div className="lp-plate-info">{line}</div>
@@ -357,7 +359,7 @@ function Pricing({ t }: { t: Copy }) {
         <div className="lp-seg" data-i={billing === "annual" ? 1 : 0} role="group" aria-label="Billing period">
           <span className="lp-seg-ind" aria-hidden="true" />
           <button type="button" className={billing === "monthly" ? "on" : ""} aria-pressed={billing === "monthly"} onClick={() => setBilling("monthly")}>{p.monthly}</button>
-          <button type="button" className={billing === "annual" ? "on" : ""} aria-pressed={billing === "annual"} onClick={() => setBilling("annual")}>{p.annual}</button>
+          <button type="button" className={billing === "annual" ? "on" : ""} aria-pressed={billing === "annual"} onClick={() => { setBilling("annual"); track("landing_billing_toggled", { billing: "annual" }); }}>{p.annual}</button>
         </div>
         <span className={"lp-save" + (billing === "annual" ? " on" : "")}>{p.save}</span>
       </div>
@@ -370,7 +372,7 @@ function Pricing({ t }: { t: Copy }) {
             <ul>{plan.features.map((f) => <li key={f}>{f}</li>)}</ul>
             <div className="lp-plan-foot">
               {plan.fine && <div className="lp-fine">{plan.fine}</div>}
-              <a className={"lp-btn " + (plan.ctaKind === "primary" ? "lp-btn-primary" : "lp-btn-ghost")} href={planHref(plan.name, billing)}>{plan.cta}</a>
+              <a className={"lp-btn " + (plan.ctaKind === "primary" ? "lp-btn-primary" : "lp-btn-ghost")} href={planHref(plan.name, billing)} data-track="landing_plan_clicked" data-loc="pricing" data-plan={plan.name.toLowerCase()}>{plan.cta}</a>
             </div>
           </article>
         ))}
@@ -403,8 +405,8 @@ function Final({ t, os }: { t: Copy; os: Os }) {
     <section className="lp-wrap lp-final">
       <h2 className="lp-rv">{t.final.titleA} <em>{t.final.titleAccent}</em></h2>
       <div className="lp-cta">
-        <a className="lp-btn lp-btn-primary" href={APP_URL}>{t.final.ctaPrimary}</a>
-        <OsButton t={t} os={os} label={t.final.ctaWin} />
+        <a className="lp-btn lp-btn-primary" href={APP_URL} data-track="landing_start_free" data-loc="final">{t.final.ctaPrimary}</a>
+        <OsButton t={t} os={os} label={t.final.ctaWin} loc="final" />
       </div>
       <div className="lp-note">{t.final.fine}</div>
     </section>
@@ -440,9 +442,16 @@ export function LandingClient() {
     document.documentElement.setAttribute("data-lang", v);
     document.documentElement.lang = v === "ua" ? "uk" : "en";
     try { localStorage.setItem("skriptly-lang", v); } catch {}
+    track("landing_lang_changed", { lang: v });
   };
 
   useReveal(".lp-rv");
+
+  useEffect(() => {
+    initAnalytics();
+    const root = document.querySelector(".lp") as HTMLElement | null;
+    return root ? trackClicksByAttribute(root) : undefined;
+  }, []);
 
   const t = COPY[lang];
   return (
