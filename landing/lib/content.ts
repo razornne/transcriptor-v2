@@ -1,23 +1,8 @@
-// EN/UA контент для лендинга. Структура зеркалит дизайн-прототип.
+// EN/UA контент для лендинга. Структура зеркалит макет «Landing» (Design-артефакт
+// «Skriptly app redesign»): герой с живым транскриптом, диктовка, три способа начать,
+// возможности, приложение для компьютера с вейтлистом для Mac, тарифы, FAQ.
 
 export type Lang = "en" | "ua";
-export type HeadlineKey = "every" | "your" | "stop";
-
-export const HEADLINES: Record<Lang, Record<HeadlineKey, string[]>> = {
-  en: {
-    every: ["Every call,", "word for word."],
-    your:  ["Your calls.", "Transcribed.", "Instantly."],
-    stop:  ["Stop re-listening.", "Start reading."],
-  },
-  ua: {
-    every: ["Кожен дзвінок,", "слово в слово."],
-    your:  ["Ваші дзвінки.", "Розшифровані.", "Миттєво."],
-    stop:  ["Досить переслуховувати.", "Час читати."],
-  },
-};
-
-// Дефолтный headline (можно потом сделать выбор)
-export const DEFAULT_HEADLINE: HeadlineKey = "every";
 
 export type PricingPlan = {
   name: string;
@@ -34,68 +19,52 @@ export type PricingPlan = {
   fine?: string;
 };
 
+// Фрагмент текста с пометкой «зачёркнуто» — для демо «что вы сказали».
+export type Frag = { t: string; x?: boolean };
+
 export type Copy = {
-  nav: { features: string; pricing: string; openApp: string };
+  nav: { features: string; desktop: string; pricing: string; faq: string; openApp: string; openAppShort: string };
   hero: {
-    eyebrow: string;
-    sub: string;
-    ctaPrimary: string;
-    ctaSecondary: string;
-    meta: Array<[string, string]>;
-  };
-  social: { quote: string; cite: string; firstUsers: string };
-  how: {
-    eyebrow: string; title: string; sub: string;
-    steps: Array<{ n: string; h: string; p: string }>;
-  };
-  features: {
-    eyebrow: string; title: string; sub: string;
-    items: Array<{ tag: string; h: string; p: string; accent?: boolean }>;
-  };
-  breakout: {
-    eyebrow: string; title: string; sub: string;
-    history: Array<{
-      label: string;
-      rows: Array<{ name: string; when: string; on?: boolean }>;
-    }>;
-  };
-  pricing: {
-    eyebrow: string;
-    title: string;
-    sub: string;
-    monthly: string;
-    annual: string;
-    save: string;
-    plans: PricingPlan[];
-  };
-  final: { title: string[]; ctaPrimary: string; ctaSecondary: string; fine: string };
-  foot: { links: string[]; copy: string };
-  useCases: {
-    eyebrow: string;
-    title: string;
-    sub: string;
-    tabs: Array<{
-      label: string;
-      headline: string;
-      points: string[];
-      quote: string;
-      author: string;
-    }>;
-  };
-  faq: {
-    eyebrow: string;
-    title: string;
-    items: Array<{ q: string; a: string }>;
+    eyebrow: string; titleA: string; titleAccent: string; sub: string;
+    ctaPrimary: string; ctaWin: string; ctaMacWait: string;
+    note: string; noteMac: string;
   };
   mock: {
-    url: string;
-    eyebrow: string;
-    rec: string;
-    langPill: string;
-    lines: Array<{ spk: 1 | 2; name: string; time: string; text: string; live?: boolean }>;
-    summary: string[];
-    summaryLabel: string;
+    title: string;
+    speakers: Array<{ name: string; share: number; tone: 1 | 2 }>;
+    suggest: { text: string; quote: string; accept: string };
+    lines: Array<{ tone: 1 | 2; name: string; initial: string; time: string; text: string }>;
   };
+  facts: string[];
+  dictation: {
+    eyebrow: string; titleA: string; titleAccent: string; titleB: string;
+    subBefore: string; keys: string[]; subAfter: string; keysHint: string;
+    sayLabel: string; getLabel: string; say: Frag[]; getBefore: string; getMark: string; getAfter: string;
+  };
+  ways: {
+    eyebrow: string; title: string; sub: string;
+    items: Array<{ kind: "call" | "dictate" | "file"; h: string; p: string }>;
+  };
+  features: {
+    eyebrow: string; titleA: string; titleAccent: string;
+    items: Array<{ h: string; p: string }>;
+  };
+  desktop: {
+    eyebrow: string; titleA: string; titleAccent: string; sub: string;
+    ctaWin: string; macSoon: string; infoDefault: string; infoVersion: string; perks: Array<{ h: string; p: string }>;
+    wait: {
+      title: string; sub: string; placeholder: string; button: string; sending: string;
+      done: string; error: string; privacy: string;
+    };
+  };
+  pricing: {
+    eyebrow: string; title: string; sub: string;
+    monthly: string; annual: string; save: string;
+    plans: PricingPlan[];
+  };
+  faq: { eyebrow: string; title: string; items: Array<{ q: string; a: string }> };
+  final: { titleA: string; titleAccent: string; ctaPrimary: string; ctaWin: string; fine: string };
+  foot: { links: Array<{ label: string; href: string }>; copy: string };
 };
 
 // Тарифы v2 (2026-09-25), совпадают с Stripe (USD + UAH currency_options):
@@ -115,7 +84,7 @@ const PLANS_EN: PricingPlan[] = [
     name: "Pro", featured: true, badge: "Most popular",
     monthly: 12, annual: 9, currency: "$", per: "/month",
     tagline: "For one professional",
-    features: ["600 minutes of calls / month", "Summary + action items", "Unlimited dictation (Windows app)", "Full-text search", "Unlimited history"],
+    features: ["600 minutes of calls / month", "Summary + action items", "Unlimited dictation (desktop app)", "Full-text search", "Unlimited history"],
     cta: "Get Pro",
     ctaKind: "primary",
     fine: "Paying from Ukraine? 249 ₴ / month.",
@@ -144,7 +113,7 @@ const PLANS_UA: PricingPlan[] = [
     name: "Pro", featured: true, badge: "Найпопулярніший",
     monthly: 249, annual: 199, currency: "₴", per: "/місяць",
     tagline: "Для однієї людини",
-    features: ["600 хвилин дзвінків / місяць", "Підсумок + дії", "Диктовка без ліміту (застосунок для Windows)", "Повнотекстовий пошук", "Безлімітна історія"],
+    features: ["600 хвилин дзвінків / місяць", "Підсумок + дії", "Диктовка без ліміту (застосунок для комп’ютера)", "Повнотекстовий пошук", "Безлімітна історія"],
     cta: "Обрати Pro",
     ctaKind: "primary",
     fine: "Ціна в гривнях — для оплати з України.",
@@ -162,150 +131,112 @@ const PLANS_UA: PricingPlan[] = [
 
 export const COPY: Record<Lang, Copy> = {
   en: {
-    nav: { features: "Features", pricing: "Pricing", openApp: "Open app" },
+    nav: { features: "Features", desktop: "Desktop app", pricing: "Pricing", faq: "FAQ", openApp: "Open app", openAppShort: "Open" },
     hero: {
-      eyebrow: "Skriptly · calls & dictation",
-      sub: "Strong accuracy across 60+ languages. Speakers separated automatically. Summary and action items in one click.",
+      eyebrow: "Calls & dictation",
+      titleA: "Every call,",
+      titleAccent: "word for word.",
+      sub: "Record a call and get the transcript with every speaker named. Or hold a key, talk, and clean text lands in any app.",
       ctaPrimary: "Start free",
-      ctaSecondary: "See how it works",
-      meta: [
-        ["Languages",  "60+ languages"],
-        ["Speakers",   "Automatic"],
+      ctaWin: "Download for Windows",
+      ctaMacWait: "Join the Mac waitlist",
+      note: "A Mac version is next. It also works in any browser, no install needed.",
+      noteMac: "The Mac app is coming. Meanwhile it works in any browser, no install needed.",
+    },
+    mock: {
+      title: "Product sync · 40:33",
+      speakers: [
+        { name: "Maya", share: 46, tone: 1 },
+        { name: "Andriy", share: 40, tone: 2 },
+      ],
+      suggest: { text: "Speaker 2 → Andriy?", quote: "“Thanks, Andriy” at 0:38", accept: "Accept" },
+      lines: [
+        { tone: 1, name: "Maya", initial: "M", time: "1:24", text: "The key insight from the interviews: nobody actually wants to re-listen to a recording." },
+        { tone: 2, name: "Andriy", initial: "A", time: "1:38", text: "Right. They want to skim and search. The transcript is the product." },
       ],
     },
-    social: {
-      quote: "We used to pay an intern to re-listen to every client call and write up notes. Now the transcript is in the channel before the call even ends.",
-      cite:  "Olena K. · Brand Strategist, Kyiv agency",
-      firstUsers: "First 12 users",
+    facts: ["60+ languages", "Speakers named", "Windows app · Mac soon", "USD or UAH", "Markdown / TXT export"],
+    dictation: {
+      eyebrow: "Dictation",
+      titleA: "Say it", titleAccent: "messy", titleB: "Get it clean.",
+      subBefore: "Hold ", keys: ["Ctrl", "Win"], subAfter: " in any app, talk, let go. Skriptly removes the “um”s, applies your self-corrections and types the result where your cursor is.",
+      keysHint: "your keys, your choice",
+      sayLabel: "What you say", getLabel: "What you get",
+      say: [
+        { t: "um, so basically,", x: true }, { t: " we need to send the" }, { t: ", uh, the", x: true },
+        { t: " report by " }, { t: "Friday, no wait,", x: true }, { t: " Thursday" },
+      ],
+      getBefore: "We need to send the report by ", getMark: "Thursday", getAfter: ".",
     },
-    how: {
+    ways: {
       eyebrow: "How it works",
-      title: "Three steps. No download.",
-      sub: "Open a tab. Allow the mic. Get the transcript right after the call.",
-      steps: [
-        { n: "01", h: "Open Skriptly",      p: "Go to skriptly.io/app in any modern browser. No installer, no extension, no Electron." },
-        { n: "02", h: "Start recording",    p: "Allow mic access, pick the call tab to share audio. Speakers are detected automatically." },
-        { n: "03", h: "Get your transcript",p: "Stop the recording — your transcript, summary, and action items are ready in under a minute." },
+      title: "Three ways in.",
+      sub: "Use the app, the browser, or just your voice. The transcript always lands in the same place.",
+      items: [
+        { kind: "call", h: "Record a call", p: "Your microphone plus the sound from Zoom, Meet or Teams. In the desktop app there is nothing to share or set up." },
+        { kind: "dictate", h: "Dictate anywhere", p: "Hold a key and talk. Email, chat, a doc: the text appears in whatever app has your cursor." },
+        { kind: "file", h: "Drop a file", p: "A voice memo, a meeting video, an export. Any audio or video, hours long, in any browser." },
       ],
     },
     features: {
       eyebrow: "What's inside",
-      title: "Everything a transcript should be.",
-      sub: "Built for individual professionals who don't want to babysit a recording. Multilingual from day one — 60+ languages, auto-detected.",
+      titleA: "Everything a transcript", titleAccent: "should be.",
       items: [
-        { tag: "ML", h: "60+ languages",         p: "Recognizes 60+ languages and handles switching mid-call. The AI correction layer learns your domain terms.", accent: true },
-        { tag: "SS", h: "Speaker separation",    p: "Knows who said what — your voice and the other side are kept apart, and you can name every speaker." },
-        { tag: "⚡", h: "Fast turnaround",       p: "Stop the recording, get your transcript in under a minute. No waiting room, no manual steps." },
-        { tag: "SM", h: "Summary + action items",p: "Auto-generated at the end. Edit them, ship them — they're plain Markdown." },
-        { tag: "FS", h: "Full-text search",      p: "Find anything across every past call. Filter by speaker, language, or date." },
-        { tag: "PR", h: "Private by default",    p: "Transcripts are visible only to you unless you share a workspace. Your audio is never used to train AI models." },
+        { h: "60+ languages", p: "Switch languages mid-call and it keeps up. Your own terms are learned and spelled right next time." },
+        { h: "Speakers, with names", p: "Every voice separated. You are labelled automatically, and names said in the conversation are suggested for the rest." },
+        { h: "Summary and action items", p: "Written right after the call, in the depth you choose. Send to Notion or export as Markdown." },
+        { h: "Dictation that cleans up", p: "Filler words gone, self-corrections applied, in any app. Pauses your music while you talk." },
+        { h: "Search every call", p: "Find who said what across your whole history. Projects keep clients and topics apart." },
+        { h: "Private by default", p: "Transcripts are yours alone unless you share a workspace. Your audio never trains AI models." },
       ],
     },
-    breakout: {
-      eyebrow: "Inside the app",
-      title: "Looks like the product you actually want to use.",
-      sub: "Same wide type. Same warm parchment. Keyboard shortcuts for everything.",
-      history: [
-        { label: "Today",     rows: [
-          { name: "Strategy sync · Maya & Andriy", when: "14:32", on: true },
-          { name: "User interview · A. Kovalenko",  when: "11:08" },
-        ]},
-        { label: "Yesterday", rows: [
-          { name: "Sales call · Innova Corp", when: "Wed" },
-          { name: "Q4 planning · internal",   when: "Wed" },
-        ]},
-        { label: "Last week", rows: [
-          { name: "Brand workshop",              when: "May 12" },
-          { name: "Hiring loop · designer #3",  when: "May 11" },
-          { name: "Investor update call",        when: "May 10" },
-        ]},
+    desktop: {
+      eyebrow: "Desktop app",
+      titleA: "Lives in your tray.", titleAccent: "Always one key away.",
+      sub: "The whole Skriptly in its own window, plus what a browser can't do: dictate into any app and record both sides of a call with no tab sharing.",
+      ctaWin: "Download for Windows",
+      macSoon: "macOS · coming soon",
+      infoDefault: "Windows 10 and 11 · free plan included",
+      infoVersion: "Windows 10 and 11 · v{v} · {mb} MB",
+      perks: [
+        { h: "Hold to dictate", p: "Release to paste where your cursor is. Hands-free mode too." },
+        { h: "Record a call", p: "Microphone and everything your computer plays. You are labelled for you." },
+        { h: "One account everywhere", p: "History, summaries and settings are the same in the app and in the browser." },
       ],
+      wait: {
+        title: "Want it on your Mac?",
+        sub: "Leave your email and we'll write once, when the Mac app is ready.",
+        placeholder: "you@work.com", button: "Notify me", sending: "Sending…",
+        done: "You're on the list. We'll email you when the Mac app is ready.",
+        error: "Couldn't save that. Check the address and try again.",
+        privacy: "Used only for this one email.",
+      },
     },
     pricing: {
       eyebrow: "Pricing",
-      title: "Honest pricing. Cheaper than the big names.",
+      title: "Honest pricing.",
       sub: "Start on Free. Upgrade when you outgrow it. Cancel from the app in two clicks.",
       monthly: "Monthly",
       annual: "Annual",
       save: "Save up to 25%",
       plans: PLANS_EN,
     },
-    final: {
-      title: ["Ready to stop", "re-listening?"],
-      ctaPrimary: "Start free — no card needed",
-      ctaSecondary: "Open the app",
-      fine: "Free forever for 60 min / month · No credit card · Cancel any time",
-    },
-    foot: {
-      links: ["Features", "Pricing", "App", "Privacy", "Terms"],
-      copy: "© 2026 Skriptly · Built in Kyiv",
-    },
-    useCases: {
-      eyebrow: "Who uses it",
-      title: "One tool, every context.",
-      sub: "Transcript + speaker attribution + AI synthesis — no matter what you record.",
-      tabs: [
-        {
-          label: "Founders",
-          headline: "Every investor call, customer interview, and team standup — searchable.",
-          points: [
-            "Capture investor questions verbatim — no paraphrasing from memory",
-            "Find every mention of a specific pain point across customer calls",
-            "Know who committed to what in the last all-hands",
-          ],
-          quote: "I used to miss half the call while taking notes. Now I'm fully present.",
-          author: "CTO, B2B SaaS startup",
-        },
-        {
-          label: "Researchers",
-          headline: "Interviews transcribed. Participants named. Patterns findable.",
-          points: [
-            "Every session verbatim with per-speaker attribution",
-            "Search across 40 interviews for a specific phrase",
-            "Export clean Markdown for NVivo or direct quoting",
-          ],
-          quote: "I transcribed a month of fieldwork in one afternoon.",
-          author: "UX Researcher, design agency",
-        },
-        {
-          label: "Students",
-          headline: "Lectures, seminars, and study groups — word for word.",
-          points: [
-            "Record lectures and get a searchable transcript instead of notes",
-            "Each voice in a group discussion attributed automatically",
-            "Transcripts stay private — visible only to you",
-          ],
-          quote: "I stopped missing things while writing. The transcript gets everything.",
-          author: "Graduate student, linguistics",
-        },
-        {
-          label: "Journalists",
-          headline: "Source interviews quoted accurately, attributed correctly.",
-          points: [
-            "Verbatim quotes ready to paste — no re-listening",
-            "Speaker labels survive even noisy phone recordings",
-            "Your recordings are never used to train AI models",
-          ],
-          quote: "I can cite a 90-minute interview in minutes, not hours.",
-          author: "Investigative reporter, national paper",
-        },
-        {
-          label: "Teams",
-          headline: "Shared workspace. Every call, every voice, on record.",
-          points: [
-            "Shared transcript library across the whole team",
-            "Full-text search across all team calls by speaker or topic",
-            "Per-user billing, one invoice — no seat minimums",
-          ],
-          quote: "We stopped asking 'wait, what did we decide on that?'",
-          author: "Head of Product, 12-person startup",
-        },
-      ],
-    },
     faq: {
       eyebrow: "FAQ",
-      title: "Common questions.",
+      title: "Common questions",
       items: [
+        {
+          q: "Do I need the desktop app?",
+          a: "No. Skriptly works in any browser: record a tab, or upload a file. The desktop app adds dictation into any app and call recording without sharing a tab, and it uses the same account and history.",
+        },
+        {
+          q: "Why does Windows warn me when I install?",
+          a: "The installer isn't code-signed yet, so Windows SmartScreen shows “Windows protected your PC”. Click More info, then Run anyway. We'll sign it before the public launch.",
+        },
+        {
+          q: "When is the Mac version coming?",
+          a: "It is in progress. Join the waitlist in the Desktop app section and we'll email you once when it is ready.",
+        },
         {
           q: "Is my audio stored anywhere?",
           a: "We keep a copy of each recording for 90 days so we can investigate transcription errors, then it is deleted automatically. Only the founder can access it, and it is never used to train AI models or shared. Deleting your account deletes it immediately. Details are in the Privacy Policy.",
@@ -316,178 +247,136 @@ export const COPY: Record<Lang, Copy> = {
         },
         {
           q: "How accurate is the transcription?",
-          a: "Very accurate for clear audio — comparable to professional transcription services. Accuracy depends on audio quality, accents, and speaker overlap. The AI correction layer further improves proper nouns, abbreviations, and domain terms specific to you.",
+          a: "Very accurate for clear audio, comparable to professional transcription services. Accuracy depends on audio quality, accents, and speaker overlap. The AI correction layer further improves proper nouns, abbreviations, and domain terms specific to you.",
         },
         {
           q: "How do I cancel my subscription?",
-          a: "From the app: Settings → Subscription → Cancel. Cancellation takes effect at the end of the current billing period. No questions asked, no cancellation fee.",
+          a: "From the app: Settings → Plan and billing → Manage subscription. Cancellation takes effect at the end of the current billing period. No questions asked, no cancellation fee.",
         },
       ],
     },
-    mock: {
-      url: "skriptly.io/app/c/k3p2-1a",
-      eyebrow: "TRANSCRIPT",
-      rec: "14:32",
-      langPill: "EN",
-      lines: [
-        { spk: 1, name: "Maya",    time: "00:01:24", text: "So the key insight from the user interviews was that nobody actually wants to re-listen to a recording." },
-        { spk: 2, name: "Andriy",  time: "00:01:38", text: "Right — they want to skim. And search. The transcript is the product." },
-        { spk: 1, name: "Maya",    time: "00:01:52", text: "Exactly. So we should lead with that on the landing", live: true },
+    final: {
+      titleA: "Ready to stop", titleAccent: "re-listening?",
+      ctaPrimary: "Start free",
+      ctaWin: "Download for Windows",
+      fine: "Free forever for 60 min / month. No card needed.",
+    },
+    foot: {
+      links: [
+        { label: "Features", href: "#features" }, { label: "Desktop", href: "#desktop" }, { label: "Pricing", href: "#pricing" },
+        { label: "Privacy", href: "/privacy" }, { label: "Terms", href: "/terms" },
       ],
-      summary: [
-        "Re-listening is a non-job; users skim and search.",
-        "Transcript is the primary artifact, not a byproduct.",
-        "Lead with the read-instead-of-listen framing on the landing page.",
-      ],
-      summaryLabel: "Auto-summary · 3 points",
+      copy: "Skriptly · built in Kyiv",
     },
   },
 
   ua: {
-    nav: { features: "Можливості", pricing: "Тарифи", openApp: "Відкрити застосунок" },
+    nav: { features: "Можливості", desktop: "Застосунок", pricing: "Тарифи", faq: "FAQ", openApp: "Відкрити застосунок", openAppShort: "Відкрити" },
     hero: {
-      eyebrow: "Skriptly · дзвінки й диктовка",
-      sub: "Висока точність у 60+ мовах. Спікери розділяються автоматично. Підсумок і задачі — в один клік.",
+      eyebrow: "Дзвінки й диктовка",
+      titleA: "Кожен дзвінок,",
+      titleAccent: "слово в слово.",
+      sub: "Запиши дзвінок і отримай транскрипт з іменами всіх спікерів. Або затисни клавішу, говори, і чистий текст з’явиться в будь-якому застосунку.",
       ctaPrimary: "Спробувати безкоштовно",
-      ctaSecondary: "Як це працює",
-      meta: [
-        ["Мови",         "60+ мов"],
-        ["Спікери",      "Автоматично"],
+      ctaWin: "Завантажити для Windows",
+      ctaMacWait: "У список очікування Mac",
+      note: "Версія для Mac уже в роботі. Працює й у будь-якому браузері, без встановлення.",
+      noteMac: "Застосунок для Mac скоро. А поки все працює в будь-якому браузері, без встановлення.",
+    },
+    mock: {
+      title: "Синк по продукту · 40:33",
+      speakers: [
+        { name: "Майя", share: 46, tone: 1 },
+        { name: "Андрій", share: 40, tone: 2 },
+      ],
+      suggest: { text: "Спікер 2 → Андрій?", quote: "«Дякую, Андрію» на 0:38", accept: "Прийняти" },
+      lines: [
+        { tone: 1, name: "Майя", initial: "М", time: "1:24", text: "Головний інсайт з інтерв’ю: ніхто насправді не хоче переслуховувати запис." },
+        { tone: 2, name: "Андрій", initial: "А", time: "1:38", text: "Так. Люди хочуть переглянути очима й пошукати. Транскрипт і є продукт." },
       ],
     },
-    social: {
-      quote: "Раніше ми платили інтерну, щоб переслуховував кожен дзвінок із клієнтом і робив нотатки. Тепер транскрипт у каналі ще до кінця дзвінка.",
-      cite:  "Олена К. · Бренд-стратег, агенція з Києва",
-      firstUsers: "Перші 12 користувачів",
+    facts: ["60+ мов", "Спікери з іменами", "Windows · Mac скоро", "USD або UAH", "Експорт Markdown / TXT"],
+    dictation: {
+      eyebrow: "Диктовка",
+      titleA: "Кажи", titleAccent: "як вийде", titleB: "Отримуй чисто.",
+      subBefore: "Затисни ", keys: ["Ctrl", "Win"], subAfter: " у будь-якому застосунку, говори, відпусти. Skriptly прибере «ну», «е-е», врахує самовиправлення і надрукує результат там, де курсор.",
+      keysHint: "клавіші — на твій вибір",
+      sayLabel: "Що ти кажеш", getLabel: "Що отримуєш",
+      say: [
+        { t: "ну, значить, загалом,", x: true }, { t: " нам треба надіслати" }, { t: ", е-е, той", x: true },
+        { t: " звіт до " }, { t: "п’ятниці, ні, стривай,", x: true }, { t: " четверга" },
+      ],
+      getBefore: "Нам треба надіслати звіт до ", getMark: "четверга", getAfter: ".",
     },
-    how: {
+    ways: {
       eyebrow: "Як це працює",
-      title: "Три кроки. Без встановлення.",
-      sub: "Відкрий вкладку. Дозволь мікрофон. Отримай транскрипт одразу після дзвінка.",
-      steps: [
-        { n: "01", h: "Відкрий Skriptly",   p: "Заходь на skriptly.io/app у будь-якому сучасному браузері. Ні інсталятора, ні розширення." },
-        { n: "02", h: "Почни запис",        p: "Дозволь мікрофон і обери вкладку дзвінка для аудіо. Спікери визначаються автоматично." },
-        { n: "03", h: "Отримай транскрипт", p: "Зупини запис — транскрипт, підсумок і тудушки готові менш ніж за хвилину." },
+      title: "Три способи почати.",
+      sub: "Застосунок, браузер або просто голос. Транскрипт завжди потрапляє в одне місце.",
+      items: [
+        { kind: "call", h: "Записати дзвінок", p: "Твій мікрофон плюс звук із Zoom, Meet чи Teams. У застосунку для комп’ютера нічого не треба розшарювати чи налаштовувати." },
+        { kind: "dictate", h: "Диктувати де завгодно", p: "Затисни клавішу й говори. Лист, чат, документ: текст з’явиться в тому застосунку, де курсор." },
+        { kind: "file", h: "Завантажити файл", p: "Голосове, відео зустрічі, експорт. Будь-яке аудіо чи відео, хоч на години, у будь-якому браузері." },
       ],
     },
     features: {
       eyebrow: "Що всередині",
-      title: "Все, чим має бути транскрипт.",
-      sub: "Для тих, хто не хоче няньчити запис. Багатомовний від початку — 60+ мов, автовизначення.",
+      titleA: "Усе, чим має бути", titleAccent: "транскрипт.",
       items: [
-        { tag: "ML", h: "60+ мов",                 p: "Розпізнає 60+ мов і справляється з перемиканням посеред дзвінка. AI-корекція вчить твої доменні терміни.", accent: true },
-        { tag: "SS", h: "Розділення спікерів",     p: "Знає, хто що сказав — твій голос і співрозмовники не змішуються, кожного спікера можна назвати." },
-        { tag: "⚡", h: "Швидкий результат",       p: "Зупини запис — транскрипт готовий менш ніж за хвилину. Без черги, без ручних кроків." },
-        { tag: "SM", h: "Підсумок + дії",          p: "Генерується автоматично. Редагуй, надсилай — це звичайний Markdown." },
-        { tag: "FS", h: "Повнотекстовий пошук",    p: "Знайди що завгодно у всіх минулих дзвінках. Фільтри за спікером, мовою, датою." },
-        { tag: "PR", h: "Приватно за замовчуванням", p: "Транскрипти бачиш лише ти, поки не поділишся воркспейсом. Твоє аудіо ніколи не використовується для навчання AI." },
+        { h: "60+ мов", p: "Перемикайся між мовами посеред дзвінка, система встигає. Твої терміни запам’ятовуються й наступного разу пишуться правильно." },
+        { h: "Спікери з іменами", p: "Кожен голос окремо. Тебе позначено автоматично, а імена, які прозвучали в розмові, пропонуються для решти." },
+        { h: "Підсумок і задачі", p: "Одразу після дзвінка, з потрібною глибиною. Надішли в Notion або експортуй у Markdown." },
+        { h: "Диктовка, що чистить текст", p: "Без слів-паразитів, зі самовиправленнями, у будь-якому застосунку. Ставить музику на паузу, поки ти говориш." },
+        { h: "Пошук по всіх дзвінках", p: "Знайди, хто що казав, у всій історії. Проєкти розділяють клієнтів і теми." },
+        { h: "Приватно за замовчуванням", p: "Транскрипти бачиш лише ти, поки не поділишся робочим простором. Твоє аудіо ніколи не навчає AI-моделі." },
       ],
     },
-    breakout: {
-      eyebrow: "У застосунку",
-      title: "Виглядає як продукт, яким хочеться користуватися.",
-      sub: "Та сама широка типографіка. Те саме тепле тло. Гарячі клавіші на все.",
-      history: [
-        { label: "Сьогодні", rows: [
-          { name: "Стратегія · Майя та Андрій", when: "14:32", on: true },
-          { name: "Інтерв’ю · А. Коваленко", when: "11:08" },
-        ]},
-        { label: "Вчора", rows: [
-          { name: "Клієнт · Innova Corp", when: "Ср" },
-          { name: "Q4 планування",            when: "Ср" },
-        ]},
-        { label: "Минулого тижня", rows: [
-          { name: "Бренд-воркшоп",                when: "12 трав." },
-          { name: "Співбесіда · дизайнер #3", when: "11 трав." },
-          { name: "Дзвінок інвесторам",          when: "10 трав." },
-        ]},
+    desktop: {
+      eyebrow: "Застосунок для комп’ютера",
+      titleA: "Живе в треї.", titleAccent: "Завжди за одну клавішу.",
+      sub: "Увесь Skriptly у власному вікні, плюс те, що не вміє браузер: диктовка в будь-який застосунок і запис обох сторін дзвінка без розшарювання вкладки.",
+      ctaWin: "Завантажити для Windows",
+      macSoon: "macOS · скоро",
+      infoDefault: "Windows 10 і 11 · безкоштовний тариф підходить",
+      infoVersion: "Windows 10 і 11 · v{v} · {mb} МБ",
+      perks: [
+        { h: "Затисни й диктуй", p: "Відпусти, і текст вставиться там, де курсор. Є й режим без утримання." },
+        { h: "Запис дзвінка", p: "Мікрофон і все, що грає комп’ютер. Тебе в розмові позначено автоматично." },
+        { h: "Один акаунт скрізь", p: "Історія, підсумки й налаштування однакові в застосунку та в браузері." },
       ],
+      wait: {
+        title: "Хочеш на Mac?",
+        sub: "Залиш пошту, і ми напишемо один раз, коли застосунок для Mac буде готовий.",
+        placeholder: "you@work.com", button: "Повідомте мене", sending: "Надсилаю…",
+        done: "Ти у списку. Напишемо, коли застосунок для Mac буде готовий.",
+        error: "Не вдалося зберегти. Перевір адресу й спробуй ще раз.",
+        privacy: "Адреса потрібна лише для цього одного листа.",
+      },
     },
     pricing: {
       eyebrow: "Тарифи",
-      title: "Чесні тарифи. У гривнях.",
+      title: "Чесні тарифи.",
       sub: "Почни з Free. Перейди далі, коли переростеш. Скасування — у два кліки із застосунку.",
       monthly: "Помісячно",
       annual: "Річно",
-      save: "Економія ~20%",
+      save: "Економія до 25%",
       plans: PLANS_UA,
-    },
-    final: {
-      title: ["Час припинити", "переслуховувати?"],
-      ctaPrimary: "Спробувати — без картки",
-      ctaSecondary: "Відкрити застосунок",
-      fine: "Безкоштовно назавжди — 60 хв / міс · Без картки · Скасуй будь-коли",
-    },
-    foot: {
-      links: ["Можливості", "Тарифи", "Застосунок", "Приватність", "Умови"],
-      copy: "© 2026 Skriptly · Зроблено в Києві",
-    },
-    useCases: {
-      eyebrow: "Хто користується",
-      title: "Один інструмент — будь-який контекст.",
-      sub: "Транскрипт + атрибуція спікерів + AI-синтез — незалежно від того, що ти записуєш.",
-      tabs: [
-        {
-          label: "Засновники",
-          headline: "Кожен дзвінок з інвестором, інтерв'ю з клієнтом та стендап — у пошуку.",
-          points: [
-            "Точні цитати інвесторів — без переказу по пам'яті",
-            "Знайди кожне згадування конкретного болю в записах клієнтів",
-            "Хто що пообіцяв на останньому all-hands — одразу видно",
-          ],
-          quote: "Я пропускав половину дзвінка, роблячи нотатки. Тепер я повністю присутній.",
-          author: "CTO, B2B SaaS-стартап",
-        },
-        {
-          label: "Дослідники",
-          headline: "Інтерв'ю розшифровані. Учасники підписані. Паттерни знаходяться.",
-          points: [
-            "Кожна сесія дослівно з атрибуцією по спікерах",
-            "Пошук по 40 інтерв'ю за конкретною фразою",
-            "Чистий Markdown для NVivo або прямих цитат",
-          ],
-          quote: "Я розшифрував місяць польової роботи за один вечір.",
-          author: "UX-дослідник, дизайн-агенція",
-        },
-        {
-          label: "Студенти",
-          headline: "Лекції, семінари та навчальні групи — слово в слово.",
-          points: [
-            "Запиши лекцію й отримай пошуковий транскрипт замість нотаток",
-            "Голоси в груповій дискусії атрибутуються автоматично",
-            "Нульове збереження — записи не виходять за межі сесії",
-          ],
-          quote: "Я перестав пропускати слова під час писання. Транскрипт фіксує все.",
-          author: "Аспірант, лінгвістика",
-        },
-        {
-          label: "Журналісти",
-          headline: "Цитати з джерел — дослівні та правильно атрибутовані.",
-          points: [
-            "Готові цитати для вставки — без переслуховування",
-            "Підписи спікерів збережуться навіть у шумних телефонних записах",
-            "Твої записи ніколи не використовуються для навчання AI",
-          ],
-          quote: "Я можу процитувати 90-хвилинне інтерв'ю за хвилини, не за години.",
-          author: "Розслідувач, національне видання",
-        },
-        {
-          label: "Команди",
-          headline: "Спільний простір. Кожен дзвінок, кожен голос — зафіксований.",
-          points: [
-            "Спільна бібліотека транскриптів для всієї команди",
-            "Повнотекстовий пошук по всіх командних дзвінках за спікером чи темою",
-            "Білінг по користувачах, один рахунок — без мінімальних місць",
-          ],
-          quote: "Ми перестали питати «а що ми вирішили з тим питанням?»",
-          author: "Head of Product, стартап 12 людей",
-        },
-      ],
     },
     faq: {
       eyebrow: "FAQ",
-      title: "Часті запитання.",
+      title: "Часті запитання",
       items: [
+        {
+          q: "Чи потрібен застосунок для комп’ютера?",
+          a: "Ні. Skriptly працює в будь-якому браузері: запиши вкладку або завантаж файл. Застосунок додає диктовку в будь-яку програму та запис дзвінків без розшарювання вкладки; акаунт і історія спільні.",
+        },
+        {
+          q: "Чому Windows попереджає під час встановлення?",
+          a: "Інсталятор поки без цифрового підпису, тому SmartScreen показує «Windows захистив ваш ПК». Натисни «Докладніше», потім «Усе одно виконати». Ми підпишемо його до публічного запуску.",
+        },
+        {
+          q: "Коли буде версія для Mac?",
+          a: "Вона в роботі. Залиш пошту в розділі застосунку, і ми один раз напишемо, коли вона буде готова.",
+        },
         {
           q: "Чи зберігається моє аудіо?",
           a: "Копію кожного запису ми зберігаємо 90 днів, щоб розбирати помилки транскрипції, після чого вона видаляється автоматично. Доступ має лише засновник, аудіо ніколи не використовується для навчання AI і нікому не передається. Видалення акаунта видаляє його одразу. Деталі — в Політиці конфіденційності.",
@@ -498,30 +387,26 @@ export const COPY: Record<Lang, Copy> = {
         },
         {
           q: "Наскільки точна транскрипція?",
-          a: "Дуже точна для чіткого аудіо — порівняно з професійними сервісами. Точність залежить від якості звуку, акцентів і перекриттів спікерів. Шар AI-корекції додатково покращує власні назви, абревіатури та доменні терміни.",
+          a: "Дуже точна для чіткого аудіо, порівняно з професійними сервісами. Точність залежить від якості звуку, акцентів і перекриттів спікерів. Шар AI-корекції додатково покращує власні назви, абревіатури та доменні терміни.",
         },
         {
           q: "Як скасувати підписку?",
-          a: "З застосунку: Налаштування → Підписка → Скасувати. Набирає чинності наприкінці поточного розрахункового періоду. Без питань, без комісії за скасування.",
+          a: "У застосунку: Налаштування → Тариф і оплата → Керувати підпискою. Набирає чинності наприкінці поточного розрахункового періоду. Без питань, без комісії за скасування.",
         },
       ],
     },
-    mock: {
-      url: "skriptly.io/app/c/k3p2-1a",
-      eyebrow: "ТРАНСКРИПТ",
-      rec: "14:32",
-      langPill: "UA",
-      lines: [
-        { spk: 1, name: "Майя",   time: "00:01:24", text: "Головний інсайт з інтерв’ю — ніхто насправді не хоче переслуховувати запис." },
-        { spk: 2, name: "Андрій", time: "00:01:38", text: "Так — люди хочуть просканувати очима. І шукати. Транскрипт — це і є продукт." },
-        { spk: 1, name: "Майя",   time: "00:01:52", text: "Саме так. Це й має бути першим рядком на лендингу", live: true },
+    final: {
+      titleA: "Час припинити", titleAccent: "переслуховувати?",
+      ctaPrimary: "Спробувати безкоштовно",
+      ctaWin: "Завантажити для Windows",
+      fine: "Безкоштовно назавжди: 60 хв / міс. Без картки.",
+    },
+    foot: {
+      links: [
+        { label: "Можливості", href: "#features" }, { label: "Застосунок", href: "#desktop" }, { label: "Тарифи", href: "#pricing" },
+        { label: "Конфіденційність", href: "/privacy" }, { label: "Умови", href: "/terms" },
       ],
-      summary: [
-        "Переслуховування — не робота; люди скролять і шукають.",
-        "Транскрипт — це основний артефакт, не побічний.",
-        "На лендингу — фрейм «читай замість слухай».",
-      ],
-      summaryLabel: "Авто-підсумок · 3 пункти",
+      copy: "Skriptly · зроблено в Києві",
     },
   },
 };

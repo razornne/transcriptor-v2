@@ -46,9 +46,9 @@ export function useTypewriter(
 
 // ─── useReveal ──────────────────────────────────────────────────
 // Добавляет .in на все элементы .reveal когда они появляются в viewport.
-export function useReveal() {
+export function useReveal(selector = ".reveal") {
   useEffect(() => {
-    const els = document.querySelectorAll(".reveal:not(.in)");
+    const els = document.querySelectorAll(selector + ":not(.in)");
     if (!("IntersectionObserver" in window)) {
       els.forEach((e) => e.classList.add("in"));
       return;
@@ -66,7 +66,7 @@ export function useReveal() {
     );
     els.forEach((e) => io.observe(e));
     return () => io.disconnect();
-  }, []);
+  }, [selector]);
 }
 
 // ─── useTween ───────────────────────────────────────────────────

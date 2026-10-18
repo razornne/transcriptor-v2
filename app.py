@@ -1115,7 +1115,8 @@ def _get_jwks_client():
     return _jwks_client
 
 # Эндпоинты которые работают без auth (служебные, открытые)
-_PUBLIC_API_PATHS = {"/api/health", "/api/stripe/webhook", "/api/notion/oauth/callback"}
+_PUBLIC_API_PATHS = {"/api/health", "/api/stripe/webhook", "/api/notion/oauth/callback",
+                     "/api/download/windows", "/api/download/windows/info", "/api/waitlist"}
 
 
 @app.before_request
@@ -3753,6 +3754,104 @@ def dictation_cleanup_endpoint():
     ok = _cleanup_is_sane(raw, cleaned)
     print(f"[dictation] cleanup {len(raw)}->{len(cleaned)} chars in {time.time() - t0:.2f}s ok={ok}", flush=True)
     return jsonify({"text": cleaned if ok else raw, "cleaned": ok})
+
+
+# ── Публичные эндпоинты лендинга: скачивание приложения и вейтлист ─────────────
+# Установщик лежит в R2 (тот же бакет, префикс downloads/): ссылка skriptly.io/api/download/windows
+# каждый раз отдаёт 302 на короткоживущий presigned URL, так что бакет остаётся приватным,
+# а файл обновляется заменой объекта (scripts/r2_downloads.py) без правок сайта.
+DOWNLOAD_KEYS = {"windows": "downloads/windows/Skriptly-setup.exe"}
+_public_hits: dict[str, list[float]] = {}
+
+
+def _client_ip() -> str:
+    fwd = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    return fwd or (request.remote_addr or "?")
+
+
+def _rate_limited(bucket: str, limit: int, window_s: int) -> bool:
+    """Грубый лимит на IP в памяти контейнера — защита от залива формы, не от целенаправленной атаки."""
+    now = time.time()
+    key = f"{bucket}:{_client_ip()}"
+    hits = [t for t in _public_hits.get(key, []) if now - t < window_s]
+    if len(hits) >= limit:
+        _public_hits[key] = hits
+        return True
+    hits.append(now)
+    _public_hits[key] = hits
+    if len(_public_hits) > 5000:  # не растём бесконечно
+        for k in [k for k, v in _public_hits.items() if not v or now - v[-1] > window_s]:
+            _public_hits.pop(k, None)
+    return False
+
+
+@app.route("/api/download/windows")
+def download_windows():
+    if not R2_BUCKET:
+        return jsonify({"error": "downloads are not configured"}), 503
+    if _rate_limited("dl", 30, 600):
+        return jsonify({"error": "too many requests"}), 429
+    try:
+        url = _r2().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": R2_BUCKET, "Key": DOWNLOAD_KEYS["windows"],
+                    "ResponseContentDisposition": 'attachment; filename="Skriptly-setup.exe"'},
+            ExpiresIn=300,
+        )
+    except Exception as e:
+        print(f"[download] presign failed: {e}", flush=True)
+        return jsonify({"error": "download unavailable"}), 503
+    resp = redirect(url, code=302)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/api/download/windows/info")
+def download_windows_info():
+    """Версия и размер текущего установщика — для подписи у кнопки на лендинге."""
+    if not R2_BUCKET:
+        return jsonify({"available": False})
+    try:
+        head = _r2().head_object(Bucket=R2_BUCKET, Key=DOWNLOAD_KEYS["windows"])
+    except Exception:
+        return jsonify({"available": False})
+    resp = jsonify({"available": True, "version": (head.get("Metadata") or {}).get("version", ""),
+                    "size_mb": round(head["ContentLength"] / 1048576, 1)})
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,24}$")
+
+
+@app.route("/api/waitlist", methods=["POST"])
+def waitlist_endpoint():
+    """Body: {email, platform?: "macos", lang?, website?: honeypot}. Публичный: адрес сохраняется в
+    public.waitlist (migration 017) и уходит админу в Telegram — даже если таблицы ещё нет, заявка не пропадёт."""
+    body = request.get_json(silent=True) or {}
+    if body.get("website"):  # honeypot: боты заполняют скрытое поле
+        return jsonify({"ok": True})
+    email = str(body.get("email") or "").strip().lower()
+    platform = str(body.get("platform") or "macos").strip().lower()[:16]
+    if platform not in {"macos", "windows", "linux"} or len(email) > 254 or not _EMAIL_RE.match(email):
+        return jsonify({"error": "Enter a valid email"}), 400
+    if _rate_limited("wl", 6, 600):
+        return jsonify({"error": "Too many attempts, try again later"}), 429
+    lang = str(body.get("lang") or "")[:8] or None
+    try:
+        _sb_admin("waitlist", method="POST", data={"email": email, "platform": platform, "lang": lang, "source": "landing"})
+        fresh = True
+    except requests.HTTPError as e:
+        # 409 — адрес уже в списке: для пользователя это тоже успех, админа не дёргаем повторно
+        fresh = not (e.response is not None and e.response.status_code == 409)
+        if fresh:
+            print(f"[waitlist] db insert failed: {e}", flush=True)
+    except Exception as e:
+        fresh = True
+        print(f"[waitlist] db insert failed: {e}", flush=True)
+    if fresh:
+        _notify_admin(f"📬 <b>Waitlist · {platform}</b>\n{email}")
+    return jsonify({"ok": True})
 
 
 @app.route("/api/speaker-names", methods=["POST"])

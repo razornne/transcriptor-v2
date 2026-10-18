@@ -41,6 +41,7 @@ export default function PrivacyPage() {
         <section>
           <h2>4. Account data</h2>
           <p>We store your email address, subscription plan, usage (call minutes and dictation time), preferences and your vocabulary. We do not collect payment card data — purchases are sold and processed by Link (Stripe) as the merchant of record.</p>
+          <p>If you join the Mac waiting list on our website, we store your email address (and the interface language) only to write to you once when the Mac app is ready, and we notify the founder of the signup. Ask us to remove it at any time.</p>
         </section>
 
         <section>

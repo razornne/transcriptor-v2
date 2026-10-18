@@ -223,6 +223,11 @@ Supabase Postgres
 - **`landing/app/app/`** — **production** после Cutover 2026-06-14. Ink & Halftone Studio: Next.js App Router, полный функционал транскрипции (запись, upload, AI tools, история, биллинг, настройки). Подробнее — `## Ink & Halftone Studio (/app)` секция.
 - **`legacy/templates/index.html`** — архив старого single-file приложения (~5200 строк, CSS+JS inline). **НЕ редактировать** — только как reference.
 
+### Лендинг пересобран 2026-10-18 (актуально; ниже про него — история)
+- Один клиентский файл `landing/components/LandingClient.tsx` + стили `landing/app/landing.css` (всё под `.lp`, классы `lp-*`) + копирайт `lib/content.ts` (`COPY.en/ua`, тарифы в `PLANS_EN/UA`). Без DotField, паритет с приложением (те же токены/шрифты; в UA display = Onest). Старые Hero/Features/AppMock/… и DotField удалены, `globals.css` урезан до токенов, базы, `.display/.eyebrow/.logo` и стилей Privacy/Terms.
+- Скачивание Windows: кнопка → `/api/download/windows` (публичный, 302 на presigned URL R2, ключ `downloads/windows/Skriptly-setup.exe`); подпись версии/размера — `/api/download/windows/info`. Обновить установщик: `modal run scripts/r2_downloads.py::upload --path <exe> --version <v>`. **Правило lifecycle «90 дней» в бакете должно быть ограничено префиксом `recordings/`**, иначе удалит установщик (`::check` читать не может — у токена нет прав, смотреть в дашборде Cloudflare).
+- Вейтлист Mac: форма в блоке Desktop → `POST /api/waitlist` (публичный, honeypot `website`, лимит 6/10 мин на IP) → `public.waitlist` (миграция 017, вручную в Supabase) + Telegram админу. Mac-посетителю hero/final показывают «Join the Mac waitlist» вместо скачивания.
+
 ### Frontend — landing (Next.js)
 - **`landing/`** — Next.js 15 проект, деплоится на Vercel как `skriptly.io`.
   Держит ДВЕ независимые поверхности:
