@@ -6,8 +6,10 @@ pub const SUPABASE_URL: &str = "https://bmonakhktbaliwgobrxv.supabase.co";
 // Публичный anon-ключ (тот же, что в вебе) — безопасно держать в клиенте.
 pub const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJtb25ha2hrdGJhbGl3Z29icnh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkyMTY4OTMsImV4cCI6MjA5NDc5Mjg5M30.HeY7nTJrAKPPHNRrPQwrIlx0HTd5L8a3xYZNgL-zWX4";
 
-// Вход: браузер → Supabase → редирект на этот адрес (должен быть в Supabase
-// Auth → URL Configuration → Redirect URLs).
-pub const LOOPBACK_PORT: u16 = 53682;
+// Вход: браузер → Supabase → редирект на loopback (адрес должен быть в Supabase
+// Auth → URL Configuration → Redirect URLs: достаточно `http://127.0.0.1:*/callback`).
+// Порт берём первый свободный из списка: Windows (Hyper-V/Docker/WSL) резервирует блоки
+// портов в динамическом диапазоне, и 53682 бывает недоступен («os error 10013»).
+pub const LOOPBACK_PORTS: [u16; 6] = [53682, 18682, 28682, 38682, 43682, 8682];
 
 pub const SONIOX_WS: &str = "wss://stt-rt.soniox.com/transcribe-websocket";

@@ -5,7 +5,7 @@
 // 1) генерим code_verifier/challenge; 2) поднимаем http://127.0.0.1:53682/callback;
 // 3) браузер: Supabase → Google/письмо → редирект на callback с ?code=;
 // 4) меняем code + verifier на сессию (grant_type=pkce).
-use crate::config::{LOOPBACK_PORT, SUPABASE_ANON_KEY, SUPABASE_URL};
+use crate::config::{LOOPBACK_PORTS, SUPABASE_ANON_KEY, SUPABASE_URL};
 use crate::state::AppState;
 use crate::store::Session;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -36,8 +36,8 @@ fn pkce_pair() -> (String, String) {
     (verifier, challenge)
 }
 
-pub fn redirect_url() -> String {
-    format!("http://127.0.0.1:{LOOPBACK_PORT}/callback")
+pub fn redirect_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/callback")
 }
 
 const ERROR_PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>Skriptly</title>
@@ -74,16 +74,26 @@ fn signed_in_page(email: &str, hotkey_label: &str) -> tiny_http::Response<std::i
 /// Ждём редирект браузера на loopback. Отменяется новым входом.
 /// Запрос с кодом НЕ закрываем: ответ (страница «вы вошли») отдаём после обмена кода на сессию,
 /// чтобы показать почту.
-fn wait_for_code(cancel: Arc<AtomicBool>) -> Result<(String, tiny_http::Request), String> {
-    // Прошлый вход мог ещё держать порт — даём ему освободиться.
+/// Поднимает loopback-сервер на первом доступном порту из списка. Прошлый вход мог ещё держать
+/// порт — даём ему до 3 с освободиться; недоступный порт (зарезервирован Windows) пропускаем.
+fn bind_loopback() -> Result<(tiny_http::Server, u16), String> {
     let deadline = Instant::now() + Duration::from_secs(3);
-    let server = loop {
-        match tiny_http::Server::http(("127.0.0.1", LOOPBACK_PORT)) {
-            Ok(s) => break s,
-            Err(e) if Instant::now() > deadline => return Err(format!("port {LOOPBACK_PORT} is busy ({e})")),
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+    let mut last = String::new();
+    loop {
+        for port in LOOPBACK_PORTS {
+            match tiny_http::Server::http(("127.0.0.1", port)) {
+                Ok(s) => return Ok((s, port)),
+                Err(e) => last = format!("{port}: {e}"),
+            }
         }
-    };
+        if Instant::now() > deadline {
+            return Err(format!("no free local port for sign-in ({last})"));
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+fn wait_for_code(server: tiny_http::Server, cancel: Arc<AtomicBool>) -> Result<(String, tiny_http::Request), String> {
     let until = Instant::now() + Duration::from_secs(15 * 60);
     while Instant::now() < until {
         if cancel.load(Ordering::SeqCst) {
@@ -155,8 +165,10 @@ pub async fn sign_in(state: &AppState, method: Method) -> Result<Session, String
         prev.store(true, Ordering::SeqCst);
     }
     let (verifier, challenge) = pkce_pair();
-    let redirect = urlencoding::encode(&redirect_url()).into_owned();
-    let waiter = tokio::task::spawn_blocking(move || wait_for_code(cancel));
+    let (server, port) = tokio::task::spawn_blocking(bind_loopback).await.map_err(|e| e.to_string())??;
+    crate::log!("[auth] listening on 127.0.0.1:{port}");
+    let redirect = urlencoding::encode(&redirect_url(port)).into_owned();
+    let waiter = tokio::task::spawn_blocking(move || wait_for_code(server, cancel));
 
     match method {
         Method::Google => {
@@ -232,5 +244,21 @@ pub async fn access_token(state: &AppState) -> Result<String, String> {
             *guard = None;
             Err("not signed in".into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Первый порт занят (как зарезервированный Windows) — берём следующий.
+    #[test]
+    fn falls_back_when_the_first_port_is_taken() {
+        let first = tiny_http::Server::http(("127.0.0.1", LOOPBACK_PORTS[0])).ok(); // может быть и занят — тогда тем лучше
+        let (_s, port) = bind_loopback().expect("some port is free");
+        if first.is_some() {
+            assert_ne!(port, LOOPBACK_PORTS[0]);
+        }
+        assert!(LOOPBACK_PORTS.contains(&port));
     }
 }
