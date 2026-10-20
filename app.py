@@ -570,8 +570,6 @@ SONIOX_MAX_S = 295 * 60
 # записи ($0.24/ч сверху), а финальный транскрипт всё равно приходит после Stop.
 # Диктовку (purpose=dictation) не затрагивает. LIVE_TRANSCRIPT=on — вернуть.
 LIVE_TRANSCRIPT = os.environ.get("LIVE_TRANSCRIPT", "off").lower() in ("on", "1", "true")
-# Генерация заголовков LLM (Qwen на GPU) — выключена, см. /api/title.
-TITLE_GENERATION = os.environ.get("TITLE_GENERATION", "off").lower() in ("on", "1", "true")
 
 
 # ── Supabase JWT validation ─────────────────────────────────────
@@ -3067,66 +3065,78 @@ def stripe_webhook():
     return jsonify({"ok": True})
 
 
+TITLE_PROMPT = (
+    "You name saved call recordings so the owner can find the right one in a long list later.\n"
+    "{lang_hint}\n"
+    "Rules:\n"
+    "- 3 to 8 words, specific: the concrete topic, decision, project, company, product or person that this call is about.\n"
+    "- Prefer proper names and numbers that appear in the transcript (e.g. 'Spare parts pricing with Avtek').\n"
+    "- NEVER generic: no 'Meeting', 'Call', 'Conversation', 'Discussion', 'Recording' on their own, no greetings, no first sentence copied.\n"
+    "- No quotes, no trailing period, no label like 'Title:', no emoji.\n"
+    "- If the transcript is small talk or a test (e.g. 'can you hear me'), name it plainly, e.g. 'Audio check'.\n\n"
+    "Transcript (speaker: text; excerpts of the start, middle and end):\n{excerpt}\n\nTitle:"
+)
+
+
+def _title_excerpt(text: str) -> str:
+    """Начало + середина + конец: по первым словам тему звонка не понять."""
+    text = text.strip()
+    if len(text) <= 6000:
+        return text
+    mid = len(text) // 2
+    return text[:3500] + "\n[…]\n" + text[mid - 750: mid + 750] + "\n[…]\n" + text[-1500:]
+
+
+def _clean_title(raw: str) -> str:
+    title = (raw or "").split("\n")[0].strip()
+    title = re.sub(r'^["\'«»\s*#]+|["\'«»\s.*]+$', "", title)
+    title = re.sub(r'^(title|заголовок|назва|tytuł|název)\s*[:\-—]\s*', "", title, flags=re.IGNORECASE)
+    return title[:80].strip()
+
+
 @app.route("/api/title", methods=["POST"])
 def title_endpoint():
-    """Генерация короткого названия транскрипта через локальную LLM.
+    """Осмысленное название записи (Gemini Flash из Flask, ~1 с, доли цента).
 
-    Body (JSON):
-      text:     транскрипт (склеенный или первые сегменты — что хочешь подать)
-      language: "ru" | "uk" | "en" — на каком языке писать заголовок (опционально)
+    Body (JSON): text (транскрипт «спикер: реплика»), language (опционально).
+    Returns: {"title": "..."} или {"title": null} — тогда остаётся название по первым словам.
 
-    Returns: {"title": "..."}
-
-    Отключено 2026-09-25 (TITLE_GENERATION=off по умолчанию): каждый заголовок
-    поднимал GPU-контейнер Transcriptor (33 с холодного старта + 150 с простоя ≈
-    $0.06 — дороже Soniox за получасовой звонок). Название пишет юзер; до этого
-    стоит авто-заголовок из первых слов. Эндпоинт оставлен для старых клиентов.
+    Раньше заголовки писал Qwen на GPU и поднимал контейнер ради каждой записи (≈ $0.06);
+    с Gemini Flash это ~$0.0005. Выключатель: env TITLE_LLM=off. В Privacy Mode текст
+    третьим лицам не уходит — заголовок не генерируем.
     """
-    if not TITLE_GENERATION:
+    if os.environ.get("TITLE_LLM", "on").lower() in ("off", "0", "false"):
         return jsonify({"title": None})
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     if not text:
         return jsonify({"error": "text required"}), 400
+    if SUPABASE_SERVICE_ROLE_KEY and g.user_id:
+        try:
+            profile = _get_user_profile(g.user_id)
+            if (PRIVACY_MODE_ALLOWED_PLANS
+                    and _privacy_mode_active(profile, _get_effective_plan(g.user_id, g.user_email, profile))):
+                return jsonify({"title": None})
+        except Exception as e:
+            print(f"[title] profile failed: {e}", flush=True)
 
     language = (data.get("language") or "").lower()
-    # Autodetect: пытаемся понять язык по содержимому, чтобы LLM не сваливалась в EN
     if not language:
         language = _detect_transcript_language(text) or ""
     lang_hint = {
-        "ru": "Напиши заголовок на русском.",
-        "uk": "Напиши заголовок українською.",
+        "ru": "Write the title in Russian.",
+        "uk": "Write the title in Ukrainian.",
         "en": "Write the title in English.",
-        "pl": "Napisz tytuł po polsku.",
-        "cs": "Napiš název v češtině.",
+        "pl": "Write the title in Polish.",
+        "cs": "Write the title in Czech.",
     }.get(language, "Write the title in the same language as the transcript.")
-
-    # Ограничиваем контекст ~3000 символов — для заголовка достаточно
-    excerpt = text[:3000]
-
-    prompt = (
-        "You generate concise, descriptive titles for meeting transcripts. "
-        f"{lang_hint} "
-        "The title must be 3 to 7 words, capture the main topic, "
-        "no quotes, no period at the end, no labels like 'Title:'.\n\n"
-        f"Transcript:\n{excerpt}\n\nTitle:"
-    )
-
+    prompt = TITLE_PROMPT.replace("{lang_hint}", lang_hint).replace("{excerpt}", _title_excerpt(text))
     try:
-        raw = _ollama_generate(prompt, max_tokens=40, temperature=0.4)
-    except requests.exceptions.ConnectionError:
-        return jsonify({"error": "ollama unreachable (is it running?)"}), 503
+        title = _clean_title(_gemini_quick(prompt, timeout=10.0))
     except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"error": f"ollama failed: {e}"}), 500
-
-    # Чистим вывод: первая строка, без кавычек/префиксов
-    title = raw.split("\n")[0].strip()
-    title = re.sub(r'^["\'«»\s]+|["\'«»\s.]+$', "", title)
-    title = re.sub(r'^(title|заголовок|назва)\s*[:\-—]\s*', "", title, flags=re.IGNORECASE)
-    # Обрезаем до 80 символов на всякий случай
-    title = title[:80].strip()
-
+        print(f"[title] failed: {e}", flush=True)
+        return jsonify({"title": None})
+    print(f"[title] {title!r}", flush=True)
     return jsonify({"title": title or None})
 
 

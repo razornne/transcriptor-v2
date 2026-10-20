@@ -20,7 +20,7 @@ import { shouldExtractAudio, extractAudioTrack } from "@/lib/ink/audioExtract";
 import { idbDeleteSession, idbGetOrphans } from "@/lib/ink/idb";
 import { startKeepAlive, ensureNotifyPermission, notify, batteryWarning } from "@/lib/ink/keepalive";
 import {
-  transcribe, generate, fetchSpeakerSuggestions, fetchProfile, fetchWorkspace, cancelJob, createStripeCheckout,
+  transcribe, generate, suggestTitle, fetchSpeakerSuggestions, fetchProfile, fetchWorkspace, cancelJob, createStripeCheckout,
   CancelledError, type CancelToken, type Profile, type JobProgress, type WorkspaceInfo,
   type PipelineSteps,
   type Project, loadProjects, saveProjects,
@@ -474,8 +474,14 @@ export default function InkApp() {
     setLiveSegs([]); // финальный транскрипт заменил предпросмотр
     setStatus("");
     phCapture("transcription_completed", { segments: segments.length, language: lang });
-    // LLM-заголовки выключены (2026-09-25): GPU ради заголовка стоил дороже самой
-    // транскрипции. Остаётся авто-заголовок из первых слов — юзер переименует сам.
+    // Осмысленное название: сначала ставится заголовок из первых слов, через секунду его заменяет
+    // название от Gemini Flash (доли цента). Если юзер успел переименовать сам — не трогаем.
+    void suggestTitle(segments, mine, lang).then((t) => {
+      if (!t) return;
+      const cur = entriesRef.current.find((e) => e.id === entry.id);
+      if (!cur || !cur.titleIsAuto) return;
+      patchLocal(entry.id, { title: t }, { title: t });
+    });
 
     // Auto-summary right after the call (AI is a paid-plan feature)
     if ((profile?.plan || "free") !== "free") {

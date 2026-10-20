@@ -525,6 +525,11 @@
   color: var(--i-ink); padding: 0; margin: 0;
 }
 .i-title-input::placeholder { color: var(--i-graphite); opacity: .6; }
+.i-title-row { display: flex; align-items: center; gap: 12px; }
+.i-title-row .i-title-input { flex: 1; min-width: 0; }
+.i-retitle { flex: none; font-size: 12.5px; white-space: nowrap; opacity: 0; transition: opacity 160ms ease; }
+.i-title-row:hover .i-retitle, .i-retitle:focus-visible, .i-retitle:disabled { opacity: 1; }
+@media (hover: none) { .i-retitle { opacity: 1; } }
 .i-meta-row {
   display: flex; flex-wrap: wrap; gap: 7px; align-items: center;
   font-family: var(--i-mono); font-size: 12px; color: var(--i-graphite);
@@ -1202,7 +1207,15 @@
 .i-plan-card.current { border: 2px solid var(--i-accent); padding: 21px; }
 .i-plan-name { font-size: 14px; font-weight: 700; color: var(--i-ink); }
 .i-plan-price { font-family: var(--i-display); font-size: 34px; font-weight: 600; letter-spacing: -0.015em; color: var(--i-ink); line-height: 1.1; }
-.i-plan-price-period { font-family: var(--i-ui); font-size: 11px; color: var(--i-graphite); font-weight: 400; }
+.i-plan-price-period { font-family: var(--i-ui); font-size: 12px; color: var(--i-graphite); font-weight: 400; margin-left: 6px; white-space: nowrap; }
+.i-plan-priceline { display: flex; align-items: baseline; flex-wrap: wrap; row-gap: 2px; }
+.i-plan-note { font-size: 12px; color: var(--i-graphite); margin-top: 4px; min-height: 1.3em; }
+.i-bill-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.i-save-badge {
+  font-family: var(--i-ui); font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+  background: var(--i-ok-soft, #E2F1E8); color: var(--i-ok, #1F6B47); opacity: .5; transition: opacity .2s ease;
+}
+.i-save-badge.on { opacity: 1; }
 .i-plan-mins {
   font-family: var(--i-mono); font-size: 10.5px; color: var(--i-graphite);
   background: var(--i-surface); border: 1px solid var(--i-hairline);
@@ -2214,3 +2227,4 @@
 .i-sel-opt[aria-selected="true"] { font-weight: 700; color: var(--i-accent-text); }
 .i-sel-opt svg { flex: none; color: var(--i-accent-text); }
 @media (prefers-reduced-motion: reduce) { .i-sel-pop { animation: none; } .i-sel-chev { transition: none; } }
+[data-theme="dark"] .i-save-badge { background: #14301F; color: #7FD6A4; }

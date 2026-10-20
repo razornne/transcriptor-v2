@@ -181,10 +181,10 @@ function planCards(lang: Lang, billing: Billing) {
       { id: "free" as const, name: "Free", price: "0 ₴", period: "назавжди", minutes: "60 хв дзвінків / міс",
         features: ["Розділення за спікерами", "1 год диктовки / міс", "Останні 5 записів"] },
       { id: "pro" as const, name: "Pro", price: yearly ? "199 ₴" : "249 ₴",
-        period: yearly ? "/ міс, 2 390 ₴ на рік" : "/ міс", minutes: "600 хв дзвінків / міс",
+        period: "/ міс", note: yearly ? "2 390 ₴ одним платежем на рік" : "", minutes: "600 хв дзвінків / міс",
         features: ["Усе з Free", "AI-підсумок і задачі", "Диктовка без ліміту", "Уся історія"] },
       { id: "team" as const, name: "Team", price: yearly ? "183 ₴" : "229 ₴",
-        period: yearly ? "/ місце / міс, щороку" : "/ місце / міс", minutes: "600 хв на місце, спільний пул",
+        period: "/ місце / міс", note: yearly ? "2 190 ₴ за місце на рік" : "", minutes: "600 хв на місце, спільний пул",
         features: ["Усе з Pro", "Спільний воркспейс", "Один рахунок на команду"] },
     ];
   }
@@ -192,10 +192,10 @@ function planCards(lang: Lang, billing: Billing) {
     { id: "free" as const, name: "Free", price: "$0", period: "forever", minutes: "60 min of calls / mo",
       features: ["Speaker labels", "1 h of dictation / mo", "Last 5 recordings"] },
     { id: "pro" as const, name: "Pro", price: yearly ? "$9" : "$12",
-      period: yearly ? "/mo, billed yearly" : "/mo", minutes: "600 min of calls / mo",
+      period: "/mo", note: yearly ? "$108 billed once a year" : "", minutes: "600 min of calls / mo",
       features: ["Everything in Free", "AI summary & action items", "Unlimited dictation", "Unlimited history"] },
     { id: "team" as const, name: "Team", price: yearly ? "$11" : "$14",
-      period: yearly ? "/seat/mo, billed yearly" : "/seat/mo", minutes: "600 min per seat, shared pool",
+      period: "/seat/mo", note: yearly ? "$132 per seat, billed yearly" : "", minutes: "600 min per seat, shared pool",
       features: ["Everything in Pro", "Shared workspace", "One invoice for the team"] },
   ];
 }
@@ -592,14 +592,16 @@ export function SettingsModal({
                   <div className="i-billing-error" role="alert">{billingError}</div>
                 )}
 
-                <div className="i-seg-toggle" role="group" aria-label="Billing period" style={{ maxWidth: 260 }}>
-                  {(["monthly", "annual"] as const).map((b) => (
-                    <button key={b} type="button" className={billing === b ? "on" : ""} onClick={() => setBilling(b)}>
-                      {b === "monthly" ? t.monthly : t.annual}
-                    </button>
-                  ))}
+                <div className="i-bill-row">
+                  <div className="i-seg-toggle" role="group" aria-label="Billing period" style={{ maxWidth: 260 }}>
+                    {(["monthly", "annual"] as const).map((b) => (
+                      <button key={b} type="button" className={billing === b ? "on" : ""} onClick={() => setBilling(b)}>
+                        {b === "monthly" ? t.monthly : t.annual}
+                      </button>
+                    ))}
+                  </div>
+                  <span className={"i-save-badge" + (billing === "annual" ? " on" : "")}>{t.annualSave}</span>
                 </div>
-                {billing === "annual" && <p className="i-mrow-sub" style={{ marginTop: 6 }}>{t.annualSave}</p>}
 
                 <div className="i-plan-cards">
                   {planCards(uiLang, billing).map((p) => (
@@ -608,9 +610,12 @@ export function SettingsModal({
                       className={["i-plan-card", p.id === plan ? "current" : ""].filter(Boolean).join(" ")}
                     >
                       <div className="i-plan-name">{p.name}</div>
-                      <div>
-                        <span className="i-plan-price">{p.price}</span>
-                        <span className="i-plan-price-period"> {p.period}</span>
+                      <div className="i-plan-priceblock">
+                        <div className="i-plan-priceline">
+                          <span className="i-plan-price">{p.price}</span>
+                          <span className="i-plan-price-period">{p.period}</span>
+                        </div>
+                        <div className="i-plan-note">{p.note || " "}</div>
                       </div>
                       <span className="i-plan-mins">{p.minutes}</span>
                       <div className="i-plan-feats">

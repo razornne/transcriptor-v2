@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import type { HistoryEntry, Segment } from "@/lib/ink/db";
-import { generate, sendToNotion, UpgradeRequiredError } from "@/lib/ink/api";
+import { generate, sendToNotion, suggestTitle, UpgradeRequiredError } from "@/lib/ink/api";
 import { UpgradeCard } from "./UpgradeCard";
 import { SpeakersCard, TurnRow } from "./Turns";
 import {
@@ -315,18 +315,32 @@ export function ResultView({
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   };
 
+  const [titling, setTitling] = useState(false);
+  const retitle = async () => {
+    setTitling(true);
+    const t = await suggestTitle(entry.segments, entry.speakerNames, entry.lang);
+    setTitling(false);
+    if (t) onPatch({ title: t, titleIsAuto: true }, { title: t, title_is_auto: true });
+  };
+
   return (
     <div className="i-resultview">
-      <input
-        className="i-title-input"
-        value={entry.title || ""}
-        placeholder="Untitled recording"
-        onChange={(e) => onPatch(
-          { title: e.target.value, titleIsAuto: false },
-          { title: e.target.value, title_is_auto: false },
-        )}
-        aria-label="Recording title"
-      />
+      <div className="i-title-row">
+        <input
+          className="i-title-input"
+          value={entry.title || ""}
+          placeholder="Untitled recording"
+          onChange={(e) => onPatch(
+            { title: e.target.value, titleIsAuto: false },
+            { title: e.target.value, title_is_auto: false },
+          )}
+          aria-label="Recording title"
+        />
+        <button type="button" className="i-textbtn i-retitle" onClick={() => void retitle()} disabled={titling}
+          title="Suggest a descriptive title">
+          {titling ? "Thinking…" : "Suggest title"}
+        </button>
+      </div>
       <div className="i-meta-row">
         <span>{new Set(entry.segments.map((s) => s.speaker)).size} speakers</span>
         <span>·</span>

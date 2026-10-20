@@ -65,3 +65,32 @@ def pairs_from_edit(original: str, edited: str) -> list[dict]:
         if wrong != right and wrong.lower() != right.lower():
             pairs.append({"wrong": wrong, "right": right})
     return pairs[:10]
+
+
+# ── Словарь привязан к письму языка ───────────────────────────────────────
+# Кириллические термины из украинских созвонов нельзя подсказывать на английской записи: Gemini
+# послушно «исправлял» «Prague» на «Празі». В латиничных языках берём только латинские термины.
+LATIN_LANGS = {"en", "pl", "cs"}
+_CYR = re.compile(r"[Ѐ-ӿ]")
+
+
+def has_cyrillic(s: str) -> bool:
+    return bool(_CYR.search(s or ""))
+
+
+def scope_terms(terms: list[str] | None, language: str | None) -> list[str]:
+    """Термины словаря, годные для записи на `language` (пусто/неизвестно — все)."""
+    terms = [t for t in (terms or []) if t]
+    if (language or "").lower() in LATIN_LANGS:
+        return [t for t in terms if not has_cyrillic(t)]
+    return terms
+
+
+def scope_hints(hints: str | None, language: str | None) -> str:
+    """Блок «wrong → right; …» без пар, чужих для языка записи."""
+    if not hints:
+        return ""
+    if (language or "").lower() not in LATIN_LANGS:
+        return hints
+    keep = [h for h in hints.split("; ") if h.strip() and not has_cyrillic(h)]
+    return "; ".join(keep)

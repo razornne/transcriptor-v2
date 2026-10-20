@@ -226,7 +226,7 @@ soniox_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
     .pip_install("soundfile", "numpy", "requests")
-    .add_local_python_source("merger", "channels", "soniox", "speakers", "silence_trim")
+    .add_local_python_source("merger", "channels", "soniox", "speakers", "silence_trim", "vocab_learn")
 )
 
 # CPU-образ голосовых эмбеддингов для переразметки спикеров Soniox (speakers.py).
@@ -729,6 +729,11 @@ def _gemini_correct_segments(segments: list[dict], language: str | None,
         orig_cyr   = sum(1 for c in orig_text if 'Ѐ' <= c <= 'ӿ')
         # Allow some Latin (acronyms like ADHD, CTR), but not wholesale
         if orig_cyr > len(orig_text) * 0.5 and new_latin > orig_latin + 8:
+            continue
+        # И обратно: в строке без кириллицы (английская, польская, чешская) она появиться не может —
+        # так «Prague» превращалось в «Празі» по словарю с украинских созвонов.
+        new_cyr = sum(1 for c in new_text if 'Ѐ' <= c <= 'ӿ')
+        if orig_cyr == 0 and new_cyr > 0:
             continue
 
         if new_text != orig_text:
@@ -2213,7 +2218,8 @@ def transcribe_soniox(
 
     pp = _PipelineProgress(progress_key, container_sec=0.0)
     api_key = os.environ["SONIOX_API_KEY"].strip()
-    context = soniox.build_context(vocab_terms, prompt)
+    import vocab_learn
+    context = soniox.build_context(vocab_learn.scope_terms(vocab_terms, language), prompt)
     src = _tmp_path(".bin")
     paths = [src]
     try:
@@ -2302,7 +2308,8 @@ def transcribe_soniox(
         corrections: list[dict] = []
         if os.environ.get("GEMINI_API_KEY", "").strip():
             try:
-                res = _gemini_correct_segments(merged, lang, correction_hints, speakers_fixed=(mode == "dual"))
+                res = _gemini_correct_segments(merged, lang, vocab_learn.scope_hints(correction_hints, lang),
+                                               speakers_fixed=(mode == "dual"))
                 if res:
                     corrected, vocab_additions = res
                     corrections = _diff_corrections(merged, corrected)

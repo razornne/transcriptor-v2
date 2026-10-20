@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vocab_learn import pairs_from_edit  # noqa: E402
+from vocab_learn import pairs_from_edit, scope_hints, scope_terms  # noqa: E402
 
 
 def test_term_fix():
@@ -49,6 +49,22 @@ def test_garbage():
     assert pairs_from_edit("", "x") == []
     assert pairs_from_edit("x", "") == []
     assert pairs_from_edit(None, None) == []  # type: ignore[arg-type]
+
+
+def test_cyrillic_terms_dropped_for_latin_languages():
+    terms = ["Skriptly", "Празі", "ЖК", "Žižkov"]
+    assert scope_terms(terms, "en") == ["Skriptly", "Žižkov"]
+    assert scope_terms(terms, "cs") == ["Skriptly", "Žižkov"]
+    assert scope_terms(terms, "uk") == terms
+    assert scope_terms(terms, None) == terms
+    assert scope_terms(terms, "") == terms
+
+
+def test_cyrillic_hints_dropped_for_latin_languages():
+    hints = "Prague → Празі; scripty → Skriptly; пожика → по ЖК"
+    assert scope_hints(hints, "en") == "scripty → Skriptly"
+    assert scope_hints(hints, "uk") == hints
+    assert scope_hints("", "en") == ""
 
 
 if __name__ == "__main__":

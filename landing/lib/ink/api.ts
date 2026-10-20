@@ -392,12 +392,21 @@ export async function fetchSpeakerSuggestions(segments: Segment[]): Promise<Name
   }
 }
 
+/** Осмысленное название записи по транскрипту («спикер: реплика»). null — не вышло, остаётся прежнее. */
+export async function suggestTitle(
+  segments: { speaker: string; text: string }[], names: Record<string, string>, language: string,
+): Promise<string | null> {
+  const label = (s: string) => names[s] || s.replace("SPEAKER_", "Speaker ");
+  const text = segments.map((s) => `${label(s.speaker)}: ${s.text}`).join("\n");
+  return generateTitle(text, language);
+}
+
 export async function generateTitle(text: string, language: string): Promise<string | null> {
   try {
     const res = await authFetch(`${API_BASE}/api/title`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text.slice(0, 12000), language: language || null }),
+      body: JSON.stringify({ text: text.slice(0, 40000), language: language && language !== "auto" ? language : null }),
     });
     if (!res.ok) return null;
     const data = await res.json();
