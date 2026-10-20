@@ -538,7 +538,7 @@ export function SettingsModal({
           </nav>
 
           {/* Right content */}
-          <div className="i-modal-content">
+          <div className={"i-modal-content" + (nav === "subscription" ? " i-wide" : "")}>
 
             {/* ── Dictation (только в приложении) ── */}
             {nav === "dictation" && isDesktop() && <DesktopSettings />}
@@ -593,7 +593,7 @@ export function SettingsModal({
                 )}
 
                 <div className="i-bill-row">
-                  <div className="i-seg-toggle" role="group" aria-label="Billing period" style={{ maxWidth: 260 }}>
+                  <div className="i-seg-toggle i-seg-roomy" role="group" aria-label="Billing period">
                     {(["monthly", "annual"] as const).map((b) => (
                       <button key={b} type="button" className={billing === b ? "on" : ""} onClick={() => setBilling(b)}>
                         {b === "monthly" ? t.monthly : t.annual}
