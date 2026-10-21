@@ -127,13 +127,28 @@ pub fn dictation_exhausted(v: &Value) -> bool {
 
 /// Чистка текста LLM. Любая ошибка → исходный текст (вставка важнее полировки).
 /// «Вставили → юзер поправил»: сервер найдёт пары для личного словаря. Тихо, без повторов.
-pub async fn learn(state: &AppState, original: &str, edited: &str, language: &str) -> Result<(), ApiError> {
+/// Возвращает выученные пары (было → стало); пусто, если правка не про термины.
+pub async fn learn(state: &AppState, original: &str, edited: &str, language: &str) -> Result<Vec<(String, String)>, ApiError> {
     let r = post(state, "/api/dictation/learn", json!({ "original": original, "edited": edited, "language": language }),
                  Duration::from_secs(10)).await?;
     if !r.status().is_success() {
         return Err(ApiError::Other(format!("HTTP {}", r.status())));
     }
-    Ok(())
+    let body: Value = r.json().await.unwrap_or(Value::Null);
+    let pairs = body
+        .get("learned")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| {
+                    let wrong = p.get("wrong")?.as_str()?.trim().to_string();
+                    let right = p.get("right")?.as_str()?.trim().to_string();
+                    (!right.is_empty()).then_some((wrong, right))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(pairs)
 }
 
 pub async fn cleanup(state: &AppState, text: &str, language: &str) -> String {

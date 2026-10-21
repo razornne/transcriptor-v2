@@ -1,7 +1,7 @@
 // Одна диктовка = одна WebSocket-сессия Soniox real-time.
 // Соединение открывается параллельно с захватом микрофона; пока оно
 // поднимается, PCM копится в канале — первые слова не теряются.
-// Конец аудио (микрофон остановлен) → пустой фрейм → ждём "finished" с финальными токенами.
+// Конец аудио (микрофон остановлен) → finalize + пустой фрейм → ждём "finished" с финальными токенами.
 use crate::api::LiveToken;
 use crate::config::SONIOX_WS;
 use futures_util::{SinkExt, StreamExt};
@@ -56,6 +56,7 @@ pub async fn run(
     let mut finals = String::new();
     let mut samples: u64 = 0;
     let mut audio_done = false;
+    let mut audio_end: Option<std::time::Instant> = None;
     let deadline = tokio::time::sleep(Duration::from_secs(24 * 3600));
     tokio::pin!(deadline);
 
@@ -70,6 +71,10 @@ pub async fn run(
                 }
                 None => {
                     audio_done = true;
+                    audio_end = Some(std::time::Instant::now());
+                    // finalize — «зафиксируй всё сказанное сейчас»: без него Soniox ждёт хвост
+                    // речи, и вставка запаздывает на секунды. Потом — конец аудио.
+                    tx.send(Message::Text(json!({ "type": "finalize" }).to_string())).await.map_err(|e| e.to_string())?;
                     tx.send(Message::Text(String::new())).await.map_err(|e| e.to_string())?;
                     deadline.as_mut().reset(tokio::time::Instant::now() + FINISH_TIMEOUT);
                 }
@@ -102,6 +107,9 @@ pub async fn run(
                 break;
             }
         }
+    }
+    if let Some(t) = audio_end {
+        crate::log!("[stt] finalized {} ms after the end of audio", t.elapsed().as_millis());
     }
     let _ = tx.close().await;
     Ok(Result_ { text: finals.trim().to_string(), audio_seconds: samples as f64 / sample_rate as f64 })

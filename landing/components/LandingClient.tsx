@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import "@/app/landing.css";
 import { COPY, type Copy, type Lang, type PricingPlan } from "@/lib/content";
+import { Mark } from "@/components/Mark";
 import { useReveal, useTween } from "@/lib/hooks";
 import { initAnalytics, track, trackClicksByAttribute } from "@/lib/analytics";
 
@@ -77,7 +78,7 @@ function Nav({ t, lang, setLang }: { t: Copy; lang: Lang; setLang: (l: Lang) => 
     <header className={"lp-nav" + (scrolled ? " scrolled" : "")}>
       <div className="lp-wrap lp-nav-in">
         <a className="lp-logo" href="#top" aria-label="Skriptly">
-          <span className="lp-logo-mark" aria-hidden="true">S</span>
+          <Mark size={30} />
           <span>Skriptly</span>
         </a>
         <nav className="lp-links" aria-label="Primary">

@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { Mark } from "@/components/Mark";
 import { sb } from "@/lib/ink/supabase";
 import { desktopInvoke, isDesktop } from "@/lib/ink/desktop";
 
@@ -54,7 +55,7 @@ export function LoginScreen() {
     <div className="ink-root i-login">
       <header className="i-login-head">
         <div className="i-brand">
-          <span className="i-brand-mark" aria-hidden="true">S</span>
+          <Mark size={28} />
           <span className="i-brand-name">Skriptly</span>
         </div>
       </header>

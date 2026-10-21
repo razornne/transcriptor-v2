@@ -156,12 +156,6 @@ button { font: inherit; cursor: pointer; }
   text-decoration: none;
   color: inherit;
 }
-.logo-mark {
-  width: 22px; height: 22px; border-radius: 6px;
-  background: var(--ink); color: var(--paper);
-  display: inline-flex; align-items: center; justify-content: center;
-  font-family: var(--mono); font-weight: 600; font-size: 12px;
-}
 
 /* ── Legal pages (Privacy / Terms) ─────────────────────────── */
 .legal-page {

@@ -45,7 +45,6 @@ const page = (v) => `<!doctype html>
     .card { background: #181613 !important; border-color: #2A2722 !important; }
     .ink { color: #F2EFE7 !important; }
     .mute { color: #A29B8B !important; }
-    .mark { background: #F2EFE7 !important; color: #100F0C !important; }
     .btn a { background: #5B6CFF !important; color: #0E0D0A !important; }
     .rule { border-color: #2A2722 !important; }
   }
@@ -59,7 +58,7 @@ const page = (v) => `<!doctype html>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;">
     <tr><td style="padding:0 4px 20px;">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-        <td class="mark" width="30" height="30" align="center" style="width:30px;height:30px;border-radius:9px;background:#14120E;color:#F6F4EE;font:700 17px/30px 'Bricolage Grotesque',Helvetica,Arial,sans-serif;">S</td>
+        <td width="30" height="30" style="width:30px;height:30px;"><img src="https://skriptly.io/email-mark.png" width="30" height="30" alt="S" style="display:block;border:0;border-radius:9px;"></td>
         <td class="ink" style="padding-left:10px;font:600 19px/30px 'Bricolage Grotesque',Helvetica,Arial,sans-serif;color:#14120E;letter-spacing:-0.01em;">Skriptly</td>
       </tr></table>
     </td></tr>

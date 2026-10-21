@@ -946,6 +946,8 @@ export default function InkApp() {
                   cooking={cooking}
                   pipeline={pipeline}
                   chunkProgress={chunkProgress}
+                  status={status}
+                  onCancel={onCancel}
                   recording={recording}
                   recSeconds={recSeconds}
                   levelsRef={levelsRef}
@@ -962,15 +964,14 @@ export default function InkApp() {
                   onVisibility={setVisibility}
                 />
 
-                <div className="i-status-row">
-                  <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">
-                    {/* Suppress chunk text when the StepTimeline already shows it inline */}
-                    {chunkProgress && pipeline ? "" : status}
-                  </p>
-                  {cooking && (
-                    <button type="button" className="i-cancel" onClick={onCancel}>[Cancel]</button>
-                  )}
-                </div>
+                {/* Пока идёт обработка, статус и отмена живут внутри карточки (InputCard) */}
+                {!cooking && (
+                  <div className="i-status-row">
+                    <p className={`i-status${statusKind === "error" ? " err" : ""}`} aria-live="polite">
+                      {status}
+                    </p>
+                  </div>
+                )}
 
                 {/* Остаётся и после неудачной транскрипции: юзер хотя бы видит, что говорилось */}
                 {(liveSegs.length > 0 || (recording && liveStatus !== "off")) && (

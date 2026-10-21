@@ -17,6 +17,7 @@ mod learn;
 mod log;
 mod mic;
 mod overlay;
+mod spectrum;
 mod paste;
 mod platform;
 mod recorder;
@@ -405,6 +406,7 @@ async fn save_settings(app: AppHandle, state: State<'_, AppStateArc>, settings: 
     let lang_changed = current.languages != settings.languages;
     state.store.save_settings(&settings);
     apply_autostart(&app, settings.autostart);
+    overlay::set_language(&settings.languages);
     overlay::set_bar(&app, settings.show_bar);
     let (warm, mic_name) = (settings.instant_start, settings.mic.clone());
     std::thread::spawn(move || mic::set_warm(warm, mic_name)); // открытие устройства — не в UI-потоке
@@ -501,6 +503,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             build_main_window(app)?;
+            overlay::set_language(&state.settings().languages);
             overlay::setup(app.handle(), state.settings().show_bar);
             build_tray(app, state.clone())?;
 

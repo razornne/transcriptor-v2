@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppSession } from "@/lib/ink/session";
 import { isDesktop } from "@/lib/ink/desktop";
 import { clearCache } from "@/lib/ink/cache";
@@ -230,6 +230,88 @@ function Toggle({
 
 const NAV_ORDER: NavSection[] = ["account", "subscription", "dictation", "workspace", "integrations", "settings", "invite", "danger"];
 
+const VOCAB_RECENT = 5;
+
+// Словарь: не стена из сотни терминов. По умолчанию — только что выученное, с парой «как
+// слышалось → как пишется»; всё остальное — через поиск или «Show all» в маленьком окне.
+function VocabPanel({
+  vocab, uiLang, onAdd, onDelete,
+}: {
+  vocab: VocabTerm[];
+  uiLang: Lang;
+  onAdd: (term: string) => void;
+  onDelete: (term: string) => void;
+}) {
+  const ua = uiLang === "ua";
+  const [q, setQ] = useState("");
+  const [all, setAll] = useState(false);
+  const byRecent = useMemo(
+    () => [...vocab].sort((a, b) => (b.last_seen || "").localeCompare(a.last_seen || "") || b.freq - a.freq),
+    [vocab],
+  );
+  const query = q.trim().toLowerCase();
+  const hits = query
+    ? byRecent.filter((v) => v.term.toLowerCase().includes(query) || (v.wrong || "").toLowerCase().includes(query))
+    : all ? byRecent : byRecent.slice(0, VOCAB_RECENT);
+  const exact = byRecent.some((v) => v.term.toLowerCase() === query);
+  const submit = () => { if (query && !exact) { onAdd(q); setQ(""); } };
+
+  return (
+    <div className="i-msect-card i-dict">
+      <p className="i-dict-lead">
+        {vocab.length === 0
+          ? (ua
+              ? "Поправляйте текст після диктовки — Skriptly запам'ятає, як пишуться ваші терміни, імена й назви."
+              : "Fix a word after dictating and Skriptly remembers how you write your terms, names and brands.")
+          : (ua
+              ? `${vocab.length} ${vocab.length === 1 ? "термін" : "термінів"}. Додаються самі, коли ви правите текст або розшифровку.`
+              : `${vocab.length} ${vocab.length === 1 ? "term" : "terms"}. Added automatically when you correct a dictation or transcript.`)}
+      </p>
+      <div className="i-dict-search">
+        <input
+          className="i-field"
+          placeholder={ua ? "Знайти або додати термін" : "Search or add a term"}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          maxLength={60}
+          aria-label={ua ? "Пошук у словнику" : "Search dictionary"}
+        />
+      </div>
+      {vocab.length > 0 && !query && !all && (
+        <p className="i-dict-label">{ua ? "Нещодавно" : "Recently learned"}</p>
+      )}
+      {hits.length > 0 && (
+        <ul className={"i-dict-list" + (all || query ? " scroll" : "")}>
+          {hits.map((v) => (
+            <li key={v.term} className="i-dict-row">
+              {v.wrong ? (
+                <span className="i-dict-pair"><s>{v.wrong}</s><span aria-hidden="true">→</span><b>{v.term}</b></span>
+              ) : (
+                <span className="i-dict-pair"><b>{v.term}</b></span>
+              )}
+              <button type="button" className="i-dict-del" onClick={() => onDelete(v.term)} aria-label={`Remove ${v.term}`}>×</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {query && hits.length === 0 && (
+        <p className="i-dict-empty">{ua ? "Нічого не знайдено." : "Nothing matches."}</p>
+      )}
+      {query && !exact && (
+        <button type="button" className="i-dict-add" onClick={submit}>
+          {ua ? `Додати «${q.trim()}»` : `Add “${q.trim()}”`}
+        </button>
+      )}
+      {!query && vocab.length > VOCAB_RECENT && (
+        <button type="button" className="i-vocab-more" onClick={() => setAll((v) => !v)}>
+          {all ? (ua ? "Сховати" : "Show less") : (ua ? `Показати всі (${vocab.length})` : `Show all (${vocab.length})`)}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({
   session, profile, settings, onSettingsChange, onClose, onSignOut,
   workspace, onWorkspaceChange,
@@ -336,23 +418,16 @@ export function SettingsModal({
   const hasValidWorkspace = !!(workspace?.id);
 
   // Vocabulary
-  const VOCAB_TOP = 10;
-  const [vocab, setVocab] = useState<VocabTerm[]>(() =>
-    [...(profile?.vocabulary || [])].sort((a, b) => b.freq - a.freq)
-  );
-  const [vocabInput, setVocabInput] = useState("");
-  const [showAllVocab, setShowAllVocab] = useState(false);
-
+  const [vocab, setVocab] = useState<VocabTerm[]>(() => [...(profile?.vocabulary || [])]);
   const vocabSave = async (next: VocabTerm[]) => {
     setVocab(next);
     try { await saveVocabulary(next); } catch { /* best-effort */ }
   };
   const vocabDelete = (term: string) => vocabSave(vocab.filter((v) => v.term !== term));
-  const vocabAdd = () => {
-    const t = vocabInput.trim();
+  const vocabAdd = (raw: string) => {
+    const t = raw.trim();
     if (!t || vocab.some((v) => v.term.toLowerCase() === t.toLowerCase())) return;
-    setVocabInput("");
-    vocabSave([{ term: t, freq: 10 }, ...vocab]);
+    vocabSave([{ term: t, freq: 10, last_seen: new Date().toISOString() }, ...vocab]);
   };
 
   // Theme — syncs with Cmd+D global hotkey via custom event
@@ -871,49 +946,9 @@ export function SettingsModal({
                 </div>
 
                 <p className="i-msect-title" style={{ marginTop: 14 }}>
-                  {uiLang === "ua" ? "Словник термінів" : "Vocabulary"}
+                  {uiLang === "ua" ? "Словник" : "Dictionary"}
                 </p>
-                <div className="i-msect-card" style={{ padding: 0 }}>
-                  {vocab.length === 0 && (
-                    <p className="i-vocab-empty">
-                      {uiLang === "ua"
-                        ? "Терміни з'являться після перших транскрипцій — Gemini навчиться вашій лексиці."
-                        : "Terms appear after your first transcriptions — Gemini learns your vocabulary automatically."}
-                    </p>
-                  )}
-                  {vocab.length > 0 && (
-                    <div className="i-vocab-chips">
-                      {(showAllVocab ? vocab : vocab.slice(0, VOCAB_TOP)).map((v) => (
-                        <span key={v.term} className="i-vocab-chip">
-                          {v.term}
-                          <button
-                            type="button" className="i-vocab-del"
-                            onClick={() => vocabDelete(v.term)}
-                            aria-label={`Remove ${v.term}`}
-                          >×</button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {vocab.length > VOCAB_TOP && (
-                    <button type="button" className="i-vocab-more" onClick={() => setShowAllVocab((v) => !v)}>
-                      {showAllVocab
-                        ? (uiLang === "ua" ? "Сховати" : "Show less")
-                        : (uiLang === "ua" ? `Показати всі (${vocab.length})` : `Show all (${vocab.length})`)}
-                    </button>
-                  )}
-                  <div className="i-vocab-add-row">
-                    <input
-                      className="i-field"
-                      placeholder={uiLang === "ua" ? "Додати термін…" : "Add a term…"}
-                      value={vocabInput}
-                      onChange={(e) => setVocabInput(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") vocabAdd(); }}
-                      maxLength={60}
-                    />
-                    <button type="button" className="i-cook" onClick={vocabAdd}>+</button>
-                  </div>
-                </div>
+                <VocabPanel vocab={vocab} uiLang={uiLang} onAdd={vocabAdd} onDelete={vocabDelete} />
 
                 <p className="i-msect-title" style={{ marginTop: 14 }}>{t.appearance}</p>
                 <div className="i-msect-card">

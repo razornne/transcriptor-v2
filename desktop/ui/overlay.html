@@ -4,45 +4,64 @@
   <meta charset="utf-8" />
   <title>Skriptly dictation</title>
   <style>
-    /* Плашка диктовки: только анимация записи, без текста (текст — лишь для ошибок).
-       Всегда тёмная — читается поверх любого окна. */
+    @font-face { font-family: "Manrope"; font-weight: 500; src: url("fonts/manrope-500.woff2") format("woff2"); }
+    @font-face { font-family: "Manrope"; font-weight: 700; src: url("fonts/manrope-700.woff2") format("woff2"); }
+    @font-face { font-family: "JetBrains Mono"; font-weight: 600; src: url("fonts/jetbrains-mono-600.woff2") format("woff2"); }
+
+    /* Плашка диктовки. Язык бренда: тёплый чёрный, бумажно-белый, красная «точка записи»
+       и halftone-волна — столбцы из точек, которые растут от центра, как растр на лендинге.
+       Всегда тёмная — читается поверх любого окна. Текст — только в сообщениях. */
+    :root { --ink: #14120E; --paper: #F6F4EE; --signal: #F0593A; --ok: #7BC59A; --mute: rgba(246, 244, 238, .62); --line: rgba(246, 244, 238, .16); }
     html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
-    body { display: grid; place-items: center; font: 13px/1 "Segoe UI Variable Text", "Segoe UI", sans-serif; user-select: none; }
+    body { display: grid; place-items: center; font: 500 13px/1 "Manrope", "Segoe UI", sans-serif; user-select: none; }
     /* Размеры задаём явно по состояниям — так ширина/высота анимируются
        (капсула покоя «раскрывается» в плашку записи и обратно). */
     .pill {
       position: relative; display: flex; align-items: center; justify-content: center; gap: 10px;
-      width: 128px; height: 38px; padding: 0 16px; border-radius: 19px; overflow: hidden;
-      background: rgba(16, 15, 12, 0.92); color: #F2EFE7;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.30), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      box-sizing: border-box; width: 168px; height: 38px; padding: 0 16px; border-radius: 19px; overflow: hidden; white-space: nowrap;
+      background: rgba(20, 18, 14, 0.96); color: var(--paper);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32), inset 0 0 0 1px var(--line);
       opacity: 0; transform: translateY(8px) scale(.94);
       transition: opacity .18s ease, transform .22s cubic-bezier(.2, .9, .3, 1.2),
         width .32s cubic-bezier(.2, .9, .3, 1.1), height .32s cubic-bezier(.2, .9, .3, 1.1),
         padding .32s ease, background .25s ease, box-shadow .25s ease;
     }
     .pill.on { opacity: 1; transform: none; }
-    .pill.lock { width: 150px; }
-    .pill.busy { width: 108px; }
-    .pill.done { width: 52px; }
-    .pill.msgw { width: auto; max-width: 452px; }
-    /* Покой: тонкая капсула с белой обводкой, всегда внизу экрана */
-    .pill.idle { width: 44px; height: 9px; padding: 0; border-radius: 6px; background: rgba(16, 15, 12, 0.72);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), inset 0 0 0 1.5px rgba(242, 239, 231, 0.55); }
-    .pill.idle > * { display: none !important; }
-    .pill.arming .dot { background: #8C877B; animation: none; }
+    .pill.done { width: 44px; padding: 0; }
+    .pill.msgw, .pill.learn { max-width: 452px; padding: 0 18px 0 12px; }
+    /* Покой: тонкая капсула-контур, всегда внизу экрана. Внутри ничего. */
+    .pill.idle { width: 44px; height: 9px; padding: 0; border-radius: 5px; background: rgba(20, 18, 14, 0.72);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), inset 0 0 0 1.5px rgba(246, 244, 238, 0.55); }
     .pill.out { opacity: 0; transform: translateY(4px) scale(.96); transition: opacity .25s ease, transform .25s ease; }
-    .dot { width: 7px; height: 7px; border-radius: 50%; background: #F0593A; flex: none; box-shadow: 0 0 0 0 rgba(240, 89, 58, .5); }
+    .pill > * { flex: none; }
+    .pill.idle > * { display: none !important; }
+
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--signal); box-shadow: 0 0 0 0 rgba(240, 89, 58, .5); }
     .pill.rec .dot { animation: ping 1.6s ease-out infinite; }
+    .pill.arming .dot { background: #8C877B; animation: none; }
     @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(240, 89, 58, .55); } 80%, 100% { box-shadow: 0 0 0 7px rgba(240, 89, 58, 0); } }
-    canvas { width: 76px; height: 22px; display: block; }
-    .lock { font-size: 11px; opacity: .7; }
+    .lang { font: 600 11px/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .06em; color: var(--mute); }
+    .sep { width: 1px; height: 14px; background: var(--line); }
+    canvas { width: 84px; height: 26px; display: block; }
+    .lockic { width: 12px; height: 12px; stroke: var(--mute); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .check { width: 18px; height: 18px; }
-    .check path { stroke: #7BC59A; stroke-width: 2.4; fill: none; stroke-linecap: round; stroke-linejoin: round;
+    .check path { stroke: var(--ok); stroke-width: 2.4; fill: none; stroke-linecap: round; stroke-linejoin: round;
       stroke-dasharray: 22; stroke-dashoffset: 22; animation: draw .3s ease forwards; }
     @keyframes draw { to { stroke-dashoffset: 0; } }
-    .msg { max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: rgba(242, 239, 231, .9); }
+
+    .msg { max-width: 360px; overflow: hidden; text-overflow: ellipsis; color: rgba(246, 244, 238, .92); }
     .msg.err::before { content: "!"; display: inline-grid; place-items: center; width: 16px; height: 16px; margin-right: 8px;
-      border-radius: 50%; background: #F0593A; color: #100F0C; font-weight: 700; font-size: 11px; vertical-align: -3px; }
+      border-radius: 50%; background: var(--signal); color: var(--ink); font-weight: 700; font-size: 11px; vertical-align: -3px; }
+
+    /* «Добавлено в словарь» — после того как приложение увидело правку и выучило пару */
+    .learnbox { display: flex; align-items: center; gap: 10px; }
+    .learnbox .ic { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: rgba(246, 244, 238, .1); }
+    .learnbox svg { width: 13px; height: 13px; stroke: var(--paper); fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+    .learnbox .lk { color: var(--mute); }
+    .learnbox .pair { display: flex; align-items: baseline; gap: 7px; font-weight: 700; }
+    .learnbox s { font-weight: 500; color: var(--mute); text-decoration-thickness: 1px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+    .learnbox b { font-weight: 700; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+    .learnbox .ar { color: var(--mute); font-weight: 500; }
     [hidden] { display: none !important; }
     @media (prefers-reduced-motion: reduce) {
       .pill, .pill.out { transition: none; } .pill.rec .dot { animation: none; } .check path { animation: none; stroke-dashoffset: 0; }
@@ -52,10 +71,17 @@
 <body>
   <div class="pill" id="pill">
     <span class="dot" id="dot"></span>
-    <canvas id="wave" width="152" height="44"></canvas>
-    <span class="lock" id="lock" hidden title="Hands-free">🔒</span>
+    <span class="lang" id="lang">AUTO</span>
+    <span class="sep" id="sep"></span>
+    <canvas id="wave" width="168" height="52"></canvas>
+    <svg class="lockic" id="lock" viewBox="0 0 24 24" hidden><rect x="5" y="11" width="14" height="9" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
     <svg class="check" id="check" viewBox="0 0 18 18" hidden><path d="M4 9.5l3.2 3.2L14 5.8" /></svg>
     <span class="msg" id="msg" hidden></span>
+    <span class="learnbox" id="learn" hidden>
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0M3 6v13M12 6v13M21 6v13" /></svg></span>
+      <span class="lk">Added to dictionary</span>
+      <span class="pair"><s id="lw"></s><span class="ar">→</span><b id="lr"></b></span>
+    </span>
   </div>
   <script>
     const { listen } = window.__TAURI__.event;
@@ -63,59 +89,108 @@
     const pill = $("pill"), canvas = $("wave"), ctx = canvas.getContext("2d");
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    // ── Волна: 15 столбиков, амплитуда = сглаженный уровень микрофона ────
-    // Атака быстрая, спад медленный — волна не дёргается. В тишине — лёгкое
-    // «дыхание», чтобы было видно, что запись идёт.
-    const BARS = 15;
-    let target = 0, level = 0, phase = 0, mode = "idle", raf = 0;
+    // ── Волна: спектр речи ───────────────────────────────────────────────
+    // Приложение шлёт 24 частотные полосы (дБ) ~20 раз в секунду — «overlay-bands».
+    // Здесь: авто-усиление (подстройка под любой микрофон), порог тишины и рисунок:
+    // 16 столбцов точек, столбец растёт от центрального ряда, точки крупнеют как растр,
+    // за голосом тянется бледный след. В тишине волна стоит ровной линией.
+    // Значения подобраны в лаборатории (desktop/tools/wave-lab.html, вариант A).
+    const NB = 24, COLS = 16, ROWS = 5, MID = 2, W = 84, H = 26, PX = W / COLS, PY = 4.4;
+    const GAIN = 0.6, GATE = 0.22, SMOOTH = 0.45;           // усиление / порог / плавность
+    const ATTACK = 0.85 - 0.4 * SMOOTH, RELEASE = 0.35 - 0.29 * SMOOTH;
+    const norm = new Float32Array(NB), vals = new Float32Array(NB), pks = new Float32Array(NB);
+    const floorB = new Float32Array(NB); let floorInit = false, ceilEx = 30, lastBands = 0, lastFrame = 0, phase = 0, mode = "idle", raf = 0;
 
     function resize() {
       const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.round(76 * dpr); canvas.height = Math.round(22 * dpr);
+      canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
     resize();
 
-    function draw() {
+    const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+    // Авто-усиление и «детектор голоса».
+    // У каждой полосы свой «пол» — уровень тишины именно в ней (быстро опускается, очень
+    // медленно поднимается); речь меряется в дБ над полом. Шум микрофона сам по себе дрожит
+    // на 5–8 дБ от кадра к кадру, поэтому волна оживает, только когда сразу несколько полос
+    // поднялись над порогом два кадра подряд (голос), и гаснет через 250 мс после его конца.
+    // Потолок (ceilEx) подстраивается под самую громкую речь: тихий ноутбучный микрофон и
+    // громкая гарнитура рисуют одинаково «полную» волну.
+    const sm = new Float32Array(NB);
+    let streak = 0, lastActive = -10;
+    function onBands(db, now) {
+      const dt = lastBands ? Math.min(0.2, (now - lastBands) / 1000) : 0.05;
+      lastBands = now;
+      if (!floorInit) { for (let i = 0; i < NB; i++) sm[i] = floorB[i] = db[i] ?? -120; floorInit = true; }
+      let peak = 0;
+      const ex = new Float32Array(NB);
+      for (let i = 0; i < NB; i++) {
+        sm[i] += ((db[i] ?? -120) - sm[i]) * 0.5; // сглаживаем шум по времени
+        floorB[i] += (sm[i] - floorB[i]) * Math.min(1, dt * (sm[i] < floorB[i] ? 3 : 0.01));
+        ex[i] = Math.max(0, sm[i] - floorB[i]) * (1 + 0.5 * i / NB); // речь на высоких тише — подтягиваем
+        peak = Math.max(peak, ex[i]);
+      }
+      ceilEx = peak > ceilEx ? peak : Math.max(22, ceilEx - 2.5 * dt);
+      const span = Math.max(14, ceilEx * (1.15 - 0.5 * GAIN));
+      const gate = 6 + GATE * 14;
+      let above = 0;
+      for (let i = 0; i < NB; i++) if (ex[i] > gate) above++;
+      streak = above >= 4 ? streak + 1 : 0;
+      if (streak >= 2) lastActive = now;
+      const speaking = now - lastActive < 250;
+      for (let i = 0; i < NB; i++) norm[i] = speaking ? Math.pow(clamp01((ex[i] - gate) / span), 1.3) : 0;
+    }
+
+    function draw(now) {
       raf = requestAnimationFrame(draw);
-      level += (target - level) * (target > level ? 0.35 : 0.08);
-      phase += mode === "busy" ? 0.12 : 0.07;
-      ctx.clearRect(0, 0, 76, 22);
-      ctx.fillStyle = "#F2EFE7";
-      const gap = 76 / BARS;
-      for (let i = 0; i < BARS; i++) {
-        const x = i * gap + gap / 2;
-        const center = 1 - Math.abs(i - (BARS - 1) / 2) / ((BARS - 1) / 2); // выше в середине
-        let h;
+      const dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 0.016;
+      lastFrame = now;
+      phase += mode === "busy" ? 0.11 : 0;
+      if (performance.now() - lastBands > 400) norm.fill(0); // поток оборвался — гасим
+      for (let i = 0; i < NB; i++) {
+        const t = norm[i], c = vals[i];
+        vals[i] = t > c ? c + (t - c) * ATTACK : c + (t - c) * RELEASE;
+        if (vals[i] < 0.003) vals[i] = 0;
+        pks[i] = Math.max(vals[i], pks[i] - dt * 0.55); // след оседает медленно
+      }
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = "#F6F4EE";
+      const dim = pill.classList.contains("arming") ? 0.5 : 1; // микрофон ещё не отдал звук
+      for (let i = 0; i < COLS; i++) {
+        const x = PX / 2 + i * PX;
         if (mode === "busy") {
-          // обработка: мягкая бегущая волна одинаковой высоты
-          h = 3 + 5 * (0.5 + 0.5 * Math.sin(phase * 1.6 - i * 0.55));
-        } else {
-          const breath = 0.5 + 0.5 * Math.sin(phase - i * 0.45);
-          const voice = level * (0.55 + 0.45 * Math.sin(phase * 2.3 + i * 1.7)) * (0.35 + 0.65 * center);
-          h = 2.5 + breath * 2.5 * (0.4 + 0.6 * center) + voice * 17;
+          // обработка: по линии точек бежит мягкая волна яркости
+          const s = 0.5 + 0.5 * Math.sin(phase * 1.7 - i * 0.6);
+          ctx.globalAlpha = (0.3 + 0.7 * s * s) * dim;
+          ctx.beginPath(); ctx.arc(x, H / 2, 1.05 + 0.75 * s, 0, 6.2832); ctx.fill();
+          continue;
         }
-        h = Math.min(20, h);
-        const dim = pill.classList.contains("arming") ? 0.45 : 0.92; // микрофон ещё не отдал звук
-        ctx.globalAlpha = mode === "busy" ? 0.55 + 0.45 * Math.sin(phase * 1.6 - i * 0.55) ** 2 : dim;
-        ctx.beginPath();
-        ctx.roundRect(x - 1.25, 11 - h / 2, 2.5, h, 1.25);
-        ctx.fill();
+        const bi = Math.min(NB - 1, Math.floor((i / COLS) * NB));
+        const v = vals[bi], pk = pks[bi];
+        for (let r = 0; r < ROWS; r++) {
+          const d = Math.abs(r - MID) / MID;
+          const k = clamp01((v * 1.15 - d * 0.82) / 0.5);
+          const trail = clamp01((pk * 1.15 - d * 0.82) / 0.5) * 0.35;
+          if (r !== MID && k < 0.03 && trail < 0.03) continue;
+          ctx.globalAlpha = Math.min(1, 0.4 + 0.6 * k + trail) * dim;
+          ctx.beginPath(); ctx.arc(x, H / 2 + (r - MID) * PY, 0.7 + k * 1.4 * (1 - 0.15 * d) + (r === MID ? 0.15 : 0), 0, 6.2832); ctx.fill();
+        }
       }
       ctx.globalAlpha = 1;
     }
-    function stopWave() { cancelAnimationFrame(raf); raf = 0; }
+    function stopWave() { cancelAnimationFrame(raf); raf = 0; lastFrame = 0; }
     function startWave() {
-      if (reduced) { stopWave(); level = 0.3; draw(); stopWave(); return; } // один статичный кадр
-      if (!raf) draw();
+      if (reduced) { stopWave(); draw(performance.now()); cancelAnimationFrame(raf); raf = 0; return; } // один статичный кадр
+      if (!raf) raf = requestAnimationFrame(draw);
     }
+    function silence() { norm.fill(0); vals.fill(0); pks.fill(0); }
 
     function show(parts) {
-      $("dot").hidden = !parts.dot;
-      canvas.hidden = !parts.wave;
-      $("lock").hidden = !parts.lock;
-      $("check").hidden = !parts.check;
-      $("msg").hidden = !parts.msg;
+      // toggleAttribute, а не .hidden: у SVG-элементов свойства hidden нет
+      const vis = (id, on) => $(id).toggleAttribute("hidden", !on);
+      vis("dot", parts.dot); vis("lang", parts.lang); vis("sep", parts.lang); vis("wave", parts.wave);
+      vis("lock", parts.lock); vis("check", parts.check); vis("msg", parts.msg); vis("learn", parts.learn);
       if (parts.check) { const c = $("check"); c.replaceWith(c.cloneNode(true)); } // перезапуск анимации галочки
     }
 
@@ -126,14 +201,26 @@
       pill.classList.add("on");
     }
 
-    const SHAPES = ["idle", "rec", "arming", "lock", "busy", "done", "msgw"];
+    const SHAPES = ["idle", "rec", "arming", "lock", "busy", "done", "msgw", "learn"];
     function shape(...cls) {
       pill.classList.remove(...SHAPES);
+      pill.style.width = "";
       pill.classList.add(...cls);
+    }
+    // Сообщение и «словарь» — ширина по содержимому, но с анимацией от текущей.
+    function fitWidth() {
+      const w0 = pill.offsetWidth;
+      pill.style.transition = "none"; // иначе замер ловит середину анимации
+      pill.style.width = "max-content";
+      const w1 = Math.min(452, pill.offsetWidth);
+      pill.style.width = w0 + "px";
+      void pill.offsetWidth;
+      pill.style.transition = "";
+      pill.style.width = w1 + "px";
     }
 
     function reset() {
-      pill.classList.remove("on", "out", ...SHAPES); stopWave(); handsfree = false; level = target = 0;
+      pill.classList.remove("on", "out", ...SHAPES); stopWave(); handsfree = false; silence();
     }
 
     listen("overlay", ({ payload: p }) => {
@@ -141,23 +228,28 @@
       reveal();
       switch (p.state) {
         case "idle":
-          stopWave(); handsfree = false; level = target = 0;
+          stopWave(); handsfree = false; silence();
           shape("idle");
           break;
         case "arming":
         case "listening":
-        case "handsfree":
+        case "handsfree": {
           if (p.state === "handsfree") handsfree = true;
           mode = "rec";
+          const lang = p.lang || "";
+          $("lang").textContent = lang;
           shape("rec", ...(p.state === "arming" ? ["arming"] : []), ...(handsfree ? ["lock"] : []));
-          show({ dot: true, wave: true, lock: handsfree });
+          show({ dot: true, lang: !!lang, wave: true, lock: handsfree });
+          fitWidth();
           startWave();
           break;
+        }
         case "finishing":
         case "polishing":
-          mode = "busy"; target = 0;
+          mode = "busy"; norm.fill(0);
           shape("busy");
-          show({ wave: true, lock: false });
+          show({ wave: true });
+          fitWidth();
           startWave();
           break;
         case "done":
@@ -172,13 +264,23 @@
           $("msg").textContent = p.text || (p.state === "empty" ? "Didn't catch that" : "Something went wrong");
           $("msg").className = "msg" + (p.state === "error" ? " err" : "");
           show({ msg: true });
+          fitWidth();
+          break;
+        case "learned":
+          // text = как стало правильно, pending = как было записано
+          handsfree = false; stopWave();
+          shape("learn");
+          $("lw").textContent = p.pending || "";
+          $("lr").textContent = p.text || "";
+          $("lw").hidden = !p.pending;
+          document.querySelector(".learnbox .ar").hidden = !p.pending;
+          show({ learn: true });
+          fitWidth();
           break;
       }
     });
 
-    listen("overlay-level", ({ payload: v }) => {
-      target = Math.min(1, Math.sqrt(v) * 2.4); // RMS речи 0.02–0.3 → 0.35–1
-    });
+    listen("overlay-bands", ({ payload }) => onBands(payload, performance.now()));
 
     matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener?.("change", resize);
   </script>

@@ -28,6 +28,13 @@ function formatClock(s: number): string {
 
 // Honest pipeline stages — fixed order + human labels for the timeline.
 const STEP_ORDER = ["container", "audio_split", "transcription", "diarization", "ai_formatting"] as const;
+const STEP_HEADLINES: Record<string, string> = {
+  container: "Reading the file",
+  audio_split: "Splitting the audio",
+  transcription: "Transcribing",
+  diarization: "Telling speakers apart",
+  ai_formatting: "Polishing the text",
+};
 const STEP_LABELS: Record<string, string> = {
   container: "Container",
   audio_split: "Audio split",
@@ -141,7 +148,7 @@ function LevelMeters({ levelsRef }: { levelsRef: MutableRefObject<{ mic: number;
 }
 
 export function InputCard({
-  cooking, pipeline, chunkProgress, recording, recSeconds, levelsRef,
+  cooking, pipeline, chunkProgress, status, onCancel, recording, recSeconds, levelsRef,
   language, onLanguage,
   speakers, onSpeakers,
   context, onContext,
@@ -151,6 +158,8 @@ export function InputCard({
   cooking: boolean;
   pipeline?: PipelineSteps | null;
   chunkProgress?: { done: number; total: number } | null;
+  status?: string;
+  onCancel?: () => void;
   recording: boolean;
   recSeconds: number;
   levelsRef?: MutableRefObject<{ mic: number; sys: number }>;
@@ -170,6 +179,10 @@ export function InputCard({
   const fileRef = useRef<HTMLInputElement>(null);
   const hasPipeline = !!pipeline && Object.keys(pipeline).length > 0;
   const idle = !recording && !cooking;
+  const runningStep = pipeline ? STEP_ORDER.find((k) => pipeline[k]?.status === "running") : undefined;
+  const cap = (t: string) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+  const busyTitle = runningStep ? STEP_HEADLINES[runningStep] : cap(status || "Processing…");
+  const busySub = runningStep && chunkProgress ? `Part ${chunkProgress.done} of ${chunkProgress.total}` : "";
 
   return (
     <div
@@ -206,11 +219,21 @@ export function InputCard({
         </div>
       ) : cooking ? (
         /* ── обработка ── */
-        <div className="i-livecard i-busycard">
-          {hasPipeline ? (
-            <StepTimeline pipeline={pipeline!} chunkProgress={chunkProgress} />
-          ) : (
-            <p className="i-livehint" style={{ textAlign: "center", margin: 0 }}>Processing…</p>
+        <div className="i-livecard i-busycard" aria-live="polite">
+          <div className="i-busyhead">
+            <span className="i-dotloader" aria-hidden="true">
+              {Array.from({ length: 7 }, (_, i) => <i key={i} style={{ animationDelay: `${i * 0.11}s` }} />)}
+            </span>
+            <div>
+              <div className="i-busytitle">{busyTitle}</div>
+              <div className="i-busysub">{busySub || "Keep this window open until it finishes."}</div>
+            </div>
+          </div>
+          {hasPipeline && <StepTimeline pipeline={pipeline!} chunkProgress={chunkProgress} />}
+          {onCancel && (
+            <div className="i-busyfoot">
+              <button type="button" className="i-hbtn ghost" onClick={onCancel}>Cancel</button>
+            </div>
           )}
         </div>
       ) : (

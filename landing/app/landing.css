@@ -70,7 +70,6 @@ html[data-lang="ua"] .lp em { font-family: var(--lp-display); font-style: italic
 .lp-nav.scrolled { border-bottom-color: var(--lp-line); }
 .lp-nav-in { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 16px; padding-bottom: 16px; }
 .lp-logo { display: flex; align-items: center; gap: 10px; font-family: var(--lp-display); font-weight: 600; font-size: 19px; letter-spacing: -0.01em; }
-.lp-logo-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--lp-ink); color: var(--lp-paper); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 17px; }
 .lp-links { display: flex; gap: 28px; font-size: 14.5px; font-weight: 500; color: var(--lp-mute2); }
 .lp-links a:hover { color: var(--lp-ink); }
 .lp-tools { display: flex; align-items: center; gap: 10px; }

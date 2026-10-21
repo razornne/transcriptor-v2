@@ -312,12 +312,6 @@
 
 .i-sb-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 2px 8px; }
 .i-brand { display: flex; align-items: center; gap: 10px; }
-.i-brand-mark {
-  width: 28px; height: 28px; border-radius: 8px; flex: none;
-  background: var(--i-ink); color: var(--i-paper);
-  display: flex; align-items: center; justify-content: center;
-  font-family: var(--i-display); font-weight: 700; font-size: 16px;
-}
 .i-brand-name { font-family: var(--i-display); font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
 .i-flatbtn {
   width: 32px; height: 32px; border-radius: 8px; flex: none;
@@ -657,24 +651,28 @@
 
 .i-ai-panel { padding-top: 22px; }
 
-/* ── Vocabulary chips ──────────────────────────────────────────── */
-.i-vocab-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; }
-.i-vocab-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--i-mono); font-size: 11px;
-  background: color-mix(in srgb, var(--i-accent) 9%, transparent);
-  border: 1px solid color-mix(in srgb, var(--i-accent) 20%, transparent);
-  border-radius: 20px; padding: 3px 6px 3px 10px; color: var(--i-ink);
-}
-.i-vocab-del {
-  background: none; border: none; cursor: pointer; line-height: 1;
-  color: var(--i-graphite); font-size: 13px; padding: 0 2px;
-}
-.i-vocab-del:hover { color: var(--i-danger); }
-.i-vocab-add-row { display: flex; gap: 6px; padding: 0 12px 12px; }
-.i-vocab-add-row .i-field { flex: 1; }
-.i-vocab-empty { padding: 12px; font-size: 12.5px; color: var(--i-graphite); }
-.i-vocab-more { background: none; border: none; cursor: pointer; font-size: 11.5px; color: var(--i-accent); padding: 0 12px 10px; font-family: var(--i-ui); }
+/* ── Dictionary ────────────────────────────────────────────────── */
+.i-dict { padding: 14px 14px 10px; }
+.i-dict-lead { margin: 0 0 12px; font-size: 12.5px; line-height: 1.5; color: var(--i-graphite); }
+.i-dict-search .i-field { width: 100%; box-sizing: border-box; }
+.i-dict-label { margin: 14px 0 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--i-graphite); }
+.i-dict-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.i-dict-list.scroll { max-height: 264px; overflow-y: auto; }
+.i-dict-label + .i-dict-list { margin-top: 0; }
+.i-dict-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--i-hairline); }
+.i-dict-row:first-child { border-top: none; }
+.i-dict-pair { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 13.5px; }
+.i-dict-pair s { color: var(--i-graphite); text-decoration-thickness: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.i-dict-pair b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.i-dict-pair span { color: var(--i-graphite); }
+.i-dict-del { background: none; border: none; cursor: pointer; line-height: 1; color: var(--i-graphite); font-size: 16px; padding: 2px 6px; opacity: 0; transition: opacity .12s; }
+.i-dict-row:hover .i-dict-del, .i-dict-del:focus-visible { opacity: 1; }
+@media (hover: none) { .i-dict-del { opacity: 1; } }
+.i-dict-del:hover { color: var(--i-danger); }
+.i-dict-empty { margin: 10px 0 0; font-size: 12.5px; color: var(--i-graphite); }
+.i-dict-add { margin-top: 8px; background: none; border: none; cursor: pointer; padding: 6px 0; font: 600 13px var(--i-ui); color: var(--i-accent); }
+.i-dict-add:hover { text-decoration: underline; }
+.i-vocab-more { background: none; border: none; cursor: pointer; font-size: 12px; color: var(--i-accent); padding: 8px 0 4px; font-family: var(--i-ui); }
 .i-vocab-more:hover { text-decoration: underline; }
 .i-ai-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .i-ai-controls .i-field { height: 38px; padding: 0 14px; border-radius: 10px; background: var(--i-surface); border-color: var(--i-hairline); font-size: 13.5px; flex: 1 1 200px; }
@@ -2230,3 +2228,28 @@
 .i-sel-opt svg { flex: none; color: var(--i-accent-text); }
 @media (prefers-reduced-motion: reduce) { .i-sel-pop { animation: none; } .i-sel-chev { transition: none; } }
 [data-theme="dark"] .i-save-badge { background: #14301F; color: #7FD6A4; }
+
+
+/* Подтверждение скачивания */
+.i-tbtn.done { color: var(--i-ok, #1F6B47); border-color: color-mix(in srgb, var(--i-ok, #1F6B47) 45%, var(--i-line2)); }
+.i-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 90;
+  max-width: min(92vw, 560px); padding: 11px 18px; border-radius: 12px;
+  background: var(--i-ink); color: var(--i-paper); font-size: 13.5px; font-weight: 500; line-height: 1.3;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .28); animation: i-toast-in .22s cubic-bezier(.2, .9, .3, 1.1);
+  overflow-wrap: anywhere;
+}
+@keyframes i-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@media (prefers-reduced-motion: reduce) { .i-toast { animation: none; } }
+
+/* Обработка: заголовок этапа, статус и отмена — внутри карточки */
+.i-busycard { padding: 26px 28px; gap: 18px; }
+.i-busyhead { display: flex; align-items: center; gap: 18px; }
+.i-busytitle { font-family: var(--i-display); font-weight: 600; font-size: 22px; letter-spacing: -0.01em; color: var(--i-ink); line-height: 1.15; }
+.i-busysub { margin-top: 6px; font-size: 13.5px; color: var(--i-graphite); line-height: 1.4; }
+.i-busyfoot { display: flex; justify-content: flex-end; }
+.i-busyfoot .i-hbtn { min-height: 40px; padding: 0 18px; }
+.i-dotloader { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 30px; }
+.i-dotloader i { display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--i-ink); animation: i-dotwave 1.25s ease-in-out infinite; }
+@keyframes i-dotwave { 0%, 100% { transform: scale(.45); opacity: .35; } 45% { transform: scale(1.35); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .i-dotloader i { animation: none; opacity: .7; } }

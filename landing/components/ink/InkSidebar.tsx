@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Mark } from "@/components/Mark";
 import type { HistoryEntry } from "@/lib/ink/db";
 import type { Profile, Project } from "@/lib/ink/api";
 
@@ -282,7 +283,7 @@ export function InkSidebar({
 
         <div className="i-sb-head">
           <div className="i-brand">
-            <span className="i-brand-mark" aria-hidden="true">S</span>
+            <Mark size={28} />
             <span className="i-brand-name">Skriptly</span>
           </div>
           <button type="button" className="i-flatbtn" aria-label={s.collapse} onClick={onToggle}>

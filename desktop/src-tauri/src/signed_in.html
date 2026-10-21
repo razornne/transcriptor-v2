@@ -19,8 +19,7 @@
   body { margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink);
          font: 14px/1.45 "Manrope", "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; }
   header { width: 100%; padding: 28px 40px; display: flex; align-items: center; gap: 10px; }
-  .mark { width: 28px; height: 28px; border-radius: 8px; background: var(--ink); color: var(--paper); display: grid; place-items: center;
-          font: 700 16px "Bricolage Grotesque", sans-serif; }
+  .mark { width: 28px; height: 28px; flex: none; border-radius: 23%; box-shadow: 0 0 0 1px rgba(127,127,127,.22); }
   .brand { font: 600 18px "Bricolage Grotesque", sans-serif; letter-spacing: -0.01em; }
   main { flex: 1; width: 100%; max-width: 1000px; padding: 20px 32px 40px; display: flex; flex-direction: column; align-items: center; text-align: center; }
   .pill { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 14px 0 10px; border-radius: 16px;
@@ -70,7 +69,7 @@
 </style>
 </head>
 <body>
-  <header><div class="mark">S</div><span class="brand">Skriptly</span></header>
+  <header><svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><rect width="100" height="100" rx="23" fill="#100F0C"/><path fill="#F6F4EE" d="M50.15 75Q45.31 75 41.52 74Q37.72 73.01 35.06 71.05Q32.39 69.1 30.96 66.22Q29.53 63.34 29.39 59.64L39.91 56.62Q40.1 59.8 41.52 61.85Q42.94 63.9 45.36 64.88Q47.79 65.86 50.77 65.86Q53.45 65.86 55.35 65.19Q57.25 64.52 58.27 63.42Q59.3 62.31 59.3 60.96Q59.3 59.3 57.95 58.22Q56.6 57.13 54.25 56.35Q51.89 55.58 48.82 54.82Q45.41 53.95 42.09 52.91Q38.77 51.88 36.06 50.26Q33.35 48.64 31.73 46.08Q30.1 43.51 30.1 39.65Q30.1 35.12 32.4 31.85Q34.7 28.58 39.01 26.79Q43.31 25 49.27 25Q55.31 25 59.74 26.86Q64.18 28.73 66.57 32.16Q68.97 35.6 68.88 40.31L58.29 42.81Q58.32 40.67 57.71 39.04Q57.1 37.41 55.94 36.31Q54.78 35.21 53.06 34.63Q51.33 34.05 49.07 34.05Q46.53 34.05 44.79 34.68Q43.05 35.3 42.16 36.34Q41.27 37.38 41.27 38.73Q41.27 40.38 42.64 41.46Q44.01 42.54 46.42 43.3Q48.83 44.06 51.89 44.82Q55.02 45.57 58.28 46.58Q61.55 47.59 64.36 49.24Q67.18 50.88 68.9 53.59Q70.61 56.3 70.61 60.44Q70.61 65.03 68.19 68.29Q65.77 71.55 61.18 73.28Q56.6 75 50.15 75Z"/></svg><span class="brand">Skriptly</span></header>
   <main>
     <div class="pill rise d1">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>

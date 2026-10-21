@@ -13,7 +13,7 @@ use crate::api::{self, ApiError};
 use crate::hotkey::{HotkeyEvent, ACTIVE};
 use crate::state::AppState;
 use crate::platform::media;
-use crate::{learn, mic, overlay, paste, stt};
+use crate::{learn, mic, overlay, paste, spectrum, stt};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -196,6 +196,21 @@ async fn start(app: &AppHandle, state: &Arc<AppState>, opened: Opened) -> Result
     let _ = overlay::show(app);
 
     let rate = capture.rate;
+    // Звук идёт в Soniox через «тройник»: попутно считаем спектр для волны на плашке.
+    let (stt_tx, stt_rx) = unbounded_channel::<Vec<i16>>();
+    let tee_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut rx = rx;
+        let mut analyzer = spectrum::Analyzer::new(rate);
+        while let Some(chunk) = rx.recv().await {
+            if let Some(b) = analyzer.push(&chunk) {
+                overlay::bands(&tee_app, &b);
+            }
+            if stt_tx.send(chunk).is_err() {
+                break;
+            }
+        }
+    });
     let (a, st, langs) = (app.clone(), state.clone(), settings.languages.clone());
     let stt = tauri::async_runtime::spawn(async move {
         let token = api::live_token(&st, &langs).await.map_err(|e| {
@@ -207,7 +222,7 @@ async fn start(app: &AppHandle, state: &Arc<AppState>, opened: Opened) -> Result
             msg
         })?;
         // Слова на плашке не показываем — только анимация записи.
-        let res = stt::run(token, rate, rx, |_, _| {}).await;
+        let res = stt::run(token, rate, stt_rx, |_, _| {}).await;
         if res.is_err() {
             api::forget_token(&st).await; // ключ мог протухнуть/отозваться — следующий раз возьмём новый
         }
@@ -297,7 +312,9 @@ fn finish(
                 }
                 *state.last_text.lock().unwrap() = text.clone();
                 let to_paste = text.clone();
+                let t_paste = Instant::now();
                 let pasted = tokio::task::spawn_blocking(move || paste::paste(&to_paste)).await;
+                crate::log!("[dictation] paste took {} ms", t_paste.elapsed().as_millis());
                 crate::log!(
                     "[dictation] {:.1}s audio, {} chars, finalize+cleanup {:.2}s, paste {:?}",
                     r.audio_seconds, text.len(), t0.elapsed().as_secs_f64(), pasted.as_ref().map(|p| p.is_ok())
@@ -307,7 +324,7 @@ fn finish(
                     Ok(Ok(())) => {
                         if settings.learn_from_edits {
                             let lang = if settings.language.is_empty() { None } else { Some(settings.language.clone()) };
-                            learn::watch(state.clone(), text.clone(), lang);
+                            learn::watch(app.clone(), state.clone(), text.clone(), lang);
                         }
                         flash(&app, "done", "", 700);
                         Internal::Finished

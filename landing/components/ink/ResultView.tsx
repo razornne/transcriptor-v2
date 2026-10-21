@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isDesktop } from "@/lib/ink/desktop";
 import type { HistoryEntry, Segment } from "@/lib/ink/db";
 import { generate, sendToNotion, suggestTitle, UpgradeRequiredError } from "@/lib/ink/api";
 import { UpgradeCard } from "./UpgradeCard";
@@ -160,6 +161,17 @@ export function ResultView({
   const [notionError, setNotionError] = useState("");
 
   const [copied, setCopied] = useState(false);
+  // Подтверждение скачивания: без него не видно, сохранился ли файл (в приложении окна загрузки нет)
+  const [saved, setSaved] = useState(false);
+  const [toast, setToast] = useState("");
+  const savedTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(savedTimer.current), []);
+  const flashSaved = (fileName: string) => {
+    setSaved(true);
+    setToast(isDesktop() ? `Saved to Downloads: ${fileName}` : `Downloaded ${fileName}`);
+    window.clearTimeout(savedTimer.current);
+    savedTimer.current = window.setTimeout(() => { setSaved(false); setToast(""); }, 3200);
+  };
 
   const names = entry.speakerNames;
   const isAiGated = plan === "free" || gated;
@@ -294,6 +306,7 @@ export function ResultView({
   };
 
   const downloadMd = () => {
+    if (saved) return; // второй клик, пока висит «Saved», не плодит копии файла
     const md = `# ${entry.title || "Transcript"}\n\n${transcriptText(entry.segments, names)}\n` +
       (entry.aiResults.summary ? `\n---\n\n## Summary\n\n${entry.aiResults.summary}\n` : "") +
       (entry.aiResults.actions ? `\n---\n\n## Action items\n\n${entry.aiResults.actions}\n` : "");
@@ -303,6 +316,7 @@ export function ResultView({
     a.download = `${slug}.md`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    flashSaved(`${slug}.md`);
   };
 
   const downloadTxt = () => {
@@ -384,7 +398,14 @@ export function ResultView({
               {notionSent ? "Sent!" : notionSending ? "Sending…" : "Notion"}
             </button>
           )}
-          <button type="button" className="i-tbtn" onClick={downloadMd}>.md</button>
+          <button type="button" className={`i-tbtn${saved ? " done" : ""}`} onClick={downloadMd} aria-live="polite">
+            {saved ? (
+              <>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                Saved
+              </>
+            ) : ".md"}
+          </button>
           <button type="button" className="i-tbtn" onClick={() => void copy()}>{copied ? "Copied" : "Copy"}</button>
         </div>
       </div>
@@ -458,6 +479,7 @@ export function ResultView({
         </div>
       )}
 
+      {toast && <div className="i-toast" role="status">{toast}</div>}
     </div>
   );
 }

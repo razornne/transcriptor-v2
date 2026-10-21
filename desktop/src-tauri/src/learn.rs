@@ -2,11 +2,13 @@
 // закончил править, отправляем «вставили → стало» на сервер; там находятся пары wrong→right для
 // личного словаря (vocab_learn.py). Читаем только поле, в которое сами вставили; парольные
 // пропускаем; на сервер уходит лишь вставленный фрагмент и его правленая версия.
+use crate::overlay;
 use crate::platform::learn::focused_field;
 use crate::state::AppState;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tauri::AppHandle;
 
 /// Каждая новая диктовка отменяет слежку за предыдущей.
 static GEN: AtomicU64 = AtomicU64::new(0);
@@ -52,7 +54,7 @@ fn head(s: &str, n: usize) -> &str {
 }
 
 /// Запускает слежку в фоне. `pasted` — ровно то, что вставили.
-pub fn watch(state: Arc<AppState>, pasted: String, language: Option<String>) {
+pub fn watch(app: AppHandle, state: Arc<AppState>, pasted: String, language: Option<String>) {
     let my = GEN.fetch_add(1, Ordering::SeqCst) + 1;
     std::thread::spawn(move || {
         let Some((before, after)) = observe(my, &pasted) else { return };
@@ -63,8 +65,17 @@ pub fn watch(state: Arc<AppState>, pasted: String, language: Option<String>) {
         }
         crate::log!("[learn] edit seen ({} -> {} chars)", pasted.chars().count(), region.chars().count());
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = crate::api::learn(&state, &pasted, &region, language.as_deref().unwrap_or("")).await {
-                crate::log!("[learn] send failed: {e:?}");
+            match crate::api::learn(&state, &pasted, &region, language.as_deref().unwrap_or("")).await {
+                Ok(pairs) => {
+                    // Пользователь должен видеть, что словарь учится: показываем первую пару.
+                    if let Some((wrong, right)) = pairs.first() {
+                        let more = pairs.len() - 1;
+                        let right = if more > 0 { format!("{right} +{more}") } else { right.clone() };
+                        crate::log!("[learn] learned {} pair(s)", pairs.len());
+                        overlay::toast(&app, "learned", &right, wrong, 4200);
+                    }
+                }
+                Err(e) => crate::log!("[learn] send failed: {e:?}"),
             }
         });
     });

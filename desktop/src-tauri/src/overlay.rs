@@ -6,6 +6,7 @@
 // (видео, игра, презентация) капсула покоя прячется.
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use crate::platform::overlay as os;
 use tauri::{AppHandle, Emitter, Manager};
@@ -30,12 +31,42 @@ static BUSY: AtomicBool = AtomicBool::new(false);
 static RESTING_SHOWN: AtomicBool = AtomicBool::new(false);
 static TICK: AtomicU64 = AtomicU64::new(1);
 
+/// Подпись языка на плашке записи: «AUTO», «RU», «RU+1». Обновляется при смене настроек.
+static LANG: Mutex<String> = Mutex::new(String::new());
+
 #[derive(Serialize, Clone)]
 pub struct OverlayState<'a> {
-    /// idle | arming | listening | handsfree | finishing | polishing | done | empty | error | hidden
+    /// idle | arming | listening | handsfree | finishing | polishing | done | empty | error | learned | hidden
+    /// learned: `text` — как стало правильно, `pending` — как было записано.
     pub state: &'a str,
     pub text: &'a str,
     pub pending: &'a str,
+    pub lang: &'a str,
+}
+
+/// Подпись выбранных языков для плашки: пусто = автоопределение.
+pub fn set_language(languages: &[String]) {
+    let label = match languages {
+        [] => "AUTO".to_string(),
+        [one] => one.to_uppercase(),
+        [first, rest @ ..] => format!("{}+{}", first.to_uppercase(), rest.len()),
+    };
+    *LANG.lock().unwrap() = label;
+}
+
+/// Короткое сообщение поверх покоя (например «добавлено в словарь»). Если плашка занята
+/// диктовкой или другим сообщением — молчим: оно не должно перебивать запись.
+pub fn toast(app: &AppHandle, state: &str, text: &str, pending: &str, ms: u64) {
+    if BUSY.load(Ordering::SeqCst) {
+        return;
+    }
+    emit(app, state, text, pending);
+    let gen = show(app);
+    let a = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(ms)).await;
+        rest_if(&a, gen);
+    });
 }
 
 pub fn setup(app: &AppHandle, bar: bool) {
@@ -138,7 +169,13 @@ pub fn set_bar(app: &AppHandle, on: bool) {
 }
 
 pub fn emit(app: &AppHandle, state: &str, text: &str, pending: &str) {
-    let _ = app.emit_to(LABEL, "overlay", OverlayState { state, text, pending });
+    let lang = LANG.lock().unwrap().clone();
+    let _ = app.emit_to(LABEL, "overlay", OverlayState { state, text, pending, lang: &lang });
+}
+
+/// Спектр речи (дБ по полосам) для волны на плашке.
+pub fn bands(app: &AppHandle, bands: &[f32]) {
+    let _ = app.emit_to(LABEL, "overlay-bands", bands);
 }
 
 pub fn level(app: &AppHandle, level: f32) {
